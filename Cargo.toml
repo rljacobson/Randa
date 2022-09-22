@@ -1,0 +1,30 @@
+[package]
+name = "randa"
+description = "This crate implements the Miranda programming language."
+version = "0.1.0"
+authors = ["Robert Jacobson <rljacobson@gmail.com>"]
+edition = "2021"
+
+readme = "README.md"
+keywords = ["programming language, functional, Miranda"]
+homepage = "https://github.com/rljacobson/Randa"
+repository = "https://github.com/rljacobson/Randa"
+license = "BSD"
+
+
+publish = false
+
+
+[dependencies]
+nom = "7.1.1"
+saucepan = {path = "../saucepan"}
+lazy_static = "1.4"
+enum-primitive-derive = "0.2.2"
+num-traits = "0.2.15"
+
+[dependencies.regex]
+# The following enables only the minimal necessary features of regex.
+version = "1"
+default-features = false
+# regex currently requires the standard library, you must re-enable it.
+features = ["std"]
