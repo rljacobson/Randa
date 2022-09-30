@@ -16,11 +16,11 @@ publish = false
 
 
 [dependencies]
-nom = "7.1.1"
-saucepan = {path = "../saucepan"}
+saucepan = {path = "../saucepan", features = ["reporting", "nom-parsing", "runtime-dispatch-simd"]}
 lazy_static = "1.4"
 enum-primitive-derive = "0.2.2"
 num-traits = "0.2.15"
+logos = "0.12.1"
 
 [dependencies.regex]
 # The following enables only the minimal necessary features of regex.
@@ -28,3 +28,6 @@ version = "1"
 default-features = false
 # regex currently requires the standard library, you must re-enable it.
 features = ["std"]
+
+[build-dependencies]
+rust-bison-skeleton = "0.41.0"

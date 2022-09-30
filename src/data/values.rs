@@ -30,7 +30,7 @@ use super::token::Token;
 pub type Heap = Vec<HeapCell>;
 
 #[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Debug, Default)]
-pub struct RawValue(pub(crate) ValueRepresentationType);
+pub struct RawValue(pub(in values) ValueRepresentationType);
 
 impl RawValue {
   pub fn from_value(value: Value) -> RawValue {
@@ -69,11 +69,12 @@ impl<T> From<T> for RawValue
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 pub enum Value {
-  Char(char),             // 0..TOKEN_BASE-1               ==   0..255
-  Token(Token),           // TOKEN_BASE..COMBINATOR_BASE-1 == 256..305
-  Combinator(Combinator), // COMBINATOR_BASE..ATOM_LIMIT-1 == 306..446
+  Char(char),                         // 0..TOKEN_BASE-1               ==   0..255
+  Token(Token),                       // TOKEN_BASE..COMBINATOR_BASE-1 == 256..305
+  Combinator(Combinator),             // COMBINATOR_BASE..ATOM_LIMIT-1 == 306..446
   Reference(ValueRepresentationType), // Reference to another cell.
-  Data(ValueRepresentationType) // Uninterpreted data.
+  Data(ValueRepresentationType)       // Uninterpreted data. Shouldn't use this, as there should be a `Value` variant
+                                      // for everything.
 }
 
 
@@ -113,10 +114,20 @@ pub struct HeapCell {
 
 impl HeapCell {
   pub fn new(tag: Tag, head: Value, tail: Value) -> HeapCell {
+    // Trivial implementation, but nice to have in case we decide we need a nontrivial implementation in the future.
     HeapCell{
       tag,
       head: head.into(),
       tail: tail.into()
+    }
+  }
+
+  pub fn new_raw(tag: Tag, head: RawValue, tail: RawValue) -> HeapCell {
+    // Trivial implementation, but nice to have in case we decide we need a nontrivial implementation in the future.
+    HeapCell{
+      tag,
+      head,
+      tail
     }
   }
 

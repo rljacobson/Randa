@@ -1,14 +1,21 @@
 ### Project Specific
-#*.c
-#*.h
-*.y
+*.c
+*.h
+#*.y
 allexterns
+# The parser.rs file is generated.
+src/compiler/parser.rs
+
+*.pdf
 
 # Directories
 miralib
 examples
 doc
 tools
+.ipynb*
+.virtual_documents
+
 
 
 # Compiled miranda files.

@@ -1,41 +1,10 @@
 /*!
 
-Randa Lexer
+Randa Lexer, a mediator between the Bison parser and the Logos lexer, which is attacked to the `Token` enum. The
+Lexer struct has-a Logos lexer and holds state for context sensitive lexing.
 
 */
 #![allow(dead_code)]
-
-/*
-use std::str::pattern::Pattern;
-use nom::{branch::alt, bytes::{
-  complete::{
-    take_till,
-    tag,
-  }
-}, character::{
-  complete::{
-    multispace1,
-    // char as char1,
-    // newline
-  }
-}, combinator::{
-  cond,
-  map,
-  map_res,
-  value,
-  eof
-}, error::{
-  ParseError,
-  ErrorKind,
-  FromExternalError
-}, multi::many0, sequence::{
-  delimited,
-  preceded,
-  terminated,
-}, Err::Error as NomError, IResult, InputTake, InputTakeAtPosition
-};
-use nom::combinator::opt;
-*/
 
 use std::{
   collections::HashSet,
@@ -43,25 +12,18 @@ use std::{
 };
 
 use lazy_static::lazy_static;
-use nom::{
-  InputTake,
-  InputTakeAtPosition,
-  error::ErrorKind
-};
-use regex::Regex;
-
 use saucepan::{ColumnNumber, Location, Span};
 pub use saucepan::Source;
 
 use crate::{
-  data::Value,
-  data::Token,
-  data::Heap,
-  errors::{
-    LexError,
-    // emit_error
+  compiler::{
+    errors::{
+      LexError,
+      // emit_error
+    }
   }
 };
+use crate::compiler::Token;
 
 
 // todo: Figure out how to handle MIRALIB.
@@ -69,9 +31,8 @@ use crate::{
 pub static MIRALIB: &str = "./miralib/";
 
 
-
 #[allow(unused_variables)]
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, Default)]
 pub struct Options {
   echoing  : bool,
   listing  : bool,
@@ -96,13 +57,14 @@ pub enum BNFMode {
 }
 
 #[allow(unused_variables)]
+#[derive(Debug)]
 pub struct Lexer<'n, 't>{
   input: Span<'n, 't>,  // The input that has not yet been lexed.
 
   command_mode: bool,
-  options: Options,
-  lex_mode: LexMode,
-  bnf_mode: BNFMode,
+  options     : Options,
+  lex_mode    : LexMode,
+  bnf_mode    : BNFMode,
 
 
   // Margin
@@ -110,12 +72,12 @@ pub struct Lexer<'n, 't>{
   left_margin : ColumnNumber,      // used to enforce the offside rule
 
   // Collections
-  identifiers: HashSet<&'t str>,
+  identifiers  : HashSet<&'t str>,
   private_names: HashSet<&'t str>,
 
   // ToDo: Why does the lexer need a heap?
   // Miranda heap.
-  heap: Heap,
+  // heap: Heap,
 }
 
 impl<'n, 't> Lexer<'n, 't> {
@@ -124,63 +86,17 @@ impl<'n, 't> Lexer<'n, 't> {
     Self {
       input,
 
-      command_mode: false,
-      options: Options {
-        echoing: false,
-        listing: false,
-        verbosity: false,
-        magic: false,
-        lit_main: false,
-        literate: false
-      },
-      lex_mode: LexMode::None,
-      bnf_mode: BNFMode::None,
-      margin_stack: vec![],
-      left_margin: ColumnNumber(1),
-      identifiers: Default::default(),
+      command_mode : false,
+      options      : Options::default(),
+      lex_mode     : LexMode::None,
+      bnf_mode     : BNFMode::None,
+      margin_stack : vec![],
+      left_margin  : ColumnNumber(1),
+      identifiers  : Default::default(),
       private_names: Default::default(),
-      heap: Default::default(),
+      // heap         : Default::default(),
     }
   }
-
-  // todo: we are kicking the can down the road w.r.t. error handling. Functions that can produce
-  //      errors return `Result`s. Ultimately a calling function will have to handle them.
-
-  // fn syntax_err(input: &str){
-  //   if synerror {
-  //     return;
-  //   }
-  // }
-
-  // todo: `getlitch` reads in a character, interpreting escaped characters as necessary.
-
-  /// Reads in a line as used by the magic `!`. In the REPL, `!` followed by a shell command will execute that shell
-  /// command, and `!!` means, "execute the previous `!` command.
-  /*
-  fn read_line() -> String {
-
-    let mut c = get_char();
-    while c == '\t' || c == ' ' {
-      get_char();
-    }
-
-    if c == '\n' || c == '!' {
-      // `!!` or `!` on its own means repeat last `!command`
-      gobble_ws();
-      // todo: what is linebuf?
-      return format!("!{}", linebuf);
-    } else{
-
-      //??
-      String::new()
-
-    }
-
-  }
-  */
-
-
-  // todo: write get_char
 
   fn set_left_margin(&mut self){
     self.margin_stack.push(self.left_margin);
@@ -372,107 +288,10 @@ impl<'n, 't> Lexer<'n, 't> {
 
 }
 
-/*
-/// Noms hashbang line, but only at beginning of file.
-pub fn batch_hash_bang<'t, E: ParseError<Span<'t, 't>>>(i: Span<'t, 't>) -> IResult<Span<'t, 't>, (), E>
-  where E: ParseError<Span<'t, 't>> + FromExternalError<Span<'t, 't>, nom::Err<(Span<'t, 't>, ErrorKind)>>
-{
-  map_res(
-    cond(
-      match i.location() {
-        Ok(loc) => {
-          Location::BOF == loc // Only nom hashbang if at the
-          // beginning of file.
-        }
-        Err(_) => false
-      },
-      delimited(
-        tag("#!"),
-        take_till(|c| c=='\n' || c=='\r'), // Matches empty string.
-        alt((tag("\n"), eof))  // Comment either ends in newline or eof.
-      )
-    ),
-    | result | if result.is_some() {Ok(())} else {Err(NomError((i, ErrorKind::Fail)))}
-  )    (i)
-}
-
-/// Noms surrounding whitespace, including newlines and comments.
-fn ws<'t, F: 't, O, E: ParseError<Span<'t, 't>>>(inner: F) -> impl Fn(Span<'t, 't>) -> IResult<Span<'t, 't>, O, E>
-  where
-      F: Fn(Span<'t, 't>) -> IResult<Span<'t, 't>, O, E>,
-{
-  move |i| {
-    delimited(
-      &skippable,
-      &inner,
-      &skippable
-    )(i)
-  }
-}
-
-/// Noms trailing whitespace, including newlines and comments.
-fn wst<'t, F: 't, O, E: ParseError<Span<'t, 't>>>(inner: F) -> impl Fn(Span<'t, 't>) -> IResult<Span<'t, 't>,
-  O, E>
-  where
-      F: Fn(Span<'t, 't>) -> IResult<Span<'t, 't>, O, E>,
-{
-  move |i| {
-    terminated(
-      &inner,
-      &skippable
-    )(i)
-  }
-}
-
-/// Noms whitespace, including newlines and comments, returning `()`.
-pub fn skippable<'t, E: ParseError<Span<'t, 't>>>(i: Span<'t, 't>) -> IResult<Span<'t, 't>, (), E>
-{
-  map(
-    many0(
-      alt((
-        map(multispace1, |_| ()),
-        /*pinline_comment,*/
-        eol_comment
-      ))
-    ),
-    |_| ()
-  )(i)
-}
-
-
-// Noms eol comments, excluding newlines, returning `()`.
-pub fn eol_comment<'t, E: ParseError<Span<'t, 't>>>(i: Span<'t, 't>) -> IResult<Span<'t, 't>, (), E>
-{
-  value(
-    (), // Output is thrown away.
-    delimited(
-      tag("||"),
-      take_till(|c| c == '\n' || c == '\r'), // Matches empty string.
-      alt((tag("\n"), eof))  // Comment either ends in newline or eof.
-    )
-  )(i)
-}
-
-
-// Noms block comments, excluding surrounding whitespace, returning `()`.
-/*
-pub fn pinline_comment<'n, 't, E: ParseError<Span<'n, 't>>>(i: Span<'n, 't>) -> IResult<Span<'n, 't>, (), E>
-{
-  map(
-    tuple((
-      tag("/*"),
-      take_until("*/"),
-      tag("*\/")
-    )),
-    |_| () // Output is thrown away.
-  )(i)
-}
-*/
-*/
 
 mod utilities {
   use crate::errors::LexError;
-  use crate::lex::MIRALIB;
+  use super::*;
 
   /// Makes file path, turning `<thing>` into `/path/to/miralib/thing`, stripping quotes, and
   /// appending extension if the boolean argument is true.

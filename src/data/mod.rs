@@ -18,13 +18,11 @@
 
 */
 
-pub mod token;
 pub mod combinator;
 pub mod tag;
 pub mod types;
-mod values;
-mod heap;
 mod identifier;
+mod values;
 
 
 use saucepan::LineNumber;
@@ -34,7 +32,6 @@ pub use crate::{
     token::Token,
     combinator::Combinator,
     types::Type,
-    heap::Heap,
   }
 };
 
@@ -44,16 +41,16 @@ pub use crate::{
 // If the bit-width of `ValueRepresentationType` changes, synchronize it with
 //    * `Heap::resolve_string()`
 //    * instances of `IdentifierValueType::from_usize`
-type ValueRepresentationType                          = usize;
-const TOKEN_BASE            : ValueRepresentationType = 256; // There are 50 token values.
-const COMBINATOR_BASE       : ValueRepresentationType = 306; // There are 141 combinators.
-const ATOM_LIMIT            : ValueRepresentationType = COMBINATOR_BASE + 141; // = 447
+type ValueRepresentationType                              = usize;
+pub const TOKEN_BASE            : ValueRepresentationType = 256; // There are 80 token values.
+pub const COMBINATOR_BASE       : ValueRepresentationType = 336; // There are 141 combinators.
+pub const ATOM_LIMIT            : ValueRepresentationType = COMBINATOR_BASE + 141; // = 477
 
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 pub enum Value {
   Char(ValueRepresentationType),
-  Token(Token),
+  // Token(Token),
   Combinator(Combinator),
   Pointer(ValueRepresentationType)
 }
@@ -63,7 +60,7 @@ impl Value{
 
     match self {
       Value::Char(v)       => *v,
-      Value::Token(v)      => *v as ValueRepresentationType,
+      // Value::Token(v)      => *v as ValueRepresentationType,
       Value::Combinator(v) => *v as ValueRepresentationType,
       Value::Pointer(v)    => *v,
 
