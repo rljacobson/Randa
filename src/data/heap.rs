@@ -6,20 +6,62 @@ See the `values` module for more information about how data is encoded in a `Hea
 
 use num_traits::{FromPrimitive, ToPrimitive};
 use saucepan::LineNumber;
+use crate::compiler::Token;
 
-use crate::data::{ATOM_LIMIT, Combinator, Identifier, IdentifierDefinition, IdentifierValueType, ValueRepresentationType};
-use crate::data::tag::Tag;
-use crate::data::types::Type;
-use crate::data::values::{HeapCell, RawValue, Value};
+use crate::data::{
+  tag::Tag,
+  types::Type,
+  values::{
+    HeapCell,
+    RawValue,
+    Value
+  },
+  ATOM_LIMIT,
+  // Combinator,
+  Identifier,
+  IdentifierDefinition,
+  IdentifierValueType,
+  ValueRepresentationType
+};
+use crate::data::Value::Combinator;
 
 
 type ValueOption = Result<Value, ()>;
 
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct Heap {
   data: Vec<HeapCell>,
-  strings: Vec<String>
+  strings: Vec<String>,
+
+  // References to constants
+  NILL: Value,
+
+  /// Common compound types.
+  // numeric_function_type : Value,
+  // numeric_function2_type: Value,
+  // boolean_function_type : Value,
+  // boolean_function2_type: Value,
+  // char_list_type        : Value,
+  // string_function_type  : Value,
+  // range_step_type       : Value,
+  // range_step_until_type : Value,
+
+  /// Common constants
+}
+
+impl Default for Heap {
+  fn default() -> Self {
+    let mut heap = Heap {
+      data: vec![],
+      strings: vec![],
+      NILL: Value::Data(0),
+    };
+
+    heap.setup_constants();
+
+    heap
+  }
 }
 
 impl Heap {
@@ -27,6 +69,31 @@ impl Heap {
   pub fn new() -> Self {
     Self::default()
   }
+
+  fn setup_constants(&mut self) {
+    // Why have a reference to this instead of just using Combinator::Nil?
+    // That's what Miranda does, but is there a reason?
+    self.NILL = self.cons(Value::Token(Token::Constant), Combinator::Nil.into());
+
+  }
+  /*
+  fn setup_standard_types(&mut self) {
+    let numeric_function_type = self.arrow_type(Type::Number.into(), Type::Number.into());
+    let numeric_function2_type = self.arrow_type(Type::Number.into(), numeric_function_type);
+    let boolean_function_type = self.arrow_type(Type::Bool.into(), Type::Bool.into());
+    let boolean_function2_type = self.arrow_type(Type::Bool.into(), boolean_function_type);
+    let char_list_type = self.list_type(Type::Char.into());
+    let string_function_type = self.arrow_type(char_list_type, char_list_type);
+
+    // let tfnumnum   = tf(num_t   , num_t);
+    let range_step_type = self.arrow2_type(
+      Type::Number.into(),
+      Type::Number.into(),
+      self.list_type(Type::Number.into())
+    );
+    let range_step_until_type = self.arrow_type(Type::Number.into(), range_step_type);
+  }
+  */
 
 
   // region Generic read/write functions
@@ -92,8 +159,6 @@ impl Heap {
 
   /// If maybe_reference is a reference, dereference it, and check that its tag is `tag`. If so, return the head.
   /// Otherwise, return None.
-  ///
-  /// Because `expect_head` takes an `Option<Value>`, it is composable with itself.
   pub fn expect_head(&self, tag: Tag, reference: Value) -> ValueOption{
     if let Value::Reference(idx) = reference {
       let cell = self.data[idx];
@@ -136,210 +201,14 @@ impl Heap {
   /// Retrieves the identifier information pointed to by the given reference.
   /// The argument must be a reference.
   pub fn get_identifier(&self, reference: Value) -> Result<Identifier, ()> {
-    // Id: {
-    //   hd:  cons(strcons(name,who),type)
-    //   tl: value
-    // }
-    let id_cell: HeapCell = self.expect(Tag::Id, reference)?;
-
-    let (arity, show_function, value_type): (ValueRepresentationType, &str, IdentifierValueType)
-        = self.get_identifier_value(id_cell.tail.into())?;
-
-    let cons_cell    : HeapCell             = self.expect(Tag::Cons, id_cell.head.into() )?;
-    let strcons_cell : HeapCell             = self.expect(Tag::StrCons, cons_cell.head.into())?;
-    let id_definition: IdentifierDefinition = self.get_who_info(strcons_cell.tail.into())?;
-    let datatype     : Type                 = Type::from_usize(cons_cell.tail.0).unwrap();
-    let name         : &str                 = self.resolve_string(strcons_cell.head)?;
-
-    Ok(
-      Identifier{
-        name,
-        definition: id_definition,
-        datatype,
-        arity,
-        show_function,
-        value: value_type
-      }
-    )
+    Identifier::get(reference, self)
   }
 
-  pub fn get_identifier_unchecked(&self, reference: ValueRepresentationType) -> Identifier {
-    // Id: {
-    //   hd:  cons(strcons(name,who),type)
-    //   tl: value
-    // }
-    let id_cell = self.data[reference];
-
-    let (arity, show_function, value_type): (ValueRepresentationType, &str, IdentifierValueType)
-        = self.get_identifier_value_unchecked(id_cell.tail.0);
-
-    let cons_cell    = self.data[id_cell.head.0];
-    let strcons_cell = self.data[cons_cell.head.0];
-
-    let datatype     : Type                 = Type::from_usize(cons_cell.tail.0).unwrap();
-    let name         : &str                 = self.strings[strcons_cell.head.0].as_str();
-    let id_definition: IdentifierDefinition = self.get_who_info_unchecked(strcons_cell.tail.0);
-
-
-    Identifier{
-      name,
-      definition: id_definition,
-      datatype,
-      arity,
-      show_function,
-      value: value_type
-    }
+  /// Encodes the identifier on the heap.
+  pub fn put_identifier(&mut self, identifier: Identifier) -> Value {
+    identifier.compile(self)
   }
 
-
-  pub fn put_identifier(&self, identifier: Identifier) -> Value {
-    // Id: {
-    //   hd:  cons(strcons(name,who),type)
-    //   tl: value
-    // }
-    let id_head;   // cons(strcons(name,who),type)
-    let here_info; // fileinfo(script,line_no)
-    let who;       // cons(aka,hereinfo)
-                   // hereinfo
-                   // NIL
-    let aka;       // datapair(oldn,0)
-  }
-
-
-  /**
-  Reads the `who` field of an identifier off of the stack.
-
-  The `who` field contains one of:
-
-  * `NIL` (for a name that is totally undefined)
-  * `hereinfo` for a name that has been defined or specified, where `hereinfo` is `fileinfo(script,line_no)`
-  * `cons(aka,hereinfo)` for a name that has been aliased, where `aka`
-       is of the form `datapair(oldn,0)`, `oldn` being a string.
-
-   */
-  fn get_who_info(&self, reference: Value) -> Result<IdentifierDefinition, ()> {
-    if reference == Value::Combinator(Combinator::Nil){
-      // It's not a reference but a Nil combinator, which means the variable is undefined.
-      return Ok(IdentifierDefinition::Undefined);
-    }
-
-    let who_cell: HeapCell = self.resolve(reference)?;
-
-    // Check if the alias info is cons'ed on to the here info cell.
-    if who_cell.tag == Tag::Cons {
-      let aka_cell: HeapCell = self.expect(Tag::DataPair, who_cell.head.into())?;
-      let source  : &str     = self.resolve_string(aka_cell.head)?;
-
-      let (script_file, line): (&str, LineNumber) = self.get_here_info(who_cell.tail.into())?;
-
-      Ok(IdentifierDefinition::Alias{
-        script_file,
-        line,
-        source
-      })
-    } else if who_cell.tag == Tag::FileInfo {
-      let (script_file, line): (&str, LineNumber) = self.get_here_info(reference)?;
-
-      Ok(IdentifierDefinition::DefinedAt {
-        script_file,
-        line
-      })
-    } else {
-      println!("Failed to fetch who info: {:?}", reference);
-      Err(()) // Malformed identifier, shouldn't happen.
-    }
-  }
-
-  fn get_who_info_unchecked<'t>(&'t self, reference: ValueRepresentationType) -> IdentifierDefinition<'t> {
-    if reference == Combinator::Nil as ValueRepresentationType {
-      // It's not a reference but a Nil combinator, which means the variable is undefined.
-      return IdentifierDefinition::Undefined;
-    }
-
-    let who_cell: HeapCell = self.data[reference - ATOM_LIMIT];
-
-    // Check if the alias info is cons'ed on to the here info cell.
-    if who_cell.tag == Tag::Cons {
-      let aka_cell = self.data[who_cell.head.0 - ATOM_LIMIT];
-      let (script_file, line): (&str, LineNumber) = self.get_here_info_unchecked(who_cell.tail.0);
-      let source: &str = self.strings[aka_cell.head.0].as_str();
-
-      IdentifierDefinition::Alias{
-        script_file,
-        line,
-        source
-      }
-    } else if who_cell.tag == Tag::FileInfo {
-      let (script_file, line): (&str, LineNumber) = self.get_here_info_unchecked(reference);
-
-      IdentifierDefinition::DefinedAt {
-        script_file,
-        line
-      }
-    } else {
-      IdentifierDefinition::Undefined // Malformed identifier, shouldn't happen.
-    }
-  }
-
-  fn get_here_info<'t>(&'t self, reference: Value) -> Result<(&'t str, LineNumber), ()> {
-    let here_info_cell = self.expect(Tag::FileInfo, reference)?;
-    let line_number: LineNumber = here_info_cell.tail.0.into();
-    let script_file = self.resolve_string(here_info_cell.head)?;
-
-    Ok((script_file, line_number))
-  }
-
-  fn get_here_info_unchecked<'t>(&'t self, reference: ValueRepresentationType) -> (&'t str, LineNumber){
-    let here_info_cell: HeapCell   = self.data[reference - ATOM_LIMIT];
-    let script_file   : &str       = self.strings[here_info_cell.head.0].as_str();
-    let line_number   : LineNumber = here_info_cell.tail.0.into();
-
-    (script_file, line_number)
-  }
-
-
-  /**
-  Miranda:
-    The value field of type identifier takes one of the following forms
-
-  |              | Arity    | Show Functions |            | Type             | Info             |
-  | :----------- | :------- | :------------- | :--------- | :--------------- | :--------------- |
-  | `cons(cons(` | `arity,` | `showfn`       | `), cons(` | `algebraic_t,`   | `constructors )` |
-  | `cons(cons(` | `arity,` | `showfn`       | `), cons(` | `synonym_t,`     | `rhs  ))`        |
-  | `cons(cons(` | `arity,` | `showfn`       | `), cons(` | `abstract_t,`    | `basis ))`       |
-  | `cons(cons(` | `arity,` | `showfn`       | `), cons(` | `placeholder_t,` | `NIL ))`         |
-  | `cons(cons(` | `arity,` | `showfn`       | `), cons(` | `free_t,`        | `NIL ))`         |
-
-  */
-  fn get_identifier_value<'t>(&'t self, reference: Value)
-    -> Result<(ValueRepresentationType, &'t str, IdentifierValueType), ()>
-  {
-    let outer_cons_cell: HeapCell = self.expect(Tag::Cons, reference)?;
-    let inner_cons_cell: HeapCell = self.expect(Tag::Cons, outer_cons_cell.head.into())?;
-    let show_function  : &'t str  = self.resolve_string(inner_cons_cell.tail)?;
-    let arity          : ValueRepresentationType = inner_cons_cell.head.0;
-
-    let type_cell : HeapCell            = self.expect(Tag::Cons, outer_cons_cell.tail.into())?;
-    let value_type: IdentifierValueType = IdentifierValueType::from_usize(type_cell.head.0).unwrap();
-    // let info = type_cell.tail;
-
-    Ok((arity, show_function, value_type))
-
-  }
-
-
-  fn get_identifier_value_unchecked<'t>(&'t self, reference: ValueRepresentationType)
-    -> (ValueRepresentationType, &'t str, IdentifierValueType)
-  {
-    let outer_cons_cell: HeapCell                = self.data[reference - ATOM_LIMIT];
-    let inner_cons_cell: HeapCell                = self.data[outer_cons_cell.head.0 - ATOM_LIMIT];
-    let arity          : ValueRepresentationType = inner_cons_cell.head.0;
-    let type_cell      : HeapCell                = self.data[outer_cons_cell.tail.0 - ATOM_LIMIT];
-    let value_type     : IdentifierValueType     = IdentifierValueType::from_usize(type_cell.head.0).unwrap();
-    let show_function  : &'t str                 = self.strings[inner_cons_cell.tail.0].as_str();
-
-    (arity, show_function, value_type)
-  }
 
   /* data abstractions for identifiers (see also sto_id() in data.c)
   #define get_id(x) ((char *)hd[hd[hd[x]]])
@@ -348,12 +217,6 @@ impl Heap {
   #define id_val(x) tl[x]
   #define isconstructor(x) (tag[x]==ID&&isconstrname(get_id(x)))
   #define isvariable(x) (tag[x]==ID&&!isconstrname(get_id(x)))
-  /* the who field contains NIL (for a name that is totally undefined)
-  hereinfo for a name that has been defined or specified and
-  cons(aka,hereinfo) for a name that has been aliased, where aka
-  is of the form datapair(oldn,0) oldn being a string */
-  char *getaka();
-  /* returns true name of an identifier, even after aliasing (data.c) */
   */
 
   // endregion
@@ -361,13 +224,22 @@ impl Heap {
 
   // region Heap cell creation convenience functions
 
-  pub fn datapair(&mut self, x: Value, y: Value) -> Value {
+  // todo: Do real string interning so multiple copies of the same string aren't being made.
+  pub fn string(&mut self, text: &str) -> Value {
+    let idx = self.strings.len();
+    self.strings.push(text.to_string());
+    self.put_cell(
+      HeapCell::new(Tag::String, Value::Data(idx), 0.into())
+    )
+  }
+
+  pub fn data_pair(&mut self, x: Value, y: Value) -> Value {
     self.put_cell(
       HeapCell::new(Tag::DataPair, x, y)
     )
   }
 
-  pub fn fileinfo(&mut self, x: Value, y: Value) -> Value {
+  pub fn file_info(&mut self, x: Value, y: Value) -> Value {
     self.put_cell(
       HeapCell::new(Tag::FileInfo, x, y)
     )
@@ -469,6 +341,104 @@ impl Heap {
 
   // endregion
 
+
+  // region Type creation and checking functions
+
+  /// Is the type referenced by `reference` an Arrow type?
+  pub fn is_arrow_type(&self, reference: Value) -> bool {
+    self.is_type_auxiliary(reference, Type::Arrow)
+  }
+
+  /// Is the type referenced by `reference` a Comma type?
+  pub fn is_comma_type(&self, reference: Value) -> bool {
+    self.is_type_auxiliary(reference, Type::Comma)
+  }
+
+  // Code common to is_arrow_type and is_comma_type is factored out into this auxiliary function.
+  fn is_type_auxiliary(&self, reference: Value, type_required: Type) -> bool {
+    let type_cell: HeapCell =
+      match self.expect(Tag::Ap, reference) {
+        Ok(cell) => cell,
+        Err(_) => return false,
+      };
+
+    // The cell referenced by the head of `type_cell`
+    let head_cell: HeapCell =
+      match self.expect(Tag::Ap, type_cell.head.into()) {
+        Ok(cell) => cell,
+        Err(_) => return false,
+      };
+
+    return head_cell.head == (type_required as ValueRepresentationType) ;
+  }
+
+  /// Is the type referenced by reference a list type?
+  pub fn is_list_type(&self, reference: Value) -> bool {
+    let type_cell: HeapCell =
+      match self.expect(Tag::Ap, reference) {
+        Ok(cell) => cell,
+        Err(_) => return false,
+      };
+
+    return type_cell == (Type::List as ValueRepresentationType);
+  }
+
+  pub fn is_type_variable(&self, reference: Value) -> bool {
+    self.expect(Tag::TypeVar, reference).is_ok()
+  }
+
+  /// Is the type referenced by reference a compound type? Note that this function returns true for
+  /// list and arrow types.
+  pub fn is_compound_type(&self, reference: Value) -> bool {
+    self.expect(Tag::Ap, reference).is_ok()
+  }
+
+  pub fn is_bound_type(&self, reference: Value) -> bool {
+    let type_cell: HeapCell =
+        match self.expect(Tag::Ap, reference) {
+          Ok(cell) => cell,
+          Err(_) => return false,
+        };
+
+    return type_cell == (Type::Bind as ValueRepresentationType);
+  }
+
+  pub fn arrow_type(&mut self, arg1: Value, arg2: Value) -> Value {
+    self.apply2(Type::Arrow.into(), arg1, arg2)
+  }
+
+  pub fn arrow2_type(&mut self, arg1: Value, arg2: Value, arg3: Value) -> Value {
+    let composed: Value = self.arrow_type(arg2, arg3);
+    self.arrow_type(arg1, composed)
+  }
+
+  pub fn arrow3_type(&mut self, arg1: Value, arg2: Value, arg3: Value, arg4: Value)
+      -> Value {
+    let composed: Value = self.arrow2_type(arg2, arg3, arg4);
+    self.arrow_type(arg1, composed)
+  }
+
+  pub fn arrow4_type(&mut self, arg1: Value, arg2: Value, arg3: Value, arg4: Value, arg5: Value)
+      -> Value {
+    let composed: Value = self.arrow3_type(arg2, arg3, arg4, arg5);
+    self.arrow_type(arg1, composed)
+  }
+
+  pub fn list_type(&mut self, arg: Value) -> Value {
+    self.apply(Type::List.into(), arg)
+  }
+
+  pub fn pair_type(&mut self, arg1: Value, arg2: Value) -> Value{
+    self.apply2(
+      Type::Comma.into(),
+      arg1,
+      self.apply2(Type::Comma.into(), arg2, Type::Void.into())
+    )
+  }
+
+  // endregion
+
+
 }
 
 
@@ -483,7 +453,7 @@ mod tests {
     let y        : Value    = Value::Data(43usize);
     let expected : HeapCell = HeapCell::new(Tag::DataPair, x, y);
     let mut heap : Heap     = Heap::new();
-    let reference: Value    = heap.datapair(x, y);
+    let reference: Value    = heap.data_pair(x, y);
     let result   : Result<HeapCell, ()> = heap.resolve(reference);
 
     assert_eq!(result.is_ok(),  true);
@@ -511,8 +481,8 @@ mod tests {
       y
     ); //cons(cons(arity,showfn),cons(placeholder_t,NIL))
 
-    let aka = heap.datapair(Value::Data(0usize), Value::Data(0usize));   // Aliasing noodles.
-    let y   = heap.fileinfo(Value::Data(2usize), Value::Data(328usize)); // salad.ml
+    let aka = heap.data_pair(Value::Data(0usize), Value::Data(0usize));   // Aliasing noodles.
+    let y   = heap.file_info(Value::Data(2usize), Value::Data(328usize)); // salad.ml
     let who = heap.cons(aka, y);
     // cons(aka,hereinfo)
     // fileinfo(script,line_no)

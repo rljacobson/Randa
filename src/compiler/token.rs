@@ -9,6 +9,7 @@ use logos::Logos;
 // use crate::logos::Logos;
 
 use saucepan::Span;
+use crate::data::Value;
 // use num_traits::{FromPrimitive, ToPrimitive};
 
 use super::{
@@ -113,6 +114,10 @@ impl Token {
   pub fn string_representation(&self) -> &str {
     // println!("self: {}\tTOKEN_BASE: {}", (*self as ValueRepresentationType), TOKEN_BASE);
     TOKEN_STRINGS[*self as usize - TOKEN_BASE]
+  }
+
+  pub fn into_value(self) -> Value {
+    Value::Token(self)
   }
 }
 

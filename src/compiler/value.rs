@@ -6,6 +6,9 @@ code can "unwrap" to the contained type by the parser author specifying `$<Varia
 whatever token number is being referenced) by calling `VariantName::from(value) -> InnerType`. Implement this with
 modules, one for each unwrappable type.
 
+todo: Merge with `crate::data::values::Value`.
+
+
  */
 
 use super::Token;

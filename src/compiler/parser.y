@@ -19,6 +19,8 @@ use super::{
   error::Error,
   Loc
 };
+
+use crate::data::values
 }
 
 %code parser_fields {
@@ -26,6 +28,8 @@ use super::{
   result: Option<Value>,
   /// Enables debug printing
   pub debug: bool,
+  /// The heap on which everything is constructed.
+  heap: &mut Heap,
 }
 
 %code {
@@ -50,7 +54,7 @@ use super::{
 %right Ampersand
 %nonassoc Greater GreaterEqual Equal NotEqual LessEqual Less
 %left Plus Minus
-%left Asterisk  Slash Remainder Divide
+%left Times IntegerDivide Remainder Divide
 %right Caret
 %left Dot   /* ?? fiddle to make Hash behave */
 %left Bang
@@ -170,31 +174,31 @@ exp:
     ;
 
 op:
-    Tilde { $$ = Not; }
-    | Hash { $$ = Length; }
+    Tilde { $$ = Combinator::Not.into(); }
+    | Hash { $$ = Combinator::Length.into(); }
     | diop
     ;
 
 diop:
-    Minus { $$ = MINUS; }
+    Minus { $$ = Combinator::Minus.into(); }
     | diop1
     ;
 
 diop1:
-    Plus { $$ = PLUS; }
-    | PlusPlus { $$ = APPEND; }
-    | Colon { $$ = P; }
+    Plus { $$ = Combinator::Plus.into(); }
+    | PlusPlus { $$ = Combinator::Append.into(); }
+    | Colon { $$ = Combinator::P.into(); }
     | MinusMinus { $$ = listdiff_fn; }
-    | Vel { $$ = OR; }
-    | Ampersand { $$ = AND; }
+    | Vel { $$ = Combinator::OR.into(); }
+    | Ampersand { $$ = Combinator::And.into(); }
     | relop
-    | Times { $$ = TIMES; }
-    | Divide { $$ = FDIV; }
-    | IntegerDivide { $$ = INTDIV; }
-    | Remainder { $$ = MOD; }
-    | Caret { $$ = POWER; }
-    | Dot { $$ = B; }
-    | Bang { $$ = ap(C, SUBSCRIPT); }
+    | Times { $$ = Combinator::Times.into(); }
+    | Divide { $$ = Combinator::Divide.into(); }
+    | IntegerDivide { $$ = Combinator::IntegerDivide.into(); }
+    | Remainder { $$ = Combinator::Remainder.into(); }
+    | Caret { $$ = Combinator::Power.into(); }
+    | Dot { $$ = Combinator::B.into(); }
+    | Bang { $$ = ap(Combinator::C.into(), Combinator::Subscript.into(); }
     | InfixName
     | InfixCName
     ;
@@ -290,27 +294,27 @@ liste:  /* NB - returns list in reverse order */
 
 e1:
     Tilde e1 %prec Equal { $$ = ap(NOT, $2); }
-    | e1 PlusPlus e1 { $$ = ap2(APPEND, $1, $3); }
+    | e1 PlusPlus e1 { $$ = ap2(Append, $1, $3); }
     | e1 Colon e1 { $$ = cons($1, $3); }
     | e1 MinusMinus e1 { $$ = ap2(listdiff_fn, $1, $3);  }
     | e1 Vel e1 { $$ = ap2(OR, $1, $3); }
-    | e1 Ampersand e1 { $$ = ap2(AND, $1, $3); }
+    | e1 Ampersand e1 { $$ = ap2(And, $1, $3); }
     | reln
     | e2
     ;
 
 es1:                     /* e1 or presection */
     Tilde e1 %prec Equal { $$ = ap(NOT, $2); }
-    | e1 PlusPlus e1 { $$ = ap2(APPEND, $1, $3); }
-    | e1 PlusPlus { $$ = ap(APPEND, $1); }
+    | e1 PlusPlus e1 { $$ = ap2(Append, $1, $3); }
+    | e1 PlusPlus { $$ = ap(Append, $1); }
     | e1 Colon e1 { $$ = cons($1, $3); }
     | e1 Colon { $$ = ap(P, $1); }
     | e1 MinusMinus e1 { $$ = ap2(listdiff_fn, $1, $3);  }
     | e1 MinusMinus { $$ = ap(listdiff_fn, $1);  }
     | e1 Vel e1 { $$ = ap2(OR, $1, $3); }
     | e1 Vel { $$ = ap(OR, $1); }
-    | e1 Ampersand e1 { $$ = ap2(AND, $1, $3); }
-    | e1 Ampersand { $$ = ap(AND, $1); }
+    | e1 Ampersand e1 { $$ = ap2(And, $1, $3); }
+    | e1 Ampersand { $$ = ap(And, $1); }
     | relsn
     | es2
     ;
@@ -318,13 +322,13 @@ es1:                     /* e1 or presection */
 e2:
     Minus e2 %prec Minus { $$ = ap(NEG, $2); }
     | Hash e2 %prec Dot { $$ = ap(LENGTH, $2);  }
-    | e2 Plus e2 { $$ = ap2(PLUS, $1, $3); }
-    | e2 Minus e2 { $$ = ap2(MINUS, $1, $3); }
-    | e2 Times e2 { $$ = ap2(TIMES, $1, $3); }
-    | e2 Divide e2 { $$ = ap2(FDIV, $1, $3); }
-    | e2 IntegerDivide e2 { $$ = ap2(INTDIV, $1, $3); }
-    | e2 Remainder e2 { $$ = ap2(MOD, $1, $3); }
-    | e2 Caret e2 { $$ = ap2(POWER, $1, $3); }
+    | e2 Plus e2 { $$ = ap2(Plus, $1, $3); }
+    | e2 Minus e2 { $$ = ap2(Minus, $1, $3); }
+    | e2 Times e2 { $$ = ap2(Times, $1, $3); }
+    | e2 Divide e2 { $$ = ap2(Divide, $1, $3); }
+    | e2 IntegerDivide e2 { $$ = ap2(IntegerDivide, $1, $3); }
+    | e2 Remainder e2 { $$ = ap2(Remainder, $1, $3); }
+    | e2 Caret e2 { $$ = ap2(Power, $1, $3); }
     | e2 Dot e2 { $$ = ap2(B, $1, $3);  }
     | e2 Bang e2 { $$ = ap2(SUBSCRIPT, $3, $1); }
     | e3
@@ -333,20 +337,20 @@ e2:
 es2:               /* e2 or presection */
     Minus e2 %prec Minus { $$ = ap(NEG, $2); }
     | Hash e2 %prec Dot { $$ = ap(LENGTH, $2);  }
-    | e2 Plus e2 { $$ = ap2(PLUS, $1, $3); }
-    | e2 Plus { $$ = ap(PLUS, $1); }
-    | e2 Minus e2 { $$ = ap2(MINUS, $1, $3); }
-    | e2 Minus { $$ = ap(MINUS, $1); }
-    | e2 Times e2 { $$ = ap2(TIMES, $1, $3); }
-    | e2 Times { $$ = ap(TIMES, $1); }
-    | e2 Divide e2 { $$ = ap2(FDIV, $1, $3); }
-    | e2 Divide { $$ = ap(FDIV, $1); }
-    | e2 IntegerDivide e2 { $$ = ap2(INTDIV, $1, $3); }
-    | e2 IntegerDivide { $$ = ap(INTDIV, $1); }
-    | e2 Remainder e2 { $$ = ap2(MOD, $1, $3); }
-    | e2 Remainder { $$ = ap(MOD, $1); }
-    | e2 Caret e2 { $$ = ap2(POWER, $1, $3); }
-    | e2 Caret { $$ = ap(POWER, $1); }
+    | e2 Plus e2 { $$ = ap2(Plus, $1, $3); }
+    | e2 Plus { $$ = ap(Plus, $1); }
+    | e2 Minus e2 { $$ = ap2(Minus, $1, $3); }
+    | e2 Minus { $$ = ap(Minus, $1); }
+    | e2 Times e2 { $$ = ap2(Times, $1, $3); }
+    | e2 Times { $$ = ap(Times, $1); }
+    | e2 Divide e2 { $$ = ap2(Divide, $1, $3); }
+    | e2 Divide { $$ = ap(Divide, $1); }
+    | e2 IntegerDivide e2 { $$ = ap2(IntegerDivide, $1, $3); }
+    | e2 IntegerDivide { $$ = ap(IntegerDivide, $1); }
+    | e2 Remainder e2 { $$ = ap2(Remainder, $1, $3); }
+    | e2 Remainder { $$ = ap(Remainder, $1); }
+    | e2 Caret e2 { $$ = ap2(Power, $1, $3); }
+    | e2 Caret { $$ = ap(Power, $1); }
     | e2 Dot e2 { $$ = ap2(B, $1, $3);  }
     | e2 Dot { $$ = ap(B, $1);  }
     | e2 Bang e2 { $$ = ap2(SUBSCRIPT, $3, $1); }
@@ -378,12 +382,12 @@ reln:
     | reln relop e2 {
         /* EFFICIENCY PROBLEM - subject gets re-evaluated (and
             retypechecked) - fix later */
-        let subject = if hd[hd[$1]]==AND {
+        let subject = if hd[hd[$1]]==And {
           tl[tl[$1]]
         } else {
           tl[$1]
         };
-        $$ = ap2(AND, $1, ap2($2, subject, $3));
+        $$ = ap2(And, $1, ap2($2, subject, $3));
       }
     ;
 
@@ -393,12 +397,12 @@ relsn:                     /* reln or presection */
     | reln relop e2 {
         /* EFFICIENCY PROBLEM - subject gets re-evaluated (and
                     retypechecked) - fix later */
-        let subject = if hd[hd[$1]]==AND {
+        let subject = if hd[hd[$1]]==And {
           tl[tl[$1]]
         } else {
           tl[$1]
         };
-        $$ = ap2(AND, $1, ap2($2, subject, $3));
+        $$ = ap2(And, $1, ap2($2, subject, $3));
       }
     ;
 
@@ -464,8 +468,8 @@ arg:
     | OpenBracket exp Comma exp Comma liste CloseBracket { $$ = cons($2, cons($4, reverse($6))); }
     | OpenBracket exp DotDot exp CloseBracket { $$ = ap3(STEPUNTIL, big_one, $4, $2); }
     | OpenBracket exp DotDot CloseBracket { $$ = ap2(STEP, big_one, $2); }
-    | OpenBracket exp Comma exp DotDot exp CloseBracket { $$ = ap3(STEPUNTIL, ap2(MINUS, $4, $2), $6, $2); }
-    | OpenBracket exp Comma exp DotDot CloseBracket { $$ = ap2(STEP, ap2(MINUS, $4, $2), $2); }
+    | OpenBracket exp Comma exp DotDot exp CloseBracket { $$ = ap3(STEPUNTIL, ap2(Minus, $4, $2), $6, $2); }
+    | OpenBracket exp Comma exp DotDot CloseBracket { $$ = ap2(STEP, ap2(Minus, $4, $2), $2); }
     | OpenBracket exp Pipe qualifiers CloseBracket {
         $$ = if SYNERR {
           NIL
@@ -851,7 +855,7 @@ def:
           syntax("multiple %export statements are illegal\n");
         } else {
           if ($4==NIL && exportfiles==NIL && embargoes!=NIL) {
-            exportfiles = cons(PLUS, NIL);
+            exportfiles = cons(Plus, NIL);
           }
           exports = cons($2, $4);  /* cons(hereinfo, identifiers) */
         }
@@ -1179,7 +1183,7 @@ v1:
         if (!isnat($3)){
           syntax("inappropriate use of \"+\" in pattern\n");
         }
-        $$ = ap2(PLUS, $3, $1);
+        $$ = ap2(Plus, $3, $1);
       }
     | Minus Constant {
         /* if(tag[$2]==DOUBLE)
@@ -1334,7 +1338,7 @@ parts: /* returned in reverse order */
     | parts PathName { $$ = $1; } /*the pathnames are placed on exportfiles in yylex*/
     | parts Plus {
         $$ = $1;
-        exportfiles = cons(PLUS, exportfiles);
+        exportfiles = cons(Plus, exportfiles);
       }
     | Name { $$ = add1($1, NIL); }
     | Minus Name {
@@ -1344,7 +1348,7 @@ parts: /* returned in reverse order */
     | PathName { $$ = NIL; }
     | Plus {
         $$ = NIL;
-        exportfiles=cons(PLUS, exportfiles);
+        exportfiles=cons(Plus, exportfiles);
       }
     ;
 

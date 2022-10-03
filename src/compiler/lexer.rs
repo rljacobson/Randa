@@ -1,3 +1,7 @@
+/*
+ *   Copyright (c) 2022
+ *   All rights reserved.
+ */
 /*!
 
 Randa Lexer, a mediator between the Bison parser and the Logos lexer, which is attacked to the `Token` enum. The

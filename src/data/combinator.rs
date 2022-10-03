@@ -8,7 +8,7 @@
 use num_traits::{FromPrimitive, ToPrimitive};
 
 use super::COMBINATOR_BASE;
-use crate::data::ValueRepresentationType;
+use crate::data::{Value, ValueRepresentationType};
 
 // region Combinator Names
 static COMBINATOR_NAMES: [&str; 141] = [
@@ -307,5 +307,9 @@ pub enum Combinator{
 impl Combinator {
   pub fn name(&self) -> &str{
     COMBINATOR_NAMES[(*self as ValueRepresentationType - COMBINATOR_BASE) as usize]
+  }
+
+  pub fn into_value(self) -> Value {
+    Value::Combinator(self)
   }
 }

@@ -9,14 +9,17 @@ mod lexer;
 mod parser;
 pub mod token;
 pub mod errors;
-mod value;
+// mod value;
 mod token_wrapper;
 
 use logos::Logos;
 
 use saucepan::Source;
+
 pub use token::Token;
+
 use errors::LexError;
+
 use crate::data::{
   TOKEN_BASE,
   COMBINATOR_BASE,

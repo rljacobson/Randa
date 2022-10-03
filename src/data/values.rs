@@ -21,8 +21,15 @@ From Miranda:
  */
 
 use num_traits::{FromPrimitive, ToPrimitive};
+use crate::compiler::Token;
 
-use crate::data::{ATOM_LIMIT, Combinator, COMBINATOR_BASE, TOKEN_BASE, ValueRepresentationType};
+use crate::data::{
+  ATOM_LIMIT,
+  COMBINATOR_BASE,
+  TOKEN_BASE,
+  Combinator,
+  ValueRepresentationType,
+};
 use super::tag::Tag;
 use super::token::Token;
 
@@ -30,7 +37,7 @@ use super::token::Token;
 pub type Heap = Vec<HeapCell>;
 
 #[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Debug, Default)]
-pub struct RawValue(pub(in values) ValueRepresentationType);
+pub struct RawValue(pub ValueRepresentationType);
 
 impl RawValue {
   pub fn from_value(value: Value) -> RawValue {
@@ -103,6 +110,23 @@ impl From<RawValue> for Value {
   }
 }
 
+impl From<char> for Value {
+  fn from(c: char) -> Self {
+    Value::Char(c)
+  }
+}
+
+impl From<Combinator> for Value {
+  fn from(combinator: Combinator) -> Value {
+    Value::Combinator(combinator)
+  }
+}
+
+impl From<Token> for Value {
+  fn from(token: Token) -> Value {
+    Value::Token(token)
+  }
+}
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub struct HeapCell {
