@@ -21,8 +21,8 @@ From Miranda:
  */
 
 use num_traits::{FromPrimitive, ToPrimitive};
-use crate::compiler::Token;
 
+use crate::compiler::Token;
 use crate::data::{
   ATOM_LIMIT,
   COMBINATOR_BASE,
@@ -31,7 +31,6 @@ use crate::data::{
   ValueRepresentationType,
 };
 use super::tag::Tag;
-use super::token::Token;
 
 
 pub type Heap = Vec<HeapCell>;

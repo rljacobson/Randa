@@ -8,6 +8,7 @@ extern crate num_traits;
 // mod driver;
 mod data;
 mod compiler;
+mod vm;
 
 fn main() {
   /*

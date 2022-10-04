@@ -79,7 +79,7 @@ pub use crate::{
 // If the bit-width of `ValueRepresentationType` changes, synchronize it with
 //    * `Heap::resolve_string()`
 //    * instances of `IdentifierValueType::from_usize`
-type ValueRepresentationType                              = usize;
+pub(crate) type ValueRepresentationType                              = usize;
 pub const TOKEN_BASE            : ValueRepresentationType = 256; // There are 80 token values.
 pub const COMBINATOR_BASE       : ValueRepresentationType = 336; // There are 141 combinators.
 pub const ATOM_LIMIT            : ValueRepresentationType = COMBINATOR_BASE + 141; // = 477

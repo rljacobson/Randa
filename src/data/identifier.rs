@@ -6,10 +6,12 @@
 
 
 use saucepan::LineNumber;
+use num_traits::{FromPrimitive, ToPrimitive};
+
 use crate::data::heap::Heap;
 use crate::data::tag::Tag;
 use crate::data::{ATOM_LIMIT, Combinator, Value};
-use crate::data::values::HeapCell;
+use crate::data::values::{HeapCell, RawValue};
 use super::{
   Type,
   ValueRepresentationType
@@ -25,7 +27,7 @@ pub struct Identifier<'t>{
   pub value        : IdentifierValueType
 }
 
-impl Identifier {
+impl<'t> Identifier<'t> {
   pub fn compile(&self, heap: &mut Heap) -> Value {
     // Id: {
     //   hd:  cons(strcons(name,who),type)
@@ -34,7 +36,7 @@ impl Identifier {
     let who = self.definition.compile(heap);
     let name = heap.string(self.name);
     let mut id_head = heap.strcons(name, who);
-    id_head = cons(id_head, self.datatype.into());
+    id_head = heap.cons(id_head, self.datatype.into());
 
     // Constructing the value is complicated. From Miranda:
     //
@@ -45,7 +47,7 @@ impl Identifier {
     //   cons(cons(arity,showfn),cons(placeholder_t,NIL))
     //   cons(cons(arity,showfn),cons(free_t,NIL))
     let showfn = heap.string(self.show_function);
-    let value_head = heap.cons(self.arity.into(), showfn);
+    let value_head = heap.cons(RawValue(self.arity).into(), showfn);
     let value_tail = self.value.compile(heap);
     let value = heap.cons(value_head, value_tail);
 
@@ -64,11 +66,11 @@ impl Identifier {
     let id_cell: HeapCell = heap.expect(Tag::Id, reference)?;
 
     let (arity, show_function, value_type): (ValueRepresentationType, &str, IdentifierValueType)
-        = IdentifierValueType::get_identifier_value(id_cell.tail.into(), heap)?;
+        = IdentifierValueType::get(id_cell.tail.into(), heap)?;
 
     let cons_cell    : HeapCell             = heap.expect(Tag::Cons, id_cell.head.into() )?;
     let strcons_cell : HeapCell             = heap.expect(Tag::StrCons, cons_cell.head.into())?;
-    let id_definition: IdentifierDefinition = heap.get_who_info(strcons_cell.tail.into())?;
+    let id_definition: IdentifierDefinition = IdentifierDefinition::get(strcons_cell.tail.into(), heap)?;
     let datatype     : Type                 = Type::from_usize(cons_cell.tail.0).unwrap();
     let name         : &str                 = heap.resolve_string(strcons_cell.head)?;
 
@@ -103,12 +105,12 @@ pub enum IdentifierDefinition<'t> {
   }
 }
 
-impl IdentifierDefinition {
+impl<'t> IdentifierDefinition<'t> {
   /// Compiles to the `who` part of an ID
   pub fn compile(&self, heap: &mut Heap) -> Value {
     match self{
 
-      IdentifierDefinition::Undefined => heap.NIL,
+      IdentifierDefinition::Undefined => heap.NILL,
 
       IdentifierDefinition::DefinedAt {
         script_file,
@@ -116,7 +118,7 @@ impl IdentifierDefinition {
       } => {
         // hereinfo := `fileinfo(script,line_no)`
         let script = heap.string(script_file);
-        let hereinfo = heap.file_info(script, line.into());
+        let hereinfo = heap.file_info(script, RawValue(line.0 as usize).into());
         hereinfo
       }
 
@@ -129,9 +131,9 @@ impl IdentifierDefinition {
         // is of the form `datapair(oldn,0)`, `oldn` being a string.
         // hereinfo := `fileinfo(script,line_no)`
         let source = heap.string(source);
-        let aka = heap.data_pair(source, 0.into());
+        let aka = heap.data_pair(source, RawValue(0).into());
         let script = heap.string(script_file);
-        let hereinfo = heap.file_info(script, line.into());
+        let hereinfo = heap.file_info(script, RawValue(line.0 as usize).into());
 
         heap.cons(aka, hereinfo)
       }
@@ -263,7 +265,7 @@ pub enum IdentifierValueType{
 impl IdentifierValueType {
   pub fn compile(&self, heap: &mut Heap) -> Value {
     // todo: This is incorrect. It ignores constructors, source, basis, etc.
-    heap.cons(Value::Data(self as ValueRepresentationType), heap.NIL)
+    heap.cons(Value::Data(*self as ValueRepresentationType), heap.NILL)
   }
 
   /// This is not the inverse of compile! Returns `(arity, show_function, value_type)`.
@@ -309,8 +311,6 @@ impl IdentifierValueType {
   }
   */
 }
-
-
 
 
 #[cfg(test)]

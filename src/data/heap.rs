@@ -4,26 +4,22 @@ See the `values` module for more information about how data is encoded in a `Hea
 
  */
 
-use num_traits::{FromPrimitive, ToPrimitive};
-use saucepan::LineNumber;
-use crate::compiler::Token;
-
-use crate::data::{
-  tag::Tag,
-  types::Type,
-  values::{
-    HeapCell,
-    RawValue,
-    Value
-  },
-  ATOM_LIMIT,
-  // Combinator,
-  Identifier,
-  IdentifierDefinition,
-  IdentifierValueType,
-  ValueRepresentationType
+use crate::{
+  compiler::Token,
+  data::{
+    tag::Tag,
+    types::Type,
+    values::{
+      HeapCell,
+      RawValue,
+      Value
+    },
+    Combinator,
+    Identifier,
+    IdentifierValueType,
+    ValueRepresentationType
+  }
 };
-use crate::data::Value::Combinator;
 
 
 type ValueOption = Result<Value, ()>;
@@ -35,9 +31,9 @@ pub struct Heap {
   strings: Vec<String>,
 
   // References to constants
-  NILL: Value,
+  pub NILL: Value,
 
-  /// Common compound types.
+  // Common compound types.
   // numeric_function_type : Value,
   // numeric_function2_type: Value,
   // boolean_function_type : Value,
@@ -47,7 +43,7 @@ pub struct Heap {
   // range_step_type       : Value,
   // range_step_until_type : Value,
 
-  /// Common constants
+  // Common constants
 }
 
 impl Default for Heap {
@@ -229,7 +225,7 @@ impl Heap {
     let idx = self.strings.len();
     self.strings.push(text.to_string());
     self.put_cell(
-      HeapCell::new(Tag::String, Value::Data(idx), 0.into())
+      HeapCell::new(Tag::String, Value::Data(idx), RawValue(0).into())
     )
   }
 
@@ -369,7 +365,7 @@ impl Heap {
         Err(_) => return false,
       };
 
-    return head_cell.head == (type_required as ValueRepresentationType) ;
+    return head_cell.head == RawValue(type_required as ValueRepresentationType) ;
   }
 
   /// Is the type referenced by reference a list type?
@@ -380,7 +376,7 @@ impl Heap {
         Err(_) => return false,
       };
 
-    return type_cell == (Type::List as ValueRepresentationType);
+    return type_cell.head == RawValue(Type::List as ValueRepresentationType);
   }
 
   pub fn is_type_variable(&self, reference: Value) -> bool {
@@ -400,7 +396,7 @@ impl Heap {
           Err(_) => return false,
         };
 
-    return type_cell == (Type::Bind as ValueRepresentationType);
+    return type_cell.head == RawValue(Type::Bind as ValueRepresentationType);
   }
 
   pub fn arrow_type(&mut self, arg1: Value, arg2: Value) -> Value {

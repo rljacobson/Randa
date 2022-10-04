@@ -9,12 +9,14 @@ use logos::Logos;
 // use crate::logos::Logos;
 
 use saucepan::Span;
-use crate::data::Value;
-// use num_traits::{FromPrimitive, ToPrimitive};
+use num_traits::{FromPrimitive, ToPrimitive, Primitive};
 
-use super::{
-  TOKEN_BASE,
-  ValueRepresentationType
+use crate::{
+  data::{
+    TOKEN_BASE,
+    Value,
+    ValueRepresentationType
+  }
 };
 
 // region Token Strings
@@ -103,27 +105,8 @@ static TOKEN_STRINGS: [&str; 80] = [
 ];
 // endregion
 
-
-impl Display for Token {
-  fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-    write!(f, "token<{}>", self.string_representation())
-  }
-}
-
-impl Token {
-  pub fn string_representation(&self) -> &str {
-    // println!("self: {}\tTOKEN_BASE: {}", (*self as ValueRepresentationType), TOKEN_BASE);
-    TOKEN_STRINGS[*self as usize - TOKEN_BASE]
-  }
-
-  pub fn into_value(self) -> Value {
-    Value::Token(self)
-  }
-}
-
-
 // Equivalent to `#define`s in y.tab.h
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, Logos)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, Logos, Primitive)]
 #[repr(usize)]
 pub enum Token{
   Value                                 = 256, // = 0 + TOKEN_BASE,  // VALUE
@@ -280,3 +263,24 @@ pub enum Token{
   #[regex(r"[ \t]*", logos::skip)]
   Error = 335, // = 79 + TOKEN_BASE,  // ERROR
 }
+
+
+
+
+impl Display for Token {
+  fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    write!(f, "token<{}>", self.string_representation())
+  }
+}
+
+impl Token {
+  pub fn string_representation(&self) -> &str {
+    // println!("self: {}\tTOKEN_BASE: {}", (*self as ValueRepresentationType), TOKEN_BASE);
+    TOKEN_STRINGS[*self as usize - TOKEN_BASE]
+  }
+
+  pub fn into_value(self) -> Value {
+    Value::Token(self)
+  }
+}
+
