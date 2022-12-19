@@ -11,8 +11,10 @@ todo: Merge with `crate::data::values::Value`.
 
  */
 
-use super::Token;
+// use super::Token;
+use crate::compiler::token::Token;
 use crate::data::Combinator;
+// use crate::data::Combinator;
 
 /// Enum that represents all kinds of values that can be returned
 /// from parser derivations.
@@ -59,7 +61,7 @@ impl Value {
   }
 }
 
-
+/*
 macro_rules! impl_value_unwrapper {
   ($variant:ident, $inner_ty:ty) => {
     #[allow(non_snake_case)]
@@ -79,3 +81,4 @@ macro_rules! impl_value_unwrapper {
 
 impl_value_unwrapper!(Token, Token);
 impl_value_unwrapper!(Combinator, Combinator);
+*/

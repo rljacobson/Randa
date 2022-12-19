@@ -68,7 +68,7 @@ impl Heap {
 
   fn setup_constants(&mut self) {
     // Why have a reference to this instead of just using Combinator::Nil?
-    // That's what Miranda does, but is there a reason?
+    // That's what Miranda does, but is there a reason? To have it on the heap, but why?
     self.NILL = self.cons(Value::Token(Token::Constant), Combinator::Nil.into());
 
   }
@@ -224,105 +224,71 @@ impl Heap {
   pub fn string(&mut self, text: &str) -> Value {
     let idx = self.strings.len();
     self.strings.push(text.to_string());
-    self.put_cell(
-      HeapCell::new(Tag::String, Value::Data(idx), RawValue(0).into())
-    )
+    self.put(Tag::String, Value::Data(idx), RawValue(0).into())
   }
 
   pub fn data_pair(&mut self, x: Value, y: Value) -> Value {
-    self.put_cell(
-      HeapCell::new(Tag::DataPair, x, y)
-    )
+    self.put(Tag::DataPair, x, y)
   }
 
   pub fn file_info(&mut self, x: Value, y: Value) -> Value {
-    self.put_cell(
-      HeapCell::new(Tag::FileInfo, x, y)
-    )
+    self.put(Tag::FileInfo, x, y)
   }
 
   pub fn constructor(&mut self, n: Value, x: Value) -> Value {
-    self.put_cell(
-      HeapCell::new(Tag::Constructor, n, x)
-    )
+    self.put(Tag::Constructor, n, x)
   }
 
   pub fn strcons(&mut self, x: Value, y: Value) -> Value {
-    self.put_cell(
-      HeapCell::new(Tag::StrCons, x, y)
-    )
+    self.put(Tag::StrCons, x, y)
   }
 
   pub fn cons(&mut self, x: Value, y: Value) -> Value {
-    self.put_cell(
-      HeapCell::new(Tag::Cons, x, y)
-    )
+    self.put(Tag::Cons, x, y)
   }
 
   pub fn lambda(&mut self, x: Value, y: Value) -> Value {
-    self.put_cell(
-      HeapCell::new(Tag::Lambda, x, y)
-    )
+    self.put(Tag::Lambda, x, y)
   }
 
   pub fn let_(&mut self, x: Value, y: Value) -> Value {
-    self.put_cell(
-      HeapCell::new(Tag::Let, x, y)
-    )
+    self.put(Tag::Let, x, y)
   }
 
   pub fn letrec(&mut self, x: Value, y: Value) -> Value {
-    self.put_cell(
-      HeapCell::new(Tag::LetRec, x, y)
-    )
+    self.put(Tag::LetRec, x, y)
   }
 
   pub fn share(&mut self, x: Value, y: Value) -> Value {
-    self.put_cell(
-      HeapCell::new(Tag::Share, x, y)
-    )
+    self.put(Tag::Share, x, y)
   }
 
   pub fn pair(&mut self, x: Value, y: Value) -> Value {
-    self.put_cell(
-      HeapCell::new(Tag::Pair, x, y)
-    )
+    self.put(Tag::Pair, x, y)
   }
 
   pub fn tcons(&mut self, x: Value, y: Value) -> Value {
-    self.put_cell(
-      HeapCell::new(Tag::TCons, x, y)
-    )
+    self.put(Tag::TCons, x, y)
   }
 
   pub fn tries(&mut self, x: Value, y: Value) -> Value {
-    self.put_cell(
-      HeapCell::new(Tag::Tries, x, y)
-    )
+    self.put(Tag::Tries, x, y)
   }
 
   pub fn label(&mut self, x: Value, y: Value) -> Value {
-    self.put_cell(
-      HeapCell::new(Tag::Label, x, y)
-    )
+    self.put(Tag::Label, x, y)
   }
 
   pub fn show(&mut self, x: Value, y: Value) -> Value {
-    self.put_cell(
-      HeapCell::new(Tag::Show, x, y)
-    )
+    self.put(Tag::Show, x, y)
   }
 
   pub fn readvals(&mut self, x: Value, y: Value) -> Value {
-    self.put_cell(
-      HeapCell::new(Tag::StartReadValues, x, y)
-    )
+    self.put(Tag::StartReadValues, x, y)
   }
 
   pub fn apply(&mut self, x: Value, y: Value) -> Value {
-    self.put_cell(
-      HeapCell::new(Tag::Ap, x, y)
-    )
+    self.put(Tag::Ap, x, y)
   }
 
   pub fn apply2(&mut self, x: Value, y: Value, z: Value) -> Value {
@@ -425,10 +391,11 @@ impl Heap {
   }
 
   pub fn pair_type(&mut self, arg1: Value, arg2: Value) -> Value{
+    let inner = self.apply2(Type::Comma.into(), arg2, Type::Void.into());
     self.apply2(
       Type::Comma.into(),
       arg1,
-      self.apply2(Type::Comma.into(), arg2, Type::Void.into())
+      inner,
     )
   }
 

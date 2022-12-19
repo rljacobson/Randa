@@ -235,21 +235,26 @@ impl<'t> IdentifierDefinition<'t> {
 
 
 /**
-From Miranda:
+  Miranda:
+    The value field of type identifier takes one of the following forms
 
-  The value field of type identifier takes one of the following forms:
-  cons(cons(arity,showfn),cons(algebraic_t,constructors))
-  cons(cons(arity,showfn),cons(synonym_t,rhs))
-  cons(cons(arity,showfn),cons(abstract_t,basis))
-  cons(cons(arity,showfn),cons(placeholder_t,NIL))
-  cons(cons(arity,showfn),cons(free_t,NIL))
+  |              | Arity    | Show Functions |            | Type             | Info             |
+  | :----------- | :------- | :------------- | :--------- | :--------------- | :--------------- |
+  | `cons(cons(` | `arity,` | `showfn`       | `), cons(` | `algebraic_t,`   | `constructors )` |
+  | `cons(cons(` | `arity,` | `showfn`       | `), cons(` | `synonym_t,`     | `rhs  ))`        |
+  | `cons(cons(` | `arity,` | `showfn`       | `), cons(` | `abstract_t,`    | `basis ))`       |
+  | `cons(cons(` | `arity,` | `showfn`       | `), cons(` | `placeholder_t,` | `NIL ))`         |
+  | `cons(cons(` | `arity,` | `showfn`       | `), cons(` | `free_t,`        | `NIL ))`         |
+
 
   Note that:
-    #define algebraic_t 0
-    #define synonym_t 1
-    #define abstract_t 2
+```c
+    #define algebraic_t   0
+    #define synonym_t     1
+    #define abstract_t    2
     #define placeholder_t 3
-    #define free_t 4
+    #define free_t        4
+```
  */
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Primitive)]
 #[repr(usize)]

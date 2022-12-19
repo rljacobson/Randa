@@ -9,30 +9,30 @@ use std::error::Error;
 use std::rc::Rc;
 
 #[derive(Clone, Debug)]
-pub enum LexError{
+pub enum LexerError {
   EOF,
   BlankErr,
   UnknownError(Rc<dyn Error>)
 }
 
-impl LexError {
+impl LexerError {
 
 
 
 }
 
-impl Display for LexError {
+impl Display for LexerError {
   fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
     match self {
-      LexError::EOF => {
+      LexerError::EOF => {
         write!(f, "encountered EOF\n")
       }
 
-      LexError::BlankErr => {
+      LexerError::BlankErr => {
         write!(f, "formal text not delimited by blank line\n")
       }
 
-      LexError::UnknownError(e) => {
+      LexerError::UnknownError(e) => {
         write!(f, "unknown error: {}", e)
       }
     }
@@ -40,11 +40,11 @@ impl Display for LexError {
 }
 
 
-impl Error for LexError {
+impl Error for LexerError {
 
 }
 
 
-pub fn emit_error(e: LexError) {
+pub fn emit_error(e: LexerError) {
   println!("Error: {}", e);
 }

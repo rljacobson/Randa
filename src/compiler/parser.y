@@ -20,7 +20,7 @@ use super::{
   Loc
 };
 
-use crate::data::values
+use crate::data::values;
 }
 
 %code parser_fields {
@@ -198,7 +198,7 @@ diop1:
     | Remainder { $$ = Combinator::Remainder.into(); }
     | Caret { $$ = Combinator::Power.into(); }
     | Dot { $$ = Combinator::B.into(); }
-    | Bang { $$ = ap(Combinator::C.into(), Combinator::Subscript.into(); }
+    | Bang { $$ = self.heap.apply(Combinator::C.into(), Combinator::Subscript.into()); }
     | InfixName
     | InfixCName
     ;
@@ -208,8 +208,8 @@ relop:
     | GreaterEqual { $$ = GRE; }
     | eqop { $$ = EQ; }
     | NotEqual { $$ = NEQ; }
-    | LessEqual { $$ = ap(C, GRE); }
-    | Less { $$ = ap(C, GR); }
+    | LessEqual { $$ = self.heap.apply(C, GRE); }
+    | Less { $$ = self.heap.apply(C, GR); }
     ;
 
 eqop:
@@ -225,11 +225,14 @@ rhs:
     ;
 
 cases:
-    exp Comma if exp { $$ = cons(ap2(COND, $4, $1), NIL); }
-    | exp Comma Otherwise { $$ = cons(ap(Otherwise, $1), NIL); }
+    exp Comma if exp { $$ = self.heap.cons(self.heap.apply2(COND, $4, $1), NIL); }
+    | exp Comma Otherwise {
+    	let ow = self.heap.apply(Otherwise, $1);
+    	$$ = self.heap.cons(ow, NIL);
+    }
     | cases reindent ElseEqual alt {
-        $$ = cons($4, $1);
-        if(hd[hd[$1]]==Otherwise){
+        $$ = self.heap.cons($4, $1);
+        if(self.hd_hd($1) == Otherwise){
           syntax("\"otherwise\" must be last case\n");
         }
       }
@@ -239,10 +242,10 @@ alt:
     here exp {
         errs=$1;
         syntax("obsolete syntax, \", otherwise\" missing\n");
-        $$ = ap(Otherwise, label($1, $2));
+        $$ = self.heap.apply(Otherwise, label($1, $2));
       }
-    | here exp Comma if exp { $$ = label($1, ap2(COND, $5, $2)); }
-    | here exp Comma Otherwise { $$ = ap(Otherwise, label($1, $2)); }
+    | here exp Comma if exp { $$ = label($1, self.heap.apply2(COND, $5, $2)); }
+    | here exp Comma Otherwise { $$ = self.heap.apply(Otherwise, label($1, $2)); }
     ;
 
 if:
@@ -287,122 +290,126 @@ reindent:
     ;
 
 liste:  /* NB - returns list in reverse order */
-    exp { $$ = cons($1, NIL); }
+    exp { $$ = self.heap.cons($1, NIL); }
     | liste Comma exp  /* left recursive so as not to eat YACC stack */
-        { $$ = cons($3, $1); }
+        { $$ = self.heap.cons($3, $1); }
     ;
 
 e1:
-    Tilde e1 %prec Equal { $$ = ap(NOT, $2); }
-    | e1 PlusPlus e1 { $$ = ap2(Append, $1, $3); }
-    | e1 Colon e1 { $$ = cons($1, $3); }
-    | e1 MinusMinus e1 { $$ = ap2(listdiff_fn, $1, $3);  }
-    | e1 Vel e1 { $$ = ap2(OR, $1, $3); }
-    | e1 Ampersand e1 { $$ = ap2(And, $1, $3); }
+    Tilde e1 %prec Equal { $$ = self.heap.apply(NOT, $2); }
+    | e1 PlusPlus e1 { $$ = self.heap.apply2(Append, $1, $3); }
+    | e1 Colon e1 { $$ = self.heap.cons($1, $3); }
+    | e1 MinusMinus e1 { $$ = self.heap.apply2(listdiff_fn, $1, $3);  }
+    | e1 Vel e1 { $$ = self.heap.apply2(OR, $1, $3); }
+    | e1 Ampersand e1 { $$ = self.heap.apply2(And, $1, $3); }
     | reln
     | e2
     ;
 
 es1:                     /* e1 or presection */
-    Tilde e1 %prec Equal { $$ = ap(NOT, $2); }
-    | e1 PlusPlus e1 { $$ = ap2(Append, $1, $3); }
-    | e1 PlusPlus { $$ = ap(Append, $1); }
-    | e1 Colon e1 { $$ = cons($1, $3); }
-    | e1 Colon { $$ = ap(P, $1); }
-    | e1 MinusMinus e1 { $$ = ap2(listdiff_fn, $1, $3);  }
-    | e1 MinusMinus { $$ = ap(listdiff_fn, $1);  }
-    | e1 Vel e1 { $$ = ap2(OR, $1, $3); }
-    | e1 Vel { $$ = ap(OR, $1); }
-    | e1 Ampersand e1 { $$ = ap2(And, $1, $3); }
-    | e1 Ampersand { $$ = ap(And, $1); }
+    Tilde e1 %prec Equal { $$ = self.heap.apply(NOT, $2); }
+    | e1 PlusPlus e1 { $$ = self.heap.apply2(Append, $1, $3); }
+    | e1 PlusPlus { $$ = self.heap.apply(Append, $1); }
+    | e1 Colon e1 { $$ = self.heap.cons($1, $3); }
+    | e1 Colon { $$ = self.heap.apply(P, $1); }
+    | e1 MinusMinus e1 { $$ = self.heap.apply2(listdiff_fn, $1, $3);  }
+    | e1 MinusMinus { $$ = self.heap.apply(listdiff_fn, $1);  }
+    | e1 Vel e1 { $$ = self.heap.apply2(OR, $1, $3); }
+    | e1 Vel { $$ = self.heap.apply(OR, $1); }
+    | e1 Ampersand e1 { $$ = self.heap.apply2(And, $1, $3); }
+    | e1 Ampersand { $$ = self.heap.apply(And, $1); }
     | relsn
     | es2
     ;
 
 e2:
-    Minus e2 %prec Minus { $$ = ap(NEG, $2); }
-    | Hash e2 %prec Dot { $$ = ap(LENGTH, $2);  }
-    | e2 Plus e2 { $$ = ap2(Plus, $1, $3); }
-    | e2 Minus e2 { $$ = ap2(Minus, $1, $3); }
-    | e2 Times e2 { $$ = ap2(Times, $1, $3); }
-    | e2 Divide e2 { $$ = ap2(Divide, $1, $3); }
-    | e2 IntegerDivide e2 { $$ = ap2(IntegerDivide, $1, $3); }
-    | e2 Remainder e2 { $$ = ap2(Remainder, $1, $3); }
-    | e2 Caret e2 { $$ = ap2(Power, $1, $3); }
-    | e2 Dot e2 { $$ = ap2(B, $1, $3);  }
-    | e2 Bang e2 { $$ = ap2(SUBSCRIPT, $3, $1); }
+    Minus e2 %prec Minus { $$ = self.heap.apply(NEG, $2); }
+    | Hash e2 %prec Dot { $$ = self.heap.apply(LENGTH, $2);  }
+    | e2 Plus e2 { $$ = self.heap.apply2(Plus, $1, $3); }
+    | e2 Minus e2 { $$ = self.heap.apply2(Minus, $1, $3); }
+    | e2 Times e2 { $$ = self.heap.apply2(Times, $1, $3); }
+    | e2 Divide e2 { $$ = self.heap.apply2(Divide, $1, $3); }
+    | e2 IntegerDivide e2 { $$ = self.heap.apply2(IntegerDivide, $1, $3); }
+    | e2 Remainder e2 { $$ = self.heap.apply2(Remainder, $1, $3); }
+    | e2 Caret e2 { $$ = self.heap.apply2(Power, $1, $3); }
+    | e2 Dot e2 { $$ = self.heap.apply2(B, $1, $3);  }
+    | e2 Bang e2 { $$ = self.heap.apply2(SUBSCRIPT, $3, $1); }
     | e3
     ;
 
 es2:               /* e2 or presection */
-    Minus e2 %prec Minus { $$ = ap(NEG, $2); }
-    | Hash e2 %prec Dot { $$ = ap(LENGTH, $2);  }
-    | e2 Plus e2 { $$ = ap2(Plus, $1, $3); }
-    | e2 Plus { $$ = ap(Plus, $1); }
-    | e2 Minus e2 { $$ = ap2(Minus, $1, $3); }
-    | e2 Minus { $$ = ap(Minus, $1); }
-    | e2 Times e2 { $$ = ap2(Times, $1, $3); }
-    | e2 Times { $$ = ap(Times, $1); }
-    | e2 Divide e2 { $$ = ap2(Divide, $1, $3); }
-    | e2 Divide { $$ = ap(Divide, $1); }
-    | e2 IntegerDivide e2 { $$ = ap2(IntegerDivide, $1, $3); }
-    | e2 IntegerDivide { $$ = ap(IntegerDivide, $1); }
-    | e2 Remainder e2 { $$ = ap2(Remainder, $1, $3); }
-    | e2 Remainder { $$ = ap(Remainder, $1); }
-    | e2 Caret e2 { $$ = ap2(Power, $1, $3); }
-    | e2 Caret { $$ = ap(Power, $1); }
-    | e2 Dot e2 { $$ = ap2(B, $1, $3);  }
-    | e2 Dot { $$ = ap(B, $1);  }
-    | e2 Bang e2 { $$ = ap2(SUBSCRIPT, $3, $1); }
-    | e2 Bang { $$ = ap2(C, SUBSCRIPT, $1); }
+    Minus e2 %prec Minus { $$ = self.heap.apply(NEG, $2); }
+    | Hash e2 %prec Dot { $$ = self.heap.apply(LENGTH, $2);  }
+    | e2 Plus e2 { $$ = self.heap.apply2(Plus, $1, $3); }
+    | e2 Plus { $$ = self.heap.apply(Plus, $1); }
+    | e2 Minus e2 { $$ = self.heap.apply2(Minus, $1, $3); }
+    | e2 Minus { $$ = self.heap.apply(Minus, $1); }
+    | e2 Times e2 { $$ = self.heap.apply2(Times, $1, $3); }
+    | e2 Times { $$ = self.heap.apply(Times, $1); }
+    | e2 Divide e2 { $$ = self.heap.apply2(Divide, $1, $3); }
+    | e2 Divide { $$ = self.heap.apply(Divide, $1); }
+    | e2 IntegerDivide e2 { $$ = self.heap.apply2(IntegerDivide, $1, $3); }
+    | e2 IntegerDivide { $$ = self.heap.apply(IntegerDivide, $1); }
+    | e2 Remainder e2 { $$ = self.heap.apply2(Remainder, $1, $3); }
+    | e2 Remainder { $$ = self.heap.apply(Remainder, $1); }
+    | e2 Caret e2 { $$ = self.heap.apply2(Power, $1, $3); }
+    | e2 Caret { $$ = self.heap.apply(Power, $1); }
+    | e2 Dot e2 { $$ = self.heap.apply2(B, $1, $3);  }
+    | e2 Dot { $$ = self.heap.apply(B, $1);  }
+    | e2 Bang e2 { $$ = self.heap.apply2(SUBSCRIPT, $3, $1); }
+    | e2 Bang { $$ = self.heap.apply2(C, SUBSCRIPT, $1); }
     | es3
     ;
 
 e3:
-    comb InfixName e3 { $$ = ap2($2, $1, $3); }
-    | comb InfixCName e3 { $$ = ap2($2, $1, $3); }
+    comb InfixName e3 { $$ = self.heap.apply2($2, $1, $3); }
+    | comb InfixCName e3 { $$ = self.heap.apply2($2, $1, $3); }
     | comb
     ;
 
 es3:                     /* e3 or presection */
-    comb InfixName e3 { $$ = ap2($2, $1, $3); }
-    | comb InfixName { $$ = ap($2, $1); }
-    | comb InfixCName e3 { $$ = ap2($2, $1, $3); }
-    | comb InfixCName { $$ = ap($2, $1); }
+    comb InfixName e3 { $$ = self.heap.apply2($2, $1, $3); }
+    | comb InfixName { $$ = self.heap.apply($2, $1); }
+    | comb InfixCName e3 { $$ = self.heap.apply2($2, $1, $3); }
+    | comb InfixCName { $$ = self.heap.apply($2, $1); }
     | comb
     ;
 
 comb:
-    comb arg { $$ = ap($1, $2); }
+    comb arg { $$ = self.heap.apply($1, $2); }
     | arg
     ;
 
 reln:
-    e2 relop e2 { $$ = ap2($2, $1, $3); }
+    e2 relop e2 { $$ = self.heap.apply2($2, $1, $3); }
     | reln relop e2 {
         /* EFFICIENCY PROBLEM - subject gets re-evaluated (and
             retypechecked) - fix later */
-        let subject = if hd[hd[$1]]==And {
-          tl[tl[$1]]
+            let hd = self.heap[$1].head;
+        let subject = if self.heap[hd].head == And {
+          self.tl_tl($1)
         } else {
-          tl[$1]
+          self.heap[$1].tail
         };
-        $$ = ap2(And, $1, ap2($2, subject, $3));
+        let rhs = self.heap.apply2($2, subject, $3);
+        $$ = self.heap.apply2(And, $1, rhs);
       }
     ;
 
 relsn:                     /* reln or presection */
-    e2 relop e2 { $$ = ap2($2, $1, $3); }
-    | e2 relop { $$ = ap($2, $1); }
+    e2 relop e2 { $$ = self.heap.apply2($2, $1, $3); }
+    | e2 relop { $$ = self.heap.apply($2, $1); }
     | reln relop e2 {
         /* EFFICIENCY PROBLEM - subject gets re-evaluated (and
                     retypechecked) - fix later */
-        let subject = if hd[hd[$1]]==And {
-          tl[tl[$1]]
+
+        let subject = if self.hd_hd($1) == And {
+          self.tl_tl($1)
         } else {
-          tl[$1]
+          self.heap[$1].tail
         };
-        $$ = ap2(And, $1, ap2($2, subject, $3));
+        let rhs = self.heap.apply2($2, subject, $3);
+        $$ = self.heap.apply2(And, $1, rhs);
       }
     ;
 
@@ -415,41 +422,50 @@ arg:
     }
     Lex lexrules EndIR {
           inlex = 0;
-          lexdefs = NIL;
-          if lexstates!=NIL {
-            let echoed = 0;
-            for(; lexstates!=NIL; lexstates=tl[lexstates] ) {
-              if(!echoed){
-                printf(echoing?"\n":"");
-                echoed = 1;
-              }
-              if(!(tl[hd[lexstates]]&1)){
-                printf(
-                  "warning: lex state %s is never entered\n",
-                  get_id(hd[hd[lexstates]])
-                );
-              } else {
-                if(!(tl[hd[lexstates]]&2)) {
-                  printf(
-                    "warning: lex state %s has no associated rules\n",
-                    get_id(hd[hd[lexstates]])
-                  );
-                }
-              }
-            }
-          }
-          if $3==NIL {
-            syntax("%lex with no rules\n");
-          } else {
-            tag[$3] = LEXER;
-          }
-          /*
-            result is lex-list, in reverse order, of items of the form
-              cons(scstuff, cons(matcher, rhs))
-            where scstuff is of the form
-              cons(0-or-list-of-startconditions, 1+newstartcondition)
-          */
-          $$ = $3;
+                    lexdefs = NIL;
+                    if lexstates!=NIL {
+                      let mut echoed = 0;
+                      while lexstates!=NIL {
+                        if !echoed {
+                          if echoing {
+                            println!("");
+                          }
+                          echoed = 1;
+                        }
+                        let mut lexstate_hd = self.heap[lexstates].head;
+                        let mut lexstate_hd_tl  = self.heap[lexstate_hd].tail;
+                        if !(lexstate_hd_tl & 1) {
+                          println!(
+                            "warning: lex state {} is never entered",
+                            get_id(self.heap[lexstate_hd].head)
+                          );
+                        } else {
+                          // Todo: What are these magic values?
+                          if !(lexstate_hd_tl & 2) {
+                            println!(
+                              "warning: lex state {} has no associated rules",
+                              get_id(self.heap[lexstate_hd].head)
+                            );
+                          }
+                        }
+
+                        lexstates = self.heap[lexstates].tail;
+                      }
+                    }
+                    if $3 == NIL {
+                    syntax("%lex with no rules\n");
+                  } else {
+                    self.heap[$3].tag = LEXER;
+                  }
+
+                    /*
+                       result is lex-list, in reverse order, of items of the form
+                         self.heap.cons(scstuff, self.heap.cons(matcher, rhs))
+                       where scstuff is of the form
+                         self.heap.cons(0-or-list-of-startconditions, 1+newstartcondition)
+                     */
+
+                    $$ = $3;
         }
     | Name
     | ConstructorName
@@ -463,13 +479,25 @@ arg:
           }
         }
     | OpenBracket CloseBracket { $$ = NIL; }
-    | OpenBracket exp CloseBracket { $$ = cons($2, NIL); }
-    | OpenBracket exp Comma exp CloseBracket { $$ = cons($2, cons($4, NIL)); }
-    | OpenBracket exp Comma exp Comma liste CloseBracket { $$ = cons($2, cons($4, reverse($6))); }
-    | OpenBracket exp DotDot exp CloseBracket { $$ = ap3(STEPUNTIL, big_one, $4, $2); }
-    | OpenBracket exp DotDot CloseBracket { $$ = ap2(STEP, big_one, $2); }
-    | OpenBracket exp Comma exp DotDot exp CloseBracket { $$ = ap3(STEPUNTIL, ap2(Minus, $4, $2), $6, $2); }
-    | OpenBracket exp Comma exp DotDot CloseBracket { $$ = ap2(STEP, ap2(Minus, $4, $2), $2); }
+    | OpenBracket exp CloseBracket { $$ = self.heap.cons($2, NIL); }
+    | OpenBracket exp Comma exp CloseBracket {
+        let rhs = self.heap.cons($4, NIL);
+    	$$ = self.heap.cons($2, rhs);
+    }
+    | OpenBracket exp Comma exp Comma liste CloseBracket {
+       let rhs = self.heap.cons($4, reverse($6));
+    	$$ = self.heap.cons($2, rhs);
+    }
+    | OpenBracket exp DotDot exp CloseBracket { $$ = self.heap.apply3(STEPUNTIL, big_one, $4, $2); }
+    | OpenBracket exp DotDot CloseBracket { $$ = self.heap.apply2(STEP, big_one, $2); }
+    | OpenBracket exp Comma exp DotDot exp CloseBracket {
+        let minus_expr = self.heap.apply2(Minus, $4, $2);
+        $$ = self.heap.apply3(STEPUNTIL, minus_expr, $6, $2);
+    }
+    | OpenBracket exp Comma exp DotDot CloseBracket {
+        let minus_expr= self.heap.apply2(Minus, $4, $2);
+        $$ = self.heap.apply2(STEP, minus_expr, $2);
+     }
     | OpenBracket exp Pipe qualifiers CloseBracket {
         $$ = if SYNERR {
           NIL
@@ -488,39 +516,45 @@ arg:
     | OpenParenthesis es1 CloseParenthesis      /* presection or parenthesised e1 */ { $$ = $2; }
     | OpenParenthesis diop1 e1 CloseParenthesis /* postsection */ {
         /* optimisation */
-        $$ = if (tag[$2]==AP && hd[$2]==C){
-          ap(tl[$2], $3)
+        let hd = self.heap[$2].head;
+        $$ = if self.heap[$2].tag == AP && hd == C {
+          self.heap.apply(hd, $3)
         } else {
-          ap2(C, $2, $3)
+          self.heap.apply2(C, $2, $3)
         };
       }
     | OpenParenthesis CloseParenthesis { $$ = Void; }  /* the void tuple */
     | OpenParenthesis exp Comma liste CloseParenthesis {
-        if (tl[$4]==NIL) {
-          $$ = pair($2, hd[$4]);
+        if self.heap[$4].tail==NIL {
+          $$ = pair($2, self.heap[$4].head);
         } else {
-          $$ = pair(hd[tl[$4]], hd[$4]);
-          $4 = tl[tl[$4]];
+          let tl = self.heap[$4].tail;
+          $$ = pair(self.heap[tl].head, self.heap[$4].head);
+          $4 = self.heap[tl].tail;
           while ($4!=NIL) {
-            $$ = tcons(hd[$4], $$);
-            $4 = tl[$4];
+            let hd = self.heap[$4].head;
+            $$ = self.heap.cons(hd, $$);
+            $4 = self.heap[$4].tail;
           }
-          $$ = tcons($2, $$);
+          $$ = self.heap.cons($2, $$);
         }
         /* representation of the tuple (a1, ..., an) is
-            tcons(a1, tcons(a2, ...pair(a(n-1), an))) */
+            self.heap.cons(a1, self.heap.cons(a2, ...pair(a(n-1), an))) */
       }
     ;
 
 lexrules:
-    lexrules lstart here re indent { if(!SYNERR)inlex=2; }
+    lexrules lstart here re indent { if(!SYNERR){ inlex=2; } }
 
     Arrow exp lpostfix { if(!SYNERR){ inlex=1; } } outdent {
-        if ($9<0 && e_re($4)) {
+        if $9<0 && e_re($4) {
           errs = $3;
           syntax("illegal lex rule - lhs matches empty\n");
         }
-        $$ = cons(cons(cons($2, 1+$9), cons($4, label($3, $8))), $1);
+        let cons_a = self.heap.cons($2, 1+$9);
+        let cons_b = self.heap.cons($4, label($3, $8));
+        let cons = self.heap.cons(cons_a, cons_a)
+        $$ = self.heap.cons(cons, $1);
       }
     | lexdefs { $$ = NIL; }
     ;
@@ -528,54 +562,69 @@ lexrules:
 lstart:
     /* empty */ { $$ = 0; }
     | Less cnames Greater {
-        word ns=NIL;
-        for(;$2!=NIL;$2=tl[$2]) {
-          let *x = &lexstates;
-          let i = 1;
-          while (*x != NIL && hd[hd[*x]] != hd[$2]) {
-            i++;
-            x = &tl[*x];
-          }
-          if(*x == NIL) {
-            *x = cons(cons(hd[$2], 2), NIL);
-          } else {
-            tl[hd[*x]] |= 2;
-          }
-          ns = add1(i, ns);
-        }
-        $$ = ns;
+        let mut ns = NIL;
+	while $2 != NIL {
+	  let mut x = &lexstates;
+	  let mut i = 1;
+
+	  loop {
+	      if x != NIL && self.hd_hd(x) != self.heap[$2].head {
+		  break;
+	      }
+	      i += 1;
+	      x = &self.heap[*x].tail;
+	  }
+
+	  if *x == NIL {
+	      let hd = self.heap[$2].head;
+	      let cons = self.heap.cons(hd, 2);
+	      *x = self.heap.cons(cons, NIL);
+	  } else {
+	      self.hd_tl(*x) |= 2;
+	  }
+	  ns = add1(i, ns);
+	  $2 = self.heap[$2].tail
+	}
+	$$ = ns;
       }
     ;
 
 cnames:
-    ConstructorName { $$=cons($1, NIL); }
+    ConstructorName { $$=self.heap.cons($1, NIL); }
     | cnames ConstructorName {
-        if(member($1, $2)){
-          printf(
-            "%ssyntax error: repeated name \"%s\" in start conditions\n",
+        if member($1, $2) {
+          println!(
+            "{}syntax error: repeated name \"{}\" in start conditions\n",
             if echoing {"\n"} else {""},
-            get_id($2)
+            get_id( $2)
           );
           acterror();
         }
-        $$ = cons($2, $1);
+        $$ = self.heap.cons($2, $1);
       }
     ;
 
 lpostfix:
         /* empty */ { $$ = -1; }
-        | Begin ConstructorName {
-            let *x = &lexstates;
-            let i=1;
-            while(*x!=NIL&&hd[hd[*x]]!=$2){
-              i++;
-              x = &tl[*x];
-            }
-            if(*x == NIL){
-              *x = cons(cons($2, 1), NIL);
-            } else {
-              tl[hd[*x]] |= 1;
-            }
+        | Begin ConstructorName
+        {
+          let mut x = &lexstates;
+	      let mut i = 1;
+	      loop
+	      {
+		if *x == NIL { break; }
+		let hd = self.heap[*x].head;
+		if self.heap[hd].head == $2 { break; }
+		i += 1;
+		x = &tl[*x];
+	      }
+	      if *x == NIL {
+		  let cons = self.heap.cons($2, 1);
+		  *x = self.heap.cons(cons, NIL);
+	      } else {
+		let hd = self.heap[*x].head;
+		self.heap[hd].tail |= 1;
+	      }
             $$ = i;
           }
         | Begin Constant {
@@ -587,23 +636,26 @@ lpostfix:
         ;
 
 lexdefs:
-    lexdefs LexDef indent Equal re outdent { lexdefs = cons(cons($2, $5), lexdefs); }
+    lexdefs LexDef indent Equal re outdent {
+    		let cons = self.heap.cons($2, $5);
+	    	lexdefs = self.heap.cons(cons, lexdefs);
+	    }
     | /* empty */ { lexdefs = NIL; }
     ;
 
 re:   /* regular expression */
-    re1 Pipe re { $$ = ap2(LEX_OR, $1, $3); }
+    re1 Pipe re { $$ = self.heap.apply2(LEX_OR, $1, $3); }
     | re1
     ;
 
 re1:
-    lterm Divide lterm { $$ = ap2(LEX_RCONTEXT, $1, $3); }
-    | lterm Divide { $$ = ap2(LEX_RCONTEXT, $1, 0); }
+    lterm Divide lterm { $$ = self.heap.apply2(LEX_RCONTEXT, $1, $3); }
+    | lterm Divide { $$ = self.heap.apply2(LEX_RCONTEXT, $1, 0); }
     | lterm
     ;
 
 lterm:
-    lfac lterm { $$ = ap2(LEX_SEQ, $1, $2); }
+    lfac lterm { $$ = self.heap.apply2(LEX_SEQ, $1, $2); }
     | lfac
     ;
 
@@ -612,10 +664,10 @@ lfac:
         if (e_re($1)) {
           syntax("illegal regular expression - arg of * matches empty\n");
         }
-        $$ = ap(LEX_STAR, $1);
+        $$ = self.heap.apply(LEX_STAR, $1);
       }
-    | lunit Plus { $$ = ap2(LEX_SEQ, $1, ap(LEX_STAR, $1)); }
-    | lunit QuestionMark { $$ = ap(LEX_OPT, $1); }
+    | lunit Plus { $$ = self.heap.apply2(LEX_SEQ, $1, self.heap.apply(LEX_STAR, $1)); }
+    | lunit QuestionMark { $$ = self.heap.apply(LEX_OPT, $1); }
     | lunit
     ;
 
@@ -623,21 +675,22 @@ lunit:
     OpenParenthesis re CloseParenthesis { $$ = $2; }
     | Constant {
         if(!isstring($1)){
-          printf(
-            "%ssyntax error - unexpected token \"",
-            if echoing {"\n"} else {""}
-          );
-          out(stdout, $1);
-          printf("\" in regular expression\n");
-          acterror();
-        };
+          print!(
+	      "{}syntax error - unexpected token \"",
+	      if echoing {"\n"} else {""}
+	    );
+	    out(stdout,  yystack.owned_value_at(0));
+	    print!("\" in regular expression\n");
+	    acterror();
+	  };
         $$ = if $1==NILS {
-          ap(LEX_STRING, NIL)
+          self.heap.apply(LEX_STRING, NIL)
         } else{
-          if tl[$1]==NIL {
-            ap(LEX_CHAR, hd[$1])
+          if self.heap[$1].tail==NIL {
+            let hd = self.heap[$1].head;
+            self.heap.apply(LEX_CHAR, hd)
           } else{
-            ap(LEX_STRING, $1)
+            self.heap.apply(LEX_STRING, $1)
           }
         };
       }
@@ -645,45 +698,52 @@ lunit:
         if($1==NIL){
           syntax("empty character class `` cannot match\n");
         }
-        $$ = if tl[$1]==NIL {
-          ap(LEX_CHAR, hd[$1])
+        $$ = if self.heap[$1].tail==NIL {
+          self.heap.apply(LEX_CHAR, self.heap[$1].head)
         } else {
-          ap(LEX_CLASS, $1)
+          self.heap.apply(LEX_CLASS, $1)
         };
       }
-    | AntiCharClass { $$ = ap(LEX_CLASS, cons(ANTICHARCLASS, $1)); }
+    | AntiCharClass {
+        let cons = self.heap.cons(ANTICHARCLASS, $1);
+        $$ = self.heap.apply(LEX_CLASS, cons);
+      }
     | Dot { $$ = LEX_DOT; }
     | name {
         let x = lexdefs;
-        while (x!=NIL && hd[hd[x]]!=$1) {
-          x=tl[x];
-        }
-        if (x==NIL) {
-          printf(
-            "%ssyntax error: undefined lexeme %s in regular expression\n",
-            if echoing {"\n"} else {""},
-            get_id($1)
-          );
-          acterror();
-        } else {
-          $$ = tl[hd[x]];
-        }
+	loop {
+	    if x == NIL { break; }
+	    let hd = self.heap[x].head;
+	    if self.heap[hd].head == $1 { break; }
+	    x=tl[x];
+	}
+	if x==NIL {
+	  print!(
+	    "{}syntax error: undefined lexeme {} in regular expression\n",
+	    if echoing {"\n"} else {""},
+	    get_id( $1 )
+	  );
+	  acterror();
+	} else {
+	    let hd = self.heap[x].head;
+	    $$ = self.heap[hd].tail;
+	}
       }
     ;
 
 name: Name | ConstructorName ;
 
 qualifiers:
-    exp { $$ = cons(cons(GUARD, $1), NIL);  }
-    | generator { $$ = cons($1, NIL);  }
-    | qualifiers Semicolon generator { $$ = cons($3, $1);   }
-    | qualifiers Semicolon exp { $$ = cons(cons(GUARD, $3), $1);   }
+    exp { $$ = self.heap.cons(self.heap.cons(GUARD, $1), NIL);  }
+    | generator { $$ = self.heap.cons($1, NIL);  }
+    | qualifiers Semicolon generator { $$ = self.heap.cons($3, $1);   }
+    | qualifiers Semicolon exp { $$ = self.heap.cons(self.heap.cons(GUARD, $3), $1);   }
     ;
 
 generator:
     e1 Comma generator {
         /* fix syntax to disallow patlist on lhs of iterate generator */
-        if (hd[$3]==GENERATOR) {
+        if (self.heap[$3].head==GENERATOR) {
           let e = tl[tl[$3]];
           if (
             tag[e]==AP
@@ -694,7 +754,7 @@ generator:
             syntax("ill-formed generator\n");
           }
         }
-        $$ = cons(REPEAT, cons(genlhs($1), $3));
+        $$ = self.heap.cons(REPEAT, self.heap.cons(genlhs($1), $3));
         idsused = NIL;
       }
     | generator1
@@ -702,17 +762,17 @@ generator:
 
 generator1:
     e1 LeftArrow exp {
-        $$ = cons(GENERATOR, cons(genlhs($1), $3));
-        idsused=NIL;
+        $$ = self.heap.cons(GENERATOR, self.heap.cons(genlhs($1), $3));
+        idsused = NIL;
       }
     | e1 LeftArrow exp Comma exp DotDot {
-        word p = genlhs($1);
-        idsused=NIL;
-        $$ = cons(
+        let p = genlhs($1);
+        idsused = NIL;
+        $$ = self.heap.cons(
           GENERATOR,
-          cons(
+          self.heap.cons(
             p,
-            ap2(
+            self.heap.apply2(
               if irrefutable(p) {ITERATE} else {ITERATE1},
               lambda(p, $5),
               $3
@@ -735,8 +795,8 @@ def:
         if (tag[f]==ID && !isconstructor(f)) {
           /* fnform defn */
           while (tag[l]==AP) {
-            r = lambda(tl[l], r);
-            l = hd[l];
+            r = lambda(self.heap[l].tail, r);
+            l = self.heap[l].head;
           }
         }
         r = label($5, r);
@@ -746,14 +806,14 @@ def:
       }
 
     | spec {
-        let h = reverse(hd[$1]);
+        let h = reverse(self.heap[$1].head);
         let hr = hd[tl[$1]];
         let t = tl[tl[$1]];
         while (h!=NIL && !SYNERR) {
-          specify(hd[h], t, hr);
-          h = tl[h];
+          specify(self.heap[h].head, t, hr);
+          h = self.heap[h].tail;
         }
-        $$ = cons(nill, NIL);
+        $$ = self.heap.cons(nill, NIL);
       }
 
     | AbsoluteType here typeforms indent With lspecs outdent {
@@ -763,35 +823,35 @@ def:
         let ids = NIL;
         let tids = NIL;
         while (x!=NIL && !SYNERR) {
-          specify(hd[hd[x]], cons(tl[tl[hd[x]]], NIL), hd[tl[hd[x]]]);
-          ids = cons(hd[hd[x]], ids);
-          x = tl[x];
+          specify(hd[hd[x]], self.heap.cons(tl[tl[hd[x]]], NIL), hd[tl[hd[x]]]);
+          ids = self.heap.cons(hd[hd[x]], ids);
+          x = self.heap[x].tail;
         }
         /* each id in specs has its id_type set to const(t, NIL) as a way
             of flagging that t is an abstract type */
         x = reverse($3);
         while (x!=NIL && !SYNERR) {
           let shfn;
-          decltype(hd[x], abstract_t, undef_t, $2);
-          tids = cons(head(hd[x]), tids);
+          decltype(self.heap[x].head, abstract_t, undef_t, $2);
+          tids = self.heap.cons(head(self.heap[x].head), tids);
           /* check for presence of showfunction */
           (void)strcpy(dicp, "show");
-          (void)strcat(dicp, get_id(hd[tids]));
+          (void)strcat(dicp, get_id(self.heap[tids].head));
           dicq = dicp + strlen(dicp) + 1;
           shfn = name();
           if (member(ids, shfn)) {
-            t_showfn(hd[tids]) = shfn;
+            t_showfn(self.heap[tids].head) = shfn;
           }
-          x = tl[x];
+          x = self.heap[x].tail;
         }
-        TABSTRS = cons(cons(tids, ids), TABSTRS);
-        $$ = cons(nill, NIL);
+        TABSTRS = self.heap.cons(self.heap.cons(tids, ids), TABSTRS);
+        $$ = self.heap.cons(nill, NIL);
       }
 
     | typeform indent act1 here EqualEqual type act2 outdent {
-        let x = redtvars(ap($1, $6));
-        decltype(hd[x], synonym_t, tl[x], $4);
-        $$ = cons(nill, NIL);
+        let x = redtvars(self.heap.apply($1, $6));
+        decltype(self.heap[x].head, synonym_t, self.heap[x].tail, $4);
+        $$ = self.heap.cons(nill, NIL);
       }
 
     | typeform indent act1 here Colon2Equal construction act2 outdent {
@@ -799,21 +859,21 @@ def:
         let r_ids = $6;
         let n = 0;
         while (r_ids!=NIL) {
-          r_ids = tl[r_ids];
+          r_ids = self.heap[r_ids].tail;
           n += 1;
         }
         while (rhs!=NIL && !SYNERR) {
-          let h = hd[rhs];
+          let h = self.heap[rhs].head;
           let t = $1;
           let stricts = NIL;
           let i = 0;
           while(tag[h]==AP) {
-            if (tag[tl[h]]==AP && hd[tl[h]]==strict_t) {
-              stricts = cons(i, stricts);
-              tl[h] = tl[tl[h]];
+            if (tag[self.heap[h].tail]==AP && hd[self.heap[h].tail]==strict_t) {
+              stricts = self.heap.cons(i, stricts);
+              self.heap[h].tail = tl[self.heap[h].tail];
             }
-            t = ap2(arrow_t, tl[h], t);
-            h = hd[h];
+            t = self.heap.apply2(arrow_t, self.heap[h].tail, t);
+            h = self.heap[h].head;
             i += 1;
           }
           if(tag[h]==ID){
@@ -827,25 +887,25 @@ def:
               putchar('\n');
             }
             printf("syntax error: illegal construct \"");
-            out_type(hd[rhs]);
+            out_type(self.heap[rhs].head);
             printf("\" on right of ::=\n");
             acterror();
           } /* can this still happen? check later */
           if (stricts!=NIL) { /* ! operators were present */
             word k = id_val(h);
             while (stricts!=NIL) {
-              k = ap2(MKSTRICT, i - hd[stricts], k);
-              stricts = tl[stricts];
+              k = self.heap.apply2(MKSTRICT, i - self.heap[stricts].head, k);
+              stricts = self.heap[stricts].tail;
             }
             id_val(h) = k; /* overwrite id_val of original constructor */
           }
-          r_ids = cons(h, r_ids);
-          rhs = tl[rhs];
+          r_ids = self.heap.cons(h, r_ids);
+          rhs = self.heap[rhs].tail;
         }
         if (!SYNERR) {
           decltype($1, algebraic_t, r_ids, $4);
         }
-        $$ = cons(nill, NIL);
+        $$ = self.heap.cons(nill, NIL);
       }
 
     | indent setexp Export parts outdent {
@@ -855,11 +915,11 @@ def:
           syntax("multiple %export statements are illegal\n");
         } else {
           if ($4==NIL && exportfiles==NIL && embargoes!=NIL) {
-            exportfiles = cons(Plus, NIL);
+            exportfiles = self.heap.cons(Plus, NIL);
           }
-          exports = cons($2, $4);  /* cons(hereinfo, identifiers) */
+          exports = self.heap.cons($2, $4);  /* self.heap.cons(hereinfo, identifiers) */
         }
-        $$ = cons(nill, NIL);
+        $$ = self.heap.cons(nill, NIL);
       }
 
     | Free here OpenBrace specs CloseBrace {
@@ -870,38 +930,38 @@ def:
           let x = reverse($4);
           while (x!=NIL&&!SYNERR) {
             specify(hd[hd[x]], tl[tl[hd[x]]], hd[tl[hd[x]]]);
-            freeids = cons(head(hd[hd[x]]), freeids);
+            freeids = self.heap.cons(head(hd[hd[x]]), freeids);
             if (tl[tl[hd[x]]]==type_t) {
-              t_class(hd[freeids]) = free_t;
+              t_class(self.heap[freeids].head) = free_t;
             }
             else {
-              id_val(hd[freeids]) = FREE; /* conventional value */
+              id_val(self.heap[freeids].head) = FREE; /* conventional value */
             }
-            x = tl[x];
+            x = self.heap[x].tail;
           }
-          fil_share(hd[files]) = 0; /* parameterised scripts unshareable */
+          fil_share(self.heap[files].head) = 0; /* parameterised scripts unshareable */
           freeids = alfasort(freeids);
-          for(x=freeids; x!=NIL; x=tl[x]){
+          for(x=freeids; x!=NIL; x=self.heap[x].tail){
             /* each element of freeids is of the form
-              cons(id, cons(original_name, type)) */
-            hd[x] = cons(
-              hd[x],
-              cons(
-                datapair(get_id(hd[x]), 0),
-                id_type(hd[x])
+              self.heap.cons(id, self.heap.cons(original_name, type)) */
+            self.heap[x].head = self.heap.cons(
+              self.heap[x].head,
+              self.heap.cons(
+                datapair(get_id(self.heap[x].head), 0),
+                id_type(self.heap[x].head)
               )
             );
           }
         }
-        $$ = cons(nill, NIL);
+        $$ = self.heap.cons(nill, NIL);
       }
 
     | Include bindings modifiers outdent { /* fiddle - 'indent' done by yylex() on reading fileid */
         // extern char *dicp;
         // extern word CLASHES, BAD_DUMP;
         /* $1 contains file+hereinfo */
-        includees = cons(cons($1, cons($3, $2)), includees);
-        $$ = cons(nill, NIL);
+        includees = self.heap.cons(self.heap.cons($1, self.heap.cons($3, $2)), includees);
+        $$ = self.heap.cons(nill, NIL);
       }
 
     | here BNF { startbnf(); inbnf = 1; } names outdent productions EndIR {
@@ -915,31 +975,31 @@ def:
         ihlist = 0;
         inbnf = 0;
         nonterminals = UNION(nonterminals, $4);
-        for(;p!=NIL;p=tl[p]){
-          if (dval(hd[p])==UNDEF) {
-            nonterminals = add1(dlhs(hd[p]), nonterminals);
+        for(;p!=NIL;p=self.heap[p].tail){
+          if (dval(self.heap[p].head)==UNDEF) {
+            nonterminals = add1(dlhs(self.heap[p].head), nonterminals);
           }
           else{
-            lhs = add1(dlhs(hd[p]), lhs);
+            lhs = add1(dlhs(self.heap[p].head), lhs);
           }
         }
         nonterminals = setdiff(nonterminals, lhs);
         if (nonterminals!=NIL) {
           errs = $1;
-          member($4, hd[nonterminals]); /*||findnt(hd[nonterminals])*/
+          member($4, self.heap[nonterminals].head); /*||findnt(self.heap[nonterminals].head)*/
           printf("%sfatal error in grammar, ", echoing?"\n":"");
           printf(
             "undefined nonterminal%s: ",
-            if tl[nonterminals]==NIL {""} else {"s"}
+            if self.heap[nonterminals].tail==NIL {""} else {"s"}
           );
           printlist("", nonterminals);
           acterror();
         } else { /* compute list of nonterminals admitting empty prodn */
           eprodnts = NIL;
           L:
-          for(p = $6; p!=NIL; p = tl[p]) {
-            if(!member(eprodnts, dlhs(hd[p])) && eprod(dval(hd[p]))) {
-              eprodnts = cons(dlhs(hd[p]), eprodnts);
+          for(p = $6; p!=NIL; p = self.heap[p].tail) {
+            if(!member(eprodnts, dlhs(self.heap[p].head)) && eprod(dval(self.heap[p].head))) {
+              eprodnts = self.heap.cons(dlhs(self.heap[p].head), eprodnts);
               goto L;
             }
           }
@@ -948,29 +1008,29 @@ def:
             (performing binomial transformation en route)
             and use to detect unremoved left recursion
           */
-          for(p=$6;p!=NIL;p=tl[p]) {
-            lhs = starts(dval(hd[p]));
-            if (member(lhs, dlhs(hd[p]))) {
-              binom(dval(hd[p]), dlhs(hd[p]));
-              startswith = cons(
-                cons(
-                  dlhs(hd[p]),
-                  starts(dval(hd[p]))
+          for(p=$6;p!=NIL;p=self.heap[p].tail) {
+            lhs = starts(dval(self.heap[p].head));
+            if (member(lhs, dlhs(self.heap[p].head))) {
+              binom(dval(self.heap[p].head), dlhs(self.heap[p].head));
+              startswith = self.heap.cons(
+                self.heap.cons(
+                  dlhs(self.heap[p].head),
+                  starts(dval(self.heap[p].head))
                 ),
                 startswith
               );
             } else {
-              startswith = cons(cons(dlhs(hd[p]), lhs), startswith);
+              startswith = self.heap.cons(self.heap.cons(dlhs(self.heap[p].head), lhs), startswith);
             }
           }
           startswith = tclos(sortrel(startswith));
-          for(; startswith!=NIL; startswith = tl[startswith]) {
+          for(; startswith!=NIL; startswith = self.heap[startswith].tail) {
             if (member(tl[hd[startswith]], hd[hd[startswith]])) {
               leftrecs = add1(hd[hd[startswith]], leftrecs);
             }
           }
           if(leftrecs!=NIL){
-            errs = getloc(hd[leftrecs], $6);
+            errs = getloc(self.heap[leftrecs].head, $6);
             printf(
               "%sfatal error in grammar, ",
               if echoing {"\n"} else {""}
@@ -979,22 +1039,22 @@ def:
             acterror();
           }
           if($4==NIL) { /* implied start symbol */
-            $4 = cons(dlhs(hd[lastlink($6)]), NIL);
+            $4 = self.heap.cons(dlhs(self.heap[lastlink($6)].head), NIL);
           }
           fnts = 1; /* fnts is flag indicating %bnf in use */
-          if (tl[$4]==NIL) { /* only one start symbol */
-            subjects = getfname(hd[$4]);
-            body = ap2(G_CLOSE, str_conv(get_id(hd[$4])), hd[$4]);
+          if (self.heap[$4].tail==NIL) { /* only one start symbol */
+            subjects = getfname(self.heap[$4].head);
+            body = self.heap.apply2(G_CLOSE, str_conv(get_id(self.heap[$4].head)), self.heap[$4].head);
           } else {
             body = Void;
             subjects = Void;
             while ($4!=NIL) {
-              subjects = pair(getfname(hd[$4]), subjects);
+              subjects = pair(getfname(self.heap[$4].head), subjects);
               body = pair(
-                ap2(G_CLOSE, str_conv(get_id(hd[$4])), hd[$4]),
+                self.heap.apply2(G_CLOSE, str_conv(get_id(self.heap[$4].head)), self.heap[$4].head),
                 body
               );
-              $4 = tl[$4];
+              $4 = self.heap[$4].tail;
             }
           }
           declare(subjects, label($1, block($6, body, 0)));
@@ -1016,21 +1076,21 @@ bindings:
     ;
 
 bindingseq:
-    bindingseq binding { $$ = cons($2, $1); }
-    | binding { $$ = cons($1, NIL); }
+    bindingseq binding { $$ = self.heap.cons($2, $1); }
+    | binding { $$ = self.heap.cons($1, NIL); }
     ;
 
 binding:
-    Name indent Equal exp outdent { $$ = cons($1, $4); }
+    Name indent Equal exp outdent { $$ = self.heap.cons($1, $4); }
     | typeform indent act1 EqualEqual type act2 outdent {
-        let x = redtvars(ap($1, $5));
+        let x = redtvars(self.heap.apply($1, $5));
         let arity = 0;
-        let h = hd[x];
+        let h = self.heap[x].head;
         while (tag[h]==AP) {
           arity += 1;
-          h = hd[h];
+          h = self.heap[h].head;
         }
-        $$ = ap(h, make_typ(arity, 0, synonym_t, tl[x]));
+        $$ = self.heap.apply(h, make_typ(arity, 0, synonym_t, self.heap[x].tail));
       }
     ;
 
@@ -1040,8 +1100,8 @@ modifiers:
         let a;
         let b;
         let c = 0;
-        for(a = $1; a!=NIL; a = tl[a]) {
-          for(b = tl[a]; b!=NIL; b = tl[b]) {
+        for(a = $1; a!=NIL; a = self.heap[a].tail) {
+          for(b = self.heap[a].tail; b!=NIL; b = self.heap[b].tail) {
             if(hd[hd[a]]==hd[hd[b]]) {
               c = hd[hd[a]];
             }
@@ -1065,14 +1125,14 @@ modifiers:
     ;
 
 negmods:
-    negmods negmod { $$ = cons($2, $1); }
-    | negmod { $$ = cons($1, NIL); }
+    negmods negmod { $$ = self.heap.cons($2, $1); }
+    | negmod { $$ = self.heap.cons($1, NIL); }
     ;
 
 negmod:
-    Name Divide Name { $$ = cons($1, $3); }
-    | ConstructorName Divide ConstructorName { $$ = cons($1, $3); }
-    | Minus Name { $$ = cons(make_pn(UNDEF), $2); }
+    Name Divide Name { $$ = self.heap.cons($1, $3); }
+    | ConstructorName Divide ConstructorName { $$ = self.heap.cons($1, $3); }
+    | Minus Name { $$ = self.heap.cons(make_pn(UNDEF), $2); }
     /*| Minus ConstructorName  no - cannot suppress constructors selectively */
     ;
 
@@ -1097,18 +1157,18 @@ act2:
 
 ldefs:
     ldef {
-        $$ = cons($1, NIL);
-        dval($1) = tries(dlhs($1), cons(dval($1), NIL));
+        $$ = self.heap.cons($1, NIL);
+        dval($1) = tries(dlhs($1), self.heap.cons(dval($1), NIL));
         if (!SYNERR && get_ids(dlhs($1))==NIL) {
           errs = hd[hd[tl[dval($1)]]];
           syntax("illegal lhs for local definition\n");
         }
       }
     | ldefs ldef {
-        if(dlhs($2)==dlhs(hd[$1]) /*&&dval(hd[$1])!=UNDEF*/) {
+        if(dlhs($2)==dlhs(self.heap[$1].head) /*&&dval(self.heap[$1].head)!=UNDEF*/) {
           $$ = $1;
-          if (!fallible(hd[tl[dval(hd[$1])]])) {
-            errs = hd[dval($2)];
+          if (!fallible(self.heap[self.heap[dval(hd[$1].head.tail)]])) {
+            errs = self.heap[dval($2)].head;
             printf(
               "%ssyntax error: unreachable case in defn of \"%s\"\n",
               if echoing {"\n"} else {""},
@@ -1116,19 +1176,19 @@ ldefs:
             );
             acterror();
           }
-          tl[dval(hd[$1])] = cons(dval($2), tl[dval(hd[$1])]);
+          self.heap[dval(self.heap[$1].head.tail)] = self.heap.cons(dval($2), self.heap[dval(self.heap[$1].head.tail)]);
         } else if (!SYNERR) {
           let ns = get_ids(dlhs($2));
-          let hr = hd[dval($2)];
+          let hr = self.heap[dval($2)].head;
           if(ns==NIL){
             errs = hr;
             syntax("illegal lhs for local definition\n");
           }
-          $$ = cons($2, $1);
-          dval($2) = tries(dlhs($2), cons(dval($2), NIL));
+          $$ = self.heap.cons($2, $1);
+          dval($2) = tries(dlhs($2), self.heap.cons(dval($2), NIL));
           while(ns!=NIL&&!SYNERR) { /* local nameclash check */
-            nclashcheck(hd[ns], $1, hr);
-            ns = tl[ns];
+            nclashcheck(self.heap[ns].head, $1, hr);
+            ns = self.heap[ns].tail;
           } /* potentially quadratic - fix later */
         }
       }
@@ -1138,17 +1198,17 @@ ldef:
     spec {
         errs = hd[tl[$1]];
         syntax("`::' encountered in local defs\n");
-        $$ = cons(nill, NIL);
+        $$ = self.heap.cons(nill, NIL);
       }
     | typeform here EqualEqual {
         errs=$2;
         syntax("`==' encountered in local defs\n");
-        $$ = cons(nill, NIL);
+        $$ = self.heap.cons(nill, NIL);
       }
     | typeform here Colon2Equal {
         errs=$2;
         syntax("`::=' encountered in local defs\n");
-        $$ = cons(nill, NIL);
+        $$ = self.heap.cons(nill, NIL);
       }
     | v act2 indent Equal here rhs outdent {
         let l = $1;
@@ -1156,8 +1216,8 @@ ldef:
         word f = head(l);
         if(tag[f]==ID&&!isconstructor(f)) { /* fnform defn */
           while(tag[l]==AP){
-            r = lambda(tl[l], r);
-            l = hd[l];
+            r = lambda(self.heap[l].tail, r);
+            l = self.heap[l].head;
           }
         }
         r = label($5, r); /* to help locate type errors */
@@ -1166,16 +1226,16 @@ ldef:
     ;
 
 vlist:
-    v { $$ = cons($1, NIL); }
+    v { $$ = self.heap.cons($1, NIL); }
     | vlist Comma v /* left recursive so as not to eat YACC stack */ {
         /* reverse order, NB */
-        $$ = cons($3, $1);
+        $$ = self.heap.cons($3, $1);
       }
     ;
 
 v:
     v1
-    | v1 Colon v { $$ = cons($1, $3); }
+    | v1 Colon v { $$ = self.heap.cons($1, $3); }
     ;
 
 v1:
@@ -1183,27 +1243,27 @@ v1:
         if (!isnat($3)){
           syntax("inappropriate use of \"+\" in pattern\n");
         }
-        $$ = ap2(Plus, $3, $1);
+        $$ = self.heap.apply2(Plus, $3, $1);
       }
     | Minus Constant {
         /* if(tag[$2]==DOUBLE)
-              $$ = cons(Constant, sto_dbl(-get_dbl($2))); else */
+              $$ = self.heap.cons(Constant, sto_dbl(-get_dbl($2))); else */
         if (tag[$2]==INT) {
-          $$ = cons(Constant, bignegate($2));
+          $$ = self.heap.cons(Constant, bignegate($2));
         } else {
           syntax("inappropriate use of \"-\" in pattern\n");
         }
       }
-    | v2 InfixName v1 { $$ = ap2($2, $1, $3); }
-    | v2 InfixCName v1 { $$ = ap2($2, $1, $3); }
+    | v2 InfixName v1 { $$ = self.heap.apply2($2, $1, $3); }
+    | v2 InfixCName v1 { $$ = self.heap.apply2($2, $1, $3); }
     | v2;
 
 v2:
     v3
     | v2 v3 {
-        $$ = ap(
-          if hd[$1]==Constant && tag[tl[$1]]==ID {
-            tl[$1]
+        $$ = self.heap.apply(
+          if self.heap[$1].head==Constant && tag[tl[$1]]==ID {
+            self.heap[$1].tail
           } else {
             $1
           },
@@ -1221,10 +1281,10 @@ v3:
         }
         /* cannot use grammar variable in a binding position */
         if (memb(idsused, $1)) {
-          $$ = cons(Constant, $1);
+          $$ = self.heap.cons(Constant, $1);
         } /* picks up repeated names in a template */
         else {
-          idsused = cons($1, idsused);
+          idsused = self.heap.cons($1, idsused);
         }
       }
     | ConstructorName
@@ -1232,15 +1292,15 @@ v3:
         if (tag[$1]==DOUBLE) {
           syntax("use of floating point literal in pattern\n");
         }
-        $$ = cons(Constant, $1);
+        $$ = self.heap.cons(Constant, $1);
       }
     | OpenBracket CloseBracket { $$ = nill; }
     | OpenBracket vlist CloseBracket {
         let x = $2;
         let y = nill;
         while(x!=NIL) {
-          y = cons(hd[x], y);
-          x = tl[x];
+          y = self.heap.cons(self.heap[x].head, y);
+          x = self.heap[x].tail;
         }
         $$ = y;
       }
@@ -1248,17 +1308,17 @@ v3:
     | OpenParenthesis v CloseParenthesis { $$ = $2; }
     | OpenParenthesis v Comma vlist CloseParenthesis {
         /* representation of the tuple (a1, ..., an) is
-             tcons(a1, tcons(a2, ...pair(a(n-1), an))) */
-        if(tl[$4]==NIL) {
-          $$=pair($2, hd[$4]);
+             tself.heap.cons(a1, tself.heap.cons(a2, ...pair(a(n-1), an))) */
+        if(self.heap[$4].tail==NIL) {
+          $$=pair($2, self.heap[$4].head);
         } else {
-          $$ = pair(hd[tl[$4]], hd[$4]);
+          $$ = pair(hd[tl[$4]], self.heap[$4].head);
           $4 = tl[tl[$4]];
           while ($4!=NIL) {
-            $$=tcons(hd[$4], $$);
-            $4=tl[$4];
+            $$=tself.heap.cons(self.heap[$4].head, $$);
+            $4=self.heap[$4].tail;
           }
-          $$ = tcons($2, $$);
+          $$ = tself.heap.cons($2, $$);
         }
 
       }
@@ -1266,24 +1326,24 @@ v3:
 
 type:
     type1
-    | type Arrow type { $$ = ap2(arrow_t, $1, $3); }
+    | type Arrow type { $$ = self.heap.apply2(arrow_t, $1, $3); }
     ;
 
 type1:
-    type2 InfixName type1 { $$ = ap2($2, $1, $3); }
+    type2 InfixName type1 { $$ = self.heap.apply2($2, $1, $3); }
     | type2
     ;
 
 type2:
     /* type2 argtype  /* too permissive - fix later */
-        /* = { $$ = ap($1, $2); }| */
+        /* = { $$ = self.heap.apply($1, $2); }| */
     tap
     | argtype
     ;
 
 tap:
-    Name argtype { $$ = ap($1, $2); }
-    | tap argtype { $$ = ap($1, $2); }
+    Name argtype { $$ = self.heap.apply($1, $2); }
+    | tap argtype { $$ = self.heap.apply($1, $2); }
     ;
 
 argtype:
@@ -1302,7 +1362,7 @@ argtype:
         $$ = $1;
       }
     | OpenParenthesis typelist CloseParenthesis { $$ = $2; }
-    | OpenBracket type CloseBracket  /* at release one was `typelist' */ { $$ = ap(list_t, $2); }
+    | OpenBracket type CloseBracket  /* at release one was `typelist' */ { $$ = self.heap.apply(list_t, $2); }
     | OpenBracket type Comma typel CloseBracket {
         syntax(
           "tuple-type with missing parentheses (obsolete syntax)\n"
@@ -1317,16 +1377,16 @@ typelist:
         let x = $3;
         let y = void_t;
         while (x!=NIL) {
-          y = ap2(comma_t, hd[x], y);
-          x = tl[x];
+          y = self.heap.apply2(comma_t, self.heap[x].head, y);
+          x = self.heap[x].tail;
         }
-        $$ = ap2(comma_t, $1, y);
+        $$ = self.heap.apply2(comma_t, $1, y);
       }
     ;
 
 typel:
-    type { $$ = cons($1, NIL); }
-    | typel Comma type /* left recursive so as not to eat YACC stack */ { $$ = cons($3, $1); }
+    type { $$ = self.heap.cons($1, NIL); }
+    | typel Comma type /* left recursive so as not to eat YACC stack */ { $$ = self.heap.cons($3, $1); }
     ;
 
 parts: /* returned in reverse order */
@@ -1338,7 +1398,7 @@ parts: /* returned in reverse order */
     | parts PathName { $$ = $1; } /*the pathnames are placed on exportfiles in yylex*/
     | parts Plus {
         $$ = $1;
-        exportfiles = cons(Plus, exportfiles);
+        exportfiles = self.heap.cons(Plus, exportfiles);
       }
     | Name { $$ = add1($1, NIL); }
     | Minus Name {
@@ -1348,29 +1408,29 @@ parts: /* returned in reverse order */
     | PathName { $$ = NIL; }
     | Plus {
         $$ = NIL;
-        exportfiles=cons(Plus, exportfiles);
+        exportfiles=self.heap.cons(Plus, exportfiles);
       }
     ;
 
-specs:  /* returns a list of cons(id, cons(here, type))
+specs:  /* returns a list of self.heap.cons(id, self.heap.cons(here, type))
            in reverse order of appearance */
     specs spec {
         let x = $1;
-        let h = hd[$2];
-        let t = tl[$2];
+        let h = self.heap[$2].head;
+        let t = self.heap[$2].tail;
         while (h!=NIL) {
-          x = cons(cons(hd[h], t), x);
-          h = tl[h];
+          x = self.heap.cons(self.heap.cons(self.heap[h].head, t), x);
+          h = self.heap[h].tail;
         }
         $$ = x;
       }
     | spec {
         let x = NIL;
-        let h = hd[$1];
-        let t = tl[$1];
+        let h = self.heap[$1].head;
+        let t = self.heap[$1].tail;
         while (h!=NIL) {
-          x = cons(cons(hd[h], t), x);
-          h = tl[h];
+          x = self.heap.cons(self.heap.cons(self.heap[h].head, t), x);
+          h = self.heap[h].tail;
         }
         $$ = x;
       }
@@ -1378,45 +1438,45 @@ specs:  /* returns a list of cons(id, cons(here, type))
 
 spec:
     typeforms indent here ColonColon ttype outdent {
-        $$ = cons($1, cons($3, $5));
+        $$ = self.heap.cons($1, self.heap.cons($3, $5));
       } /* hack: `typeforms' includes `namelist' */
     ;
 
-lspecs:  /* returns a list of cons(id, cons(here, type))
+lspecs:  /* returns a list of self.heap.cons(id, self.heap.cons(here, type))
            in reverse order of appearance */
     lspecs lspec {
         let x = $1;
-        let h = hd[$2];
-        let t = tl[$2];
+        let h = self.heap[$2].head;
+        let t = self.heap[$2].tail;
         while(h!=NIL) {
-          x = cons(cons(hd[h], t), x);
-          h = tl[h];
+          x = self.heap.cons(self.heap.cons(self.heap[h].head, t), x);
+          h = self.heap[h].tail;
         }
         $$ = x;
       }
     | lspec {
         let x = NIL;
-        let h = hd[$1];
-        let t = tl[$1];
+        let h = self.heap[$1].head;
+        let t = self.heap[$1].tail;
         while(h!=NIL) {
-          x = cons(cons(hd[h], t), x);
-          h = tl[h];
+          x = self.heap.cons(self.heap.cons(self.heap[h].head, t), x);
+          h = self.heap[h].tail;
         }
         $$ = x;
       }
     ;
 
 lspec:
-    namelist indent here {inbnf=0;} ColonColon type outdent { $$ = cons($1, cons($3, $6)); };
+    namelist indent here {inbnf=0;} ColonColon type outdent { $$ = self.heap.cons($1, self.heap.cons($3, $6)); };
 
 namelist:
-    Name Comma namelist { $$ = cons($1, $3); }
-    | Name { $$ = cons($1, NIL); }
+    Name Comma namelist { $$ = self.heap.cons($1, $3); }
+    | Name { $$ = self.heap.cons($1, NIL); }
     ;
 
 typeforms:
-    typeforms Comma typeform act2 { $$ = cons($3, $1); }
-    | typeform act2 { $$ = cons($1, NIL); }
+    typeforms Comma typeform act2 { $$ = self.heap.cons($3, $1); }
+    | typeform act2 { $$ = self.heap.cons($1, NIL); }
     ;
 
 typeform:
@@ -1425,16 +1485,16 @@ typeform:
         $$ = $1;
         idsused = $2;
         while($2!=NIL) {
-          $$ = ap($$, hd[$2]);
-          $2 = tl[$2];
+          $$ = self.heap.apply($$, self.heap[$2].head);
+          $2 = self.heap[$2].tail;
         }
       }
     | typevar InfixName typevar {
         if(eqtvar($1, $3)){
           syntax("repeated type variable in typeform\n");
         }
-        idsused = cons($1, cons($3, NIL));
-        $$ = ap2($2, $1, $3);
+        idsused = self.heap.cons($1, self.heap.cons($3, NIL));
+        $$ = self.heap.apply2($2, $1, $3);
       }
     | typevar InfixCName typevar {
         syntax("upper case identifier cannot be used as typename\n");
@@ -1457,28 +1517,28 @@ typevars:
         if(memb($2, $1)) {
               syntax("repeated type variable on lhs of type def\n");
         }
-        $$ = cons($1, $2);
+        $$ = self.heap.cons($1, $2);
       }
     ;
 
 construction:
     constructs { /* keeps track of sui-generis constructors */
         // extern word SGC;
-        if ( tl[$1]==NIL && tag[hd[$1]]!=ID ) {
+        if ( self.heap[$1].tail==NIL && tag[hd[$1]]!=ID ) {
                         /* 2nd conjunct excludes singularity types */
-          SGC = cons(head(hd[$1]), SGC);
+          SGC = self.heap.cons(head(self.heap[$1].head), SGC);
         }
       }
     ;
 
 constructs:
-    construct { $$ = cons($1, NIL); }
-    | constructs Pipe construct { $$ = cons($3, $1); }
+    construct { $$ = self.heap.cons($1, NIL); }
+    | constructs Pipe construct { $$ = self.heap.cons($3, $1); }
     ;
 
 construct:
     field here InfixCName field {
-        $$ = ap2($3, $1, $4);
+        $$ = self.heap.apply2($3, $1, $4);
         id_who($3) = $2;
       }
     | construct1
@@ -1486,7 +1546,7 @@ construct:
 
 construct1:
     OpenParenthesis construct CloseParenthesis { $$ = $2; }
-    | construct1 field1 { $$ = ap($1, $2); }
+    | construct1 field1 { $$ = self.heap.apply($1, $2); }
     | here ConstructorName {
         $$ = $2;
         id_who($2) = $1;
@@ -1495,11 +1555,11 @@ construct1:
 
 field:
     type
-    | argtype Bang { $$ = ap(strict_t, $1); }
+    | argtype Bang { $$ = self.heap.apply(strict_t, $1); }
     ;
 
 field1:
-    argtype Bang { $$ = ap(strict_t, $1); }
+    argtype Bang { $$ = self.heap.apply(strict_t, $1); }
     | argtype
     ;
 
@@ -1518,38 +1578,38 @@ names:          /* used twice - for bnf list, and for inherited attr list */
         $$ = if inbnf {
           add1($2, $1)
         } else {
-          cons($2, $1)
+          self.heap.cons($2, $1)
         };
       }
     ;
 
 productions:
     lspec {
-        let h = reverse(hd[$1]);
+        let h = reverse(self.heap[$1].head);
         let hr = hd[tl[$1]];
         let t = tl[tl[$1]];
         inbnf = 1;
         $$ = NIL;
         while (h!=NIL && !SYNERR) {
-          ntspecmap = cons(cons(hd[h], hr), ntspecmap);
-          $$ = add_prod(defn(hd[h], t, UNDEF), $$, hr);
-          h = tl[h];
+          ntspecmap = self.heap.cons(self.heap.cons(self.heap[h].head, hr), ntspecmap);
+          $$ = add_prod(defn(self.heap[h].head, t, UNDEF), $$, hr);
+          h = self.heap[h].tail;
         }
       }
-    | production { $$ = cons($1, NIL); }
+    | production { $$ = self.heap.cons($1, NIL); }
     | productions lspec {
-        let h = reverse(hd[$2]);
+        let h = reverse(self.heap[$2].head);
         let hr = hd[tl[$2]];
         let t = tl[tl[$2]];
         inbnf = 1;
         $$=$1;
         while(h!=NIL&&!SYNERR){
-          ntspecmap = cons(cons(hd[h], hr), ntspecmap);
-          $$ = add_prod(defn(hd[h], t, UNDEF), $$, hr);
-          h = tl[h];
+          ntspecmap = self.heap.cons(self.heap.cons(self.heap[h].head, hr), ntspecmap);
+          $$ = add_prod(defn(self.heap[h].head, t, UNDEF), $$, hr);
+          h = self.heap[h].tail;
         }
       }
-    | productions production { $$ = add_prod($2, $1, hd[dval($2)]); }
+    | productions production { $$ = add_prod($2, $1, self.heap[dval($2)].head); }
     ;
 
 production:
@@ -1575,34 +1635,34 @@ grhs:
     ;
 
 phrase:
-    error_term { $$ = ap2(G_ERROR, G_ZERO, $1); }
+    error_term { $$ = self.heap.apply2(G_ERROR, G_ZERO, $1); }
     | phrase1 {
-        $$ = hd[$1];
-        $1 = tl[$1];
+        $$ = self.heap[$1].head;
+        $1 = self.heap[$1].tail;
         while ($1!=NIL) {
-          $$ = label(hd[$1], $$);
-          $1 = tl[$1];
-          $$ = ap2(G_ALT, hd[$1], $$);
-          $1 = tl[$1];
+          $$ = label(self.heap[$1].head, $$);
+          $1 = self.heap[$1].tail;
+          $$ = self.heap.apply2(G_ALT, self.heap[$1].head, $$);
+          $1 = self.heap[$1].tail;
         }
       }
     | phrase1 Pipe error_term {
-        $$=hd[$1];
-        $1=tl[$1];
+        $$=self.heap[$1].head;
+        $1=self.heap[$1].tail;
         while($1!=NIL){
-          $$ = label(hd[$1], $$);
-          $1 = tl[$1];
-          $$ = ap2(G_ALT, hd[$1], $$);
-          $1 = tl[$1];
+          $$ = label(self.heap[$1].head, $$);
+          $1 = self.heap[$1].tail;
+          $$ = self.heap.apply2(G_ALT, self.heap[$1].head, $$);
+          $1 = self.heap[$1].tail;
         }
-        $$ = ap2(G_ERROR, $$, $3);
+        $$ = self.heap.apply2(G_ERROR, $$, $3);
       }
       /* we right rotate G_ALT's to facilitate left factoring (see trans) */
     ;
 
 phrase1:
-    term { $$=cons($1, NIL); }
-    | phrase1 Pipe here term { $$ = cons($4, cons($3, $1)); }
+    term { $$=self.heap.cons($1, NIL); }
+    | phrase1 Pipe here term { $$ = self.heap.cons($4, self.heap.cons($3, $1)); }
     ;
 
 term:
@@ -1629,40 +1689,40 @@ count_factors:
     ;
 
 factors:
-    factor { $$ = cons($1, NIL); }
+    factor { $$ = self.heap.cons($1, NIL); }
     | factors factor {
-        if (hd[$1]==G_END) {
+        if (self.heap[$1].head==G_END) {
           syntax("unexpected token after end\n");
         }
-        $$ = cons($2, $1);
+        $$ = self.heap.cons($2, $1);
       }
     ;
 
 factor:
     unit
     | OpenBrace unit CloseBrace {
-        $$ = ap(outdent_fn, ap2(indent_fn, getcol_fn(), $2));
+        $$ = self.heap.apply(outdent_fn, self.heap.apply2(indent_fn, getcol_fn(), $2));
       }
     | OpenBrace unit {
         obrct += 1;
-        $$ = ap2(indent_fn, getcol_fn(), $2);
+        $$ = self.heap.apply2(indent_fn, getcol_fn(), $2);
       }
     | unit CloseBrace {
         obrct -= 1;
 	      if obrct < 0 {
 	        syntax("unmatched `}' in grammar rule\n");
 	      }
-        $$ = ap(outdent_fn, $1);
+        $$ = self.heap.apply(outdent_fn, $1);
       }
     ;
 
 unit:
     symbol
-    | symbol Times { $$ = ap(G_STAR, $1); }
+    | symbol Times { $$ = self.heap.apply(G_STAR, $1); }
     | symbol Plus {
-        $$ = ap2(G_SEQ, $1, ap2(G_SEQ, ap(G_STAR, $1), ap(G_RULE, ap(C, P))));
+        $$ = self.heap.apply2(G_SEQ, $1, self.heap.apply2(G_SEQ, self.heap.apply(G_STAR, $1), self.heap.apply(G_RULE, self.heap.apply(C, P))));
       }
-    | symbol QuestionMark { $$ = ap(G_OPT, $1); }
+    | symbol QuestionMark { $$ = self.heap.apply(G_OPT, $1); }
     ;
 
 symbol:
@@ -1670,7 +1730,7 @@ symbol:
         //extern word NEW;
         nonterminals = newadd1($1, nonterminals);
         if(NEW){
-          ntmap = cons(cons($1, lasth), ntmap);
+          ntmap = self.heap.cons(self.heap.cons($1, lasth), ntmap);
         }
       }
     | EndSymbol { $$ = G_END; }
@@ -1684,12 +1744,40 @@ symbol:
           printf(" (should be string-const)\n");
           acterror();
         }
-        $$ = ap(G_SYMB, $1);
+        $$ = self.heap.apply(G_SYMB, $1);
       }
     | Caret { $$=G_STATE; }
-    | {inbnf=0;} OpenBracket exp {inbnf=1;} CloseBracket { $$ = ap(G_SUCHTHAT, $3); }
+    | {inbnf=0;} OpenBracket exp {inbnf=1;} CloseBracket { $$ = self.heap.apply(G_SUCHTHAT, $3); }
     | Minus { $$ = G_ANY; }
     ;
 
 %%
 /*  end of Miranda rules  */
+
+
+impl Parser {
+
+	// Todo: Do we need mut versions? We take `&mut self` but only return `&HeapCell.`
+	fn hd_hd(&mut self, idx: Into<usize>) -> &mut HeapCell {
+	  let hd = self.heap[x.into()].head;
+	  self.heap[hd.into()].head
+	}
+
+	fn hd_tl(&mut self, idx: Into<usize>) -> &mut HeapCell {
+	  let hd = self.heap[x.into()].head;
+	  self.heap[hd.into()].tail
+	}
+
+	fn tl_tl(&mut self, idx: Into<usize>) -> &mut HeapCell {
+	  let hd = self.heap[x.into()].tail;
+	  self.heap[hd.into()].tail
+	}
+
+	fn tl_hd(&mut self, idx: Into<usize>) -> &mut HeapCell {
+	  let hd = self.heap[x.into()].tail;
+	  self.heap[hd.into()].head
+	}
+
+
+
+}

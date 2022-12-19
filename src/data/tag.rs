@@ -7,6 +7,7 @@
 use num_traits::{FromPrimitive, ToPrimitive};
 
 // Keep in sync with `#[repr(u32)]` for Tag.
+// Miranda uses a char.
 pub type TagRepresentationType = u32;
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, Primitive)]
@@ -41,13 +42,3 @@ pub enum Tag {
   String          = 23,
 }
 
-
-#[cfg(test)]
-mod tests {
-
-  #[test]
-  fn it_works() {
-    assert_eq!(2 + 2, 4);
-  }
-
-}

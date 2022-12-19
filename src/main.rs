@@ -1,3 +1,4 @@
+#![allow(ambiguous_associated_items)]
 #![feature(arbitrary_enum_discriminant)]
 #![feature(pattern)]
 
@@ -5,7 +6,7 @@
 extern crate enum_primitive_derive;
 extern crate num_traits;
 
-// mod driver;
+
 mod data;
 mod compiler;
 mod vm;
@@ -20,18 +21,16 @@ fn main() {
   Bison has distinct notions of token and value. A value wraps a token. Rules produce values. For us, values will be
   AST nodes.
   */
-
-
 }
 
 
 #[cfg(test)]
 mod tests {
-  use logos::Logos;
+  use logos::{Logos, Lexer as LogosLexer};
 
   use saucepan::Source;
-  use crate::compiler::Token;
-  use crate::compiler::errors::LexError;
+  use crate::compiler::{Token, Lexer};
+  use crate::compiler::errors::LexerError;
 
   #[test]
   /// Tests the Logos lexer attached to the `Token` enum. Does not test anything in `lex.rs` at all.
@@ -43,23 +42,30 @@ mod tests {
     let file_contents = std::fs::read_to_string(path).unwrap();
     let source = Source::new(path, file_contents.as_str());
 
-    let mut lexer = Token::lexer(source.text());
+    let mut lexer = Lexer::new(&source);
 
     loop {
-      match lexer.next() {
+      match lexer.yylex() {
 
-        Some(Token::Error) => {
+        Ok(Token::Error) => {
           println!("Error Token.");
+          break;
         }
 
-        Some(token) => {
-          println!("{}", token);
-        }
-
-        None => {
+        Ok(Token::EOF) => {
           println!("No next token.");
           break;
         }
+
+        Ok(token) => {
+          println!("{}", token);
+        }
+
+        Err(e) => {
+          println!("ERROR: {}", e);
+          break;
+        }
+
       }
     }
   }

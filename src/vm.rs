@@ -1,8 +1,4 @@
-/*
- *   Copyright (c) 2022
- *   All rights reserved.
- */
-/*
+/*!
 
 Setup and orchestration of built-ins, etc. Contains utility functions that perform the work.
 
@@ -12,7 +8,7 @@ Setup and orchestration of built-ins, etc. Contains utility functions that perfo
 use std::fs::File;
 use std::io::{stdin, BufRead};
 
-
+use crate::data::{Heap, Value};
 
 
 pub enum ActivityReset {
@@ -43,15 +39,15 @@ pub struct VM {
   file_queue               : Vec<File>,
   in_file: Box<dyn BufRead>,
   last_expression: Value, // A reference to the last expression evaluated.
-  last_mame: Option<&str>,
+  last_mame: Option<&'static str>,
   heap: Heap,
 }
 
 // pub fn reset(activity_reset: ActivityReset)-
 
-impl Driver {
+impl VM {
 
-  /// Reset all variables used by the compiler.
+  // / Reset all variables used by the compiler.
   // ToDo: This method is unnecessary. You'd just drop the VM and make a new instance.
   /*
   fn reset_state(&mut self){
