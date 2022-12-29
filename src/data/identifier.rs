@@ -1,59 +1,55 @@
 /*!
 
+Summary of the heap representation of an identifier:
 
 
- */
+
+*/
 
 
 use saucepan::LineNumber;
-use num_traits::{FromPrimitive, ToPrimitive};
+use num_traits::{FromPrimitive};
 
-use crate::data::heap::Heap;
-use crate::data::tag::Tag;
-use crate::data::{ATOM_LIMIT, Combinator, Value};
-use crate::data::values::{HeapCell, RawValue};
+use crate::{
+  data::{Combinator, Value},
+  data::tag::Tag,
+  data::heap::{Heap, HeapCell},
+  data::values::RawValue
+};
 use super::{
   Type,
   ValueRepresentationType
 };
 
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
-pub struct Identifier<'t>{
-  pub name         : &'t str, // `String` or `&str`?
-  pub definition   : IdentifierDefinition<'t>,
-  pub datatype     : Type,
-  pub arity        : ValueRepresentationType,
-  pub show_function: &'t str, // What is a show function?
-  pub value        : IdentifierValueType
+// #[derive(Clone, Eq, PartialEq, Hash, Debug)]
+pub struct Identifier {
+  pub name: String,
+  // `String` or `&str`?
+  pub definition: IdentifierDefinition,
+  pub datatype: Type,
+  pub value: Option<IdentifierValue>
 }
 
-impl<'t> Identifier<'t> {
+impl Identifier {
+  /// Compiles the identifier onto the heap, registering the string and creating a symbol table entry for the name
+  /// of the identifier.
   pub fn compile(&self, heap: &mut Heap) -> Value {
-    // Id: {
-    //   hd:  cons(strcons(name,who),type)
-    //   tl: value
-    // }
     let who = self.definition.compile(heap);
-    let name = heap.string(self.name);
-    let mut id_head = heap.strcons(name, who);
+    let string_ref = heap.string(self.name.clone());
+    let mut id_head = heap.strcons(string_ref, who);
     id_head = heap.cons(id_head, self.datatype.into());
+    let value = if let Some(value) = &self.value {
+      value.compile(heap)
+    } else {
+      Combinator::Undef.into()
+    };
 
-    // Constructing the value is complicated. From Miranda:
-    //
-    //   The value field of type identifier takes one of the following forms:
-    //   cons(cons(arity,showfn),cons(algebraic_t,constructors))
-    //   cons(cons(arity,showfn),cons(synonym_t,rhs))
-    //   cons(cons(arity,showfn),cons(abstract_t,basis))
-    //   cons(cons(arity,showfn),cons(placeholder_t,NIL))
-    //   cons(cons(arity,showfn),cons(free_t,NIL))
-    let showfn = heap.string(self.show_function);
-    let value_head = heap.cons(RawValue(self.arity).into(), showfn);
-    let value_tail = self.value.compile(heap);
-    let value = heap.cons(value_head, value_tail);
-
-    heap.put_cell(
+    let id_ref = heap.put_cell(
       HeapCell::new(Tag::Id, id_head, value)
-    )
+    );
+
+
+    id_ref
   }
 
   /// Retrieves the identifier information pointed to by the given reference.
@@ -65,52 +61,51 @@ impl<'t> Identifier<'t> {
     // }
     let id_cell: HeapCell = heap.expect(Tag::Id, reference)?;
 
-    let (arity, show_function, value_type): (ValueRepresentationType, &str, IdentifierValueType)
-        = IdentifierValueType::get(id_cell.tail.into(), heap)?;
+    let value: Option<IdentifierValue>
+        = IdentifierValue::get(id_cell.tail.into(), heap)?;
 
     let cons_cell    : HeapCell             = heap.expect(Tag::Cons, id_cell.head.into() )?;
     let strcons_cell : HeapCell             = heap.expect(Tag::StrCons, cons_cell.head.into())?;
     let id_definition: IdentifierDefinition = IdentifierDefinition::get(strcons_cell.tail.into(), heap)?;
-    let datatype     : Type                 = Type::from_usize(cons_cell.tail.0).unwrap();
-    let name         : &str                 = heap.resolve_string(strcons_cell.head)?;
+    let datatype     : Type                 = Type::from_isize(cons_cell.tail.0).unwrap();
+    let name         : String               = heap.resolve_string(strcons_cell.head)?;
 
     Ok(
       Identifier{
         name,
         definition: id_definition,
         datatype,
-        arity,
-        show_function,
-        value: value_type
+        value
       }
     )
   }
 
 }
 
-
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
-pub enum IdentifierDefinition<'t> {
+// Todo: Should references to files and sources in `IdentifierDefinition` be interned, e.g. references to elements of
+//       `heap.files`?
+// #[derive(Clone, Eq, PartialEq, Hash, Debug)]
+pub enum IdentifierDefinition {
   Undefined, // The identifier is completely undefined.
 
   DefinedAt{
-    script_file: &'t str,   // `String` or `&str`?
+    script_file: String,   // `String` or `&str`?
     line       : LineNumber // Span?
   },
 
   Alias{
-    script_file: &'t str,    // `String` or `&str`?
+    script_file: String,    // `String` or `&str`?
     line       : LineNumber, // Span?
-    source     : &'t str,    // Old name
+    source     : String,    // Old name
   }
 }
 
-impl<'t> IdentifierDefinition<'t> {
+impl IdentifierDefinition {
   /// Compiles to the `who` part of an ID
   pub fn compile(&self, heap: &mut Heap) -> Value {
     match self{
 
-      IdentifierDefinition::Undefined => heap.NILL,
+      IdentifierDefinition::Undefined => Combinator::Nil.into(),
 
       IdentifierDefinition::DefinedAt {
         script_file,
@@ -118,7 +113,7 @@ impl<'t> IdentifierDefinition<'t> {
       } => {
         // hereinfo := `fileinfo(script,line_no)`
         let script = heap.string(script_file);
-        let hereinfo = heap.file_info(script, RawValue(line.0 as usize).into());
+        let hereinfo = heap.file_info(script, RawValue(line.0 as ValueRepresentationType).into());
         hereinfo
       }
 
@@ -133,7 +128,7 @@ impl<'t> IdentifierDefinition<'t> {
         let source = heap.string(source);
         let aka = heap.data_pair(source, RawValue(0).into());
         let script = heap.string(script_file);
-        let hereinfo = heap.file_info(script, RawValue(line.0 as usize).into());
+        let hereinfo = heap.file_info(script, RawValue(line.0 as ValueRepresentationType).into());
 
         heap.cons(aka, hereinfo)
       }
@@ -163,9 +158,9 @@ impl<'t> IdentifierDefinition<'t> {
     // Check if the alias info is cons'ed on to the here info cell.
     if who_cell.tag == Tag::Cons {
       let aka_cell: HeapCell = heap.expect(Tag::DataPair, who_cell.head.into())?;
-      let source  : &str     = heap.resolve_string(aka_cell.head)?;
+      let source  : String   = heap.resolve_string(aka_cell.head)?;
 
-      let (script_file, line): (&str, LineNumber) = IdentifierDefinition::get_here_info(who_cell.tail.into(), heap)?;
+      let (script_file, line): (String, LineNumber) = IdentifierDefinition::get_here_info(who_cell.tail.into(), heap)?;
 
       Ok(IdentifierDefinition::Alias{
         script_file,
@@ -173,7 +168,7 @@ impl<'t> IdentifierDefinition<'t> {
         source
       })
     } else if who_cell.tag == Tag::FileInfo {
-      let (script_file, line): (&str, LineNumber) = IdentifierDefinition::get_here_info(reference, heap)?;
+      let (script_file, line): (String, LineNumber) = IdentifierDefinition::get_here_info(reference, heap)?;
 
       Ok(IdentifierDefinition::DefinedAt {
         script_file,
@@ -186,9 +181,9 @@ impl<'t> IdentifierDefinition<'t> {
   }
 
 
-  fn get_here_info(reference: Value, heap: &Heap) -> Result<(&str, LineNumber), ()> {
+  fn get_here_info(reference: Value, heap: &Heap) -> Result<(String, LineNumber), ()> {
     let here_info_cell = heap.expect(Tag::FileInfo, reference)?;
-    let line_number: LineNumber = here_info_cell.tail.0.into();
+    let line_number: LineNumber = LineNumber::from(here_info_cell.tail.0 as usize);
     let script_file = heap.resolve_string(here_info_cell.head)?;
 
     Ok((script_file, line_number))
@@ -245,6 +240,7 @@ impl<'t> IdentifierDefinition<'t> {
   | `cons(cons(` | `arity,` | `showfn`       | `), cons(` | `abstract_t,`    | `basis ))`       |
   | `cons(cons(` | `arity,` | `showfn`       | `), cons(` | `placeholder_t,` | `NIL ))`         |
   | `cons(cons(` | `arity,` | `showfn`       | `), cons(` | `free_t,`        | `NIL ))`         |
+  | `UNDEF` |
 
 
   Note that:
@@ -256,72 +252,167 @@ impl<'t> IdentifierDefinition<'t> {
     #define free_t        4
 ```
  */
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Primitive)]
-#[repr(usize)]
+pub enum IdentifierValue {
+  Undefined,
+  Typed {
+    arity        : ValueRepresentationType,
+    show_function: Value,
+    value_type   : IdentifierValueType // What is a show function?
+  },
+  Arbitrary(Value)
+}
+
+impl IdentifierValue {
+  pub fn compile(&self, heap: &mut Heap) -> Value {
+    // Constructing the value is complicated. From Miranda:
+    //
+    //   The value field of type identifier takes one of the following forms:
+    //   cons(cons(arity,showfn),cons(algebraic_t,constructors))
+    //   cons(cons(arity,showfn),cons(synonym_t,rhs))
+    //   cons(cons(arity,showfn),cons(abstract_t,basis))
+    //   cons(cons(arity,showfn),cons(placeholder_t,NIL))
+    //   cons(cons(arity,showfn),cons(free_t,NIL))
+    //   UNDEF
+    match self {
+
+      IdentifierValue::Undefined => Combinator::Undef.into(),
+
+      IdentifierValue::Typed {
+        arity,
+        show_function,
+        value_type
+      } => {
+        let value_head = heap.cons(RawValue(*arity).into(), *show_function);
+        let value_tail = value_type.compile(heap);
+        heap.cons(value_head, value_tail)
+      }
+
+      IdentifierValue::Arbitrary(v) => *v
+
+    }
+  }
+
+
+  pub fn get(reference: Value, heap: &Heap) -> Result<Option<IdentifierValue>, ()> {
+    if reference == Combinator::Undef.into() {
+
+      Ok(None)
+
+    } else {
+      // We assume a reference to a cons cell must be a typed identifier value.
+      if let Value::Reference(idx) = reference {
+        let outer_cons_cell = heap[RawValue(idx)];
+        if outer_cons_cell.tag == Tag::Cons {
+          let inner_cons_cell: HeapCell = heap.expect(Tag::Cons, outer_cons_cell.head.into())?;
+          let show_function = inner_cons_cell.tail.into();
+          let arity: ValueRepresentationType = inner_cons_cell.head.0;
+          let value_type = IdentifierValueType::get(outer_cons_cell.tail.into(), heap)?;
+
+          Ok(Some(IdentifierValue::Typed { arity, show_function, value_type }))
+
+        } else {
+
+          Ok(Some(IdentifierValue::Arbitrary(reference))) // Not actually a cons cell.
+
+        }
+
+      } else if reference == Combinator::Undef.into() {
+
+        Ok(Some(IdentifierValue::Undefined))
+
+      } else {
+
+        Ok(Some(IdentifierValue::Arbitrary(reference))) // Not actually a reference.
+
+      }
+    }
+  }
+}
+
+
+
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 pub enum IdentifierValueType{
   // todo: incorporate constructors, source, basis.
-  Algebraic   = 0, //{ constructors: Vec<&'t str> },
-  Synonym     = 1, //{ source:       &'t str      },
-  Abstract    = 2, //{ basis:        &'t str      },
-  PlaceHolder = 3,
-  Free        = 4
+  Algebraic{                     // Numerical representation.
+    constructors: Value
+  },                             // 0
+  Synonym{ source_type: Type },  // 1
+  Abstract{ basis: Value },      // 2
+  PlaceHolder,                   // 3
+  Free                           // 4
 }
 
 impl IdentifierValueType {
   pub fn compile(&self, heap: &mut Heap) -> Value {
-    // todo: This is incorrect. It ignores constructors, source, basis, etc.
-    heap.cons(Value::Data(*self as ValueRepresentationType), heap.NILL)
+    // Has the form CONS(class, info).
+
+    match self {
+      IdentifierValueType::Algebraic { constructors } => {
+        // Todo: Figure out the type of `constructors` and fix this.
+        heap.cons(Value::Data(0), *constructors)
+      }
+
+      IdentifierValueType::Synonym { source_type } => {
+        heap.cons(Value::Data(1), (*source_type).into())
+      }
+
+      IdentifierValueType::Abstract { basis } => {
+        // Todo: Figure out the type of `basis` and fix this.
+        heap.cons(Value::Data(2), *basis)
+      }
+
+      IdentifierValueType::PlaceHolder => {
+        heap.cons(Value::Data(3), Combinator::Nil.into())
+      }
+
+      IdentifierValueType::Free => {
+        heap.cons(Value::Data(4), Combinator::Nil.into())
+      }
+    } // end match on self
   }
 
-  /// This is not the inverse of compile! Returns `(arity, show_function, value_type)`.
-  pub fn get(reference: Value, heap: &Heap) -> Result<(ValueRepresentationType, &str, IdentifierValueType), ()> {
-    /**
-    Miranda:
-      The value field of type identifier takes one of the following forms
+  fn get(reference: Value, heap: &Heap) -> Result<IdentifierValueType, ()> {
 
-    |              | Arity    | Show Functions |            | Type             | Info             |
-    | :----------- | :------- | :------------- | :--------- | :--------------- | :--------------- |
-    | `cons(cons(` | `arity,` | `showfn`       | `), cons(` | `algebraic_t,`   | `constructors )` |
-    | `cons(cons(` | `arity,` | `showfn`       | `), cons(` | `synonym_t,`     | `rhs  ))`        |
-    | `cons(cons(` | `arity,` | `showfn`       | `), cons(` | `abstract_t,`    | `basis ))`       |
-    | `cons(cons(` | `arity,` | `showfn`       | `), cons(` | `placeholder_t,` | `NIL ))`         |
-    | `cons(cons(` | `arity,` | `showfn`       | `), cons(` | `free_t,`        | `NIL ))`         |
+    let type_cell : HeapCell = heap.expect(Tag::Cons, reference)?;
+    let class_ = match type_cell.head.0 {
 
-     */
-    let outer_cons_cell: HeapCell = heap.expect(Tag::Cons, reference)?;
-    let inner_cons_cell: HeapCell = heap.expect(Tag::Cons, outer_cons_cell.head.into())?;
-    let show_function  : &str     = heap.resolve_string(inner_cons_cell.tail)?;
-    let arity          : ValueRepresentationType = inner_cons_cell.head.0;
+      0 => {
+        IdentifierValueType::Algebraic{
+          constructors: type_cell.tail.into()
+        }
+      }
 
-    let type_cell : HeapCell            = heap.expect(Tag::Cons, outer_cons_cell.tail.into())?;
-    let value_type: IdentifierValueType = IdentifierValueType::from_usize(type_cell.head.0).unwrap();
-    // let info = type_cell.tail;
+      1 => {
+        IdentifierValueType::Synonym {
+          source_type: Type::from_isize(type_cell.tail.0).ok_or(())?
+        }
+      }
 
-    Ok((arity, show_function, value_type))
+      2 => {
+        IdentifierValueType::Abstract {
+          basis: type_cell.tail.into()
+        }
+      }
 
+      3 => {
+        IdentifierValueType::PlaceHolder
+      }
+
+      4 => {
+        IdentifierValueType::Free
+      }
+
+      _ => {
+        eprintln!("malformed identifier type value");
+        unreachable!();
+      }
+
+    };
+
+    Ok(class_)
   }
 
-  /*
-  fn get_identifier_value_unchecked<'t>(reference: ValueRepresentationType, heap: &Heap)
-                                        -> (ValueRepresentationType, &'t str, IdentifierValueType)
-  {
-    let outer_cons_cell: HeapCell                = heap.data[reference - ATOM_LIMIT];
-    let inner_cons_cell: HeapCell                = heap.data[outer_cons_cell.head.0 - ATOM_LIMIT];
-    let arity          : ValueRepresentationType = inner_cons_cell.head.0;
-    let type_cell      : HeapCell                = heap.data[outer_cons_cell.tail.0 - ATOM_LIMIT];
-    let value_type     : IdentifierValueType     = IdentifierValueType::from_usize(type_cell.head.0).unwrap();
-    let show_function  : &'t str                 = heap.strings[inner_cons_cell.tail.0].as_str();
 
-    (arity, show_function, value_type)
-  }
-  */
 }
 
-
-#[cfg(test)]
-mod tests {
-  #[test]
-  fn it_works() {
-    assert_eq!(2 + 2, 4);
-  }
-}

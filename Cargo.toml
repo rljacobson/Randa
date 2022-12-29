@@ -30,4 +30,4 @@ default-features = false
 features = ["std"]
 
 [build-dependencies]
-rust-bison-skeleton = "0.41.0"
+rust-bison-skeleton = {path = "../rust-bison-skeleton/rust-bison-skeleton"} #"0.41.0"

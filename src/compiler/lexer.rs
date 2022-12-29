@@ -4,25 +4,35 @@ A minimal wrapper around a Logos lexer to satisfy the Bison parser interface.
 
  */
 
+use std::fmt::{Debug, Formatter};
 use std::ops::Range;
-use logos::{Logos, Lexer as LogosLexer, SpannedIter};
+use logos::{
+  Logos,
+  // Lexer as LogosLexer,
+  SpannedIter
+};
 use saucepan::{Source, Span};
 
 
 use super::errors::LexerError;
 use super::Token;
 
-
 pub struct Lexer<'t> {
   token_iterator: SpannedIter<'t, Token>,
-  source: &'t Source<'t, 't>,
+  source: Source<'t, 't>,
   span: Range<usize>, //Span<'t, 't>,
   token: Token,
 }
 
+impl<'t> Debug for Lexer<'t> {
+  fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    write!(f, "Lexer{{source={}}}", self.source.name())
+  }
+}
+
 
 impl<'t> Lexer<'t> {
-  pub fn new(source: &'t Source<'t, 't>) -> Lexer<'t> {
+  pub fn new(source: Source<'t, 't>) -> Lexer<'t> {
     // A filler value for span.
     //let span = source.slice(0..0);
     let token_iterator = Token::lexer(source.text()).spanned();

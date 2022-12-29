@@ -3,22 +3,22 @@
 The representation of types.
 
 NOTES:
-  user defined types are represented by Miranda identifiers (of type "type"),
-  generic types (e.g. "**") by Miranda numbers, and compound types are
-  built up with AP nodes, e.g. "a->b" is represented by 'ap2(arrow_t,a,b)'
-  Applying bind_t to a type variable, thus: ap(bind_t,tv), indicates that
-  it is not to be instantiated. Applying strict_t to a type represents the
-  '!' operator of algebraic type definitions.
+  User defined types are represented by Miranda identifiers (of type "`type`"),
+  generic types (e.g. "`**`") by Miranda numbers, and compound types are
+  built up with `AP` nodes, e.g. "`a->b`" is represented by '`ap2(arrow_t,a,b)`'
+  Applying `bind_t` to a type variable, thus: `ap(bind_t,tv)`, indicates that
+  it is not to be instantiated. Applying `strict_t` to a type represents the
+  '`!`' operator of algebraic type definitions.
 
- */
+*/
 
 use crate::data::{Value, ValueRepresentationType};
 
 #[derive(Copy, Clone, PartialOrd, Eq, PartialEq, Hash, Debug, Default, Primitive)]
-#[repr(usize)]
+#[repr(isize)]
 pub enum Type {
   #[default]
-  Undefined = 0,  // Or Atom
+  Undefined = 0, // Or Atom
   Bool      = 1,
   Number    = 2,
   Char      = 3,
@@ -33,7 +33,6 @@ pub enum Type {
   Alias     = 12,
   New       = 13,
 }
-
 
 impl From<Type> for Value {
   fn from(type_value: Type) -> Self {

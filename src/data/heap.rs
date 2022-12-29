@@ -2,63 +2,167 @@
 
 See the `values` module for more information about how data is encoded in a `HeapCell`.
 
+Item representation within the heap:
+
  */
+
+use std::collections::HashMap;
+use std::fmt::{Debug, Formatter};
+use std::ops::{Index, IndexMut};
 
 use crate::{
   compiler::Token,
   data::{
-    tag::Tag,
+    ATOM_LIMIT,
+    tag::{
+      Tag,
+      TagRepresentationType
+    },
     types::Type,
     values::{
-      HeapCell,
       RawValue,
       Value
     },
     Combinator,
     Identifier,
-    IdentifierValueType,
-    ValueRepresentationType
+    ValueRepresentationType,
   }
 };
+use crate::data::{IdentifierDefinition, IdentifierValueType};
 
 
-type ValueOption = Result<Value, ()>;
+type ValueResult = Result<Value, ()>;
+
+// Todo: Give these a home
+static GENERATOR: ValueRepresentationType = 0;
+static GUARD    : ValueRepresentationType = 1;
+static REPEAT   : ValueRepresentationType = 2;
+
+// Constants for heap size and GC
+/// Default size of heap.
+static DEFAULT_SPACE: usize = 2500000;
+/// SPACE_LIMIT controls the size of the heap (i.e. the number of heap cells available) -
+/// the minimum survivable number given the need to compile the prelude, etc., is probably
+/// about 6000.
+static SPACE_LIMIT  : usize = DEFAULT_SPACE;
+/// False ceiling in heap to improve paging behaviour during compilation
+static INIT_SPACE   : usize = 1250000;
+static BIG_TOP      : usize = SPACE_LIMIT; //+ (ATOM_LIMIT as usize);   // 2500000 + 477 = 2500477
 
 
-#[derive(Clone)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+pub struct HeapCell {
+  pub tag : Tag,
+  pub head: RawValue,
+  pub tail: RawValue,
+}
+
+
+impl HeapCell {
+  pub fn new(tag: Tag, head: Value, tail: Value) -> HeapCell {
+    // Trivial implementation, but nice to have in case we decide we need a nontrivial implementation in the future.
+    HeapCell{
+      tag,
+      head: head.into(),
+      tail: tail.into()
+    }
+  }
+
+  pub fn new_raw(tag: Tag, head: RawValue, tail: RawValue) -> HeapCell {
+    // Trivial implementation, but nice to have in case we decide we need a nontrivial implementation in the future.
+    HeapCell{
+      tag,
+      head,
+      tail
+    }
+  }
+
+}
+
+
+// #[derive(Clone)]
 pub struct Heap {
-  data: Vec<HeapCell>,
-  strings: Vec<String>,
+  // Heap limits
+  // ToDo: Should this be replaced by `self.heap.capacity`?
+  /// This is SPACE in Miranda and is initialized as `SPACE = INIT_SPACE`. See also [`DEFAULT_SPACE`](DEFAULT_SPACE),
+  /// [`SPACE_LIMIT`](SPACE_LIMIT), [`INIT_SPACE`](INIT_SPACE), and [`BIG_TOP`](BIG_TOP).
+  heap_space: usize,
 
-  // References to constants
-  pub NILL: Value,
+  data        : Vec<HeapCell>,
+  strings     : Vec<String>,
+  /// A map from an identifier name to (a reference to) its identifier structure on the heap.
+  pub(crate) symbol_table: HashMap<String, Value>,
 
-  // Common compound types.
-  // numeric_function_type : Value,
-  // numeric_function2_type: Value,
-  // boolean_function_type : Value,
-  // boolean_function2_type: Value,
-  // char_list_type        : Value,
-  // string_function_type  : Value,
-  // range_step_type       : Value,
-  // range_step_until_type : Value,
+  /// Special heap value NILL
+  pub(crate) nill: Value
 
-  // Common constants
+}
+
+impl Debug for Heap {
+  fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    write!(f, "Heap{{size={}, strings={}}}", self.data.len(), self.strings.len())
+  }
 }
 
 impl Default for Heap {
+  /// Setup and initialization of [`Heap`](crate::data::heap::Heap) occurs in
+  /// [`VM::default()`](crate::data::heap::Heap::default()),
+  /// [`VM::setup_constants()`](crate::data::heap::Heap::setup_constants()), and
+  /// [`VM::setup_standard_types()`](crate::data::heap::Heap::setup_standard_types()).
   fn default() -> Self {
     let mut heap = Heap {
-      data: vec![],
-      strings: vec![],
-      NILL: Value::Data(0),
+      // Heap limits
+      heap_space: INIT_SPACE, // SPACE = INIT_SPACE;
+
+      data     : Vec::with_capacity(INIT_SPACE),
+      strings  : vec![],
+      symbol_table: HashMap::new(),
+
+      nill: Value::Uninitialized
     };
 
-    heap.setup_constants();
+    // Todo: Why have a reference to this instead of just using Combinator::Nil?
+    //       That's what Miranda does, but is there a reason? To have it on the heap, but why?
+    //       Possible answer: So it can be used in contexts that allow Combinator values that are not actually
+    //       combinators.
+    // Nill lives in `Heap` because some `Heap` functions use it.
+    heap.nill = heap.cons(Value::Token(Token::Constant), Combinator::Nil.into());
 
     heap
   }
 }
+
+
+impl Index<RawValue> for Heap {
+  type Output = HeapCell;
+
+  fn index(&self, index: RawValue) -> &Self::Output {
+    &self.data[index.0 as usize]
+  }
+}
+
+impl IndexMut<RawValue> for Heap{
+  fn index_mut(&mut self, index: RawValue) -> &mut Self::Output {
+    &mut self.data[index.0 as usize]
+  }
+}
+
+impl Index<Value> for Heap {
+  type Output = HeapCell;
+
+  fn index(&self, value: Value) -> &Self::Output {
+    let index = RawValue::from_value(value);
+    &self.data[index.0 as usize]
+  }
+}
+
+impl IndexMut<Value> for Heap{
+  fn index_mut(&mut self, value: Value) -> &mut Self::Output {
+    let index = RawValue::from_value(value);
+    &mut self.data[index.0 as usize]
+  }
+}
+
 
 impl Heap {
 
@@ -66,40 +170,128 @@ impl Heap {
     Self::default()
   }
 
-  fn setup_constants(&mut self) {
-    // Why have a reference to this instead of just using Combinator::Nil?
-    // That's what Miranda does, but is there a reason? To have it on the heap, but why?
-    self.NILL = self.cons(Value::Token(Token::Constant), Combinator::Nil.into());
-
+  /// Reports the `heap_space + ATOM_LIMIT`.
+  fn top(&self) -> usize{
+    // Todo: Should this just report `self.heap.capacity + ATOM_LIMIT`?
+    self.heap_space + ATOM_LIMIT as usize
   }
-  /*
-  fn setup_standard_types(&mut self) {
-    let numeric_function_type = self.arrow_type(Type::Number.into(), Type::Number.into());
-    let numeric_function2_type = self.arrow_type(Type::Number.into(), numeric_function_type);
-    let boolean_function_type = self.arrow_type(Type::Bool.into(), Type::Bool.into());
-    let boolean_function2_type = self.arrow_type(Type::Bool.into(), boolean_function_type);
-    let char_list_type = self.list_type(Type::Char.into());
-    let string_function_type = self.arrow_type(char_list_type, char_list_type);
-
-    // let tfnumnum   = tf(num_t   , num_t);
-    let range_step_type = self.arrow2_type(
-      Type::Number.into(),
-      Type::Number.into(),
-      self.list_type(Type::Number.into())
-    );
-    let range_step_until_type = self.arrow_type(Type::Number.into(), range_step_type);
-  }
-  */
 
 
   // region Generic read/write functions
+
+  /// Extracts the type of an identifier represented on the stack. Assumes `value` is a reference to an identifier.
+  pub(crate) fn id_type(&mut self, value: Value) -> &mut RawValue {
+    self.tl_hd(Into::<RawValue>::into(value).0 as usize)
+  }
+
+  /// Extracts the value of an identifier represented on the stack. Assumes `value` is a reference to an identifier.
+  pub(crate) fn id_val(&mut self, value: Value) -> &mut RawValue {
+    &mut self.index_mut(value).tail
+  }
+
+  // This just  compiles the value arm of an identifier: `IdentifierValueType::compile(..)`. We therefore have no
+  // use for it.
+  // Usage: `make_typ(0, 0, IdentifierValueType::Synonym, Type::Number)`
+  // pub fn make_type(&mut self, arity: i32, show_function: Value, class_: Value, info: Value) {
+  //   cons(cons(arity,show_function), cons(class_,info))
+  // }
+
+
+  /// Registers `name` in the symbol table and strings list and creates a "bare bones" identifier structure on the heap
+  /// for the given name, returning a reference to the heap object.
+  pub fn make_id(&mut self, name: &str) -> Value {
+    Identifier{
+      name: name.to_string(),
+      definition: IdentifierDefinition::Undefined,
+      datatype: Default::default(),
+      value: None,
+    }.compile(self)
+    // return self.make(ID, cons(strcons(p1, NIL), undef_t), UNDEF);
+  }
+
+
+  fn make(&self, t: u8, x: u16, y: u16) -> u16 {
+    let mut listp = 0;
+
+    while self.data[listp].tag as i32 > 0 {
+      listp += 1;
+    }
+    // Todo: It's not clear how any of this GC stuff will apply.
+
+    // find next cell with zero or negative tag (=unwanted)
+    if listp == self.top() {
+      if self.heap_space != SPACE_LIMIT {
+        if !compiling {
+          self.heap_space = SPACE_LIMIT;
+        } else if claims <= self.heap_space / 4 && nogcs > 1 {
+          /* during compilation we raise false ceiling whenever residency
+             reaches 75% on 2 successive gc's */
+          static mut wait: u16 = 0;
+          let sp = self.heap_space;
+          if wait > 0 {
+            wait -= 1;
+          } else {
+            self.heap_space += self.heap_space / 2;
+            wait = 2;
+            self.heap_space = 5000 * (1 + (self.heap_space - 1) / 5000); /* round upwards */
+          }
+          if self.heap_space > SPACE_LIMIT {
+            self.heap_space = SPACE_LIMIT;
+          }
+          if atgc && self.heap_space > sp {
+            println!("\n<<increase heap from {} to {}>>\n", sp, self.heap_space);
+          }
+        }
+      }
+
+      // If after raising the false space ceiling we still do not have a free cell, then run  the GC and try again.
+      if listp == TOP {
+        gc();
+
+        if t > Tag::StrCons as TagRepresentationType {
+          mark(x);
+        }
+        if t >= INT {
+          mark(y);
+        }
+        return make(t, x, y);
+      }
+    }
+    claims += 1;
+    tag[listp] = t;
+    hd[listp] = x;
+    tl[listp] = y;
+    listp
+  }
+
+
+  // Todo: Do we need mut versions? We take `&mut self` but only return `&HeapCell.`
+  pub fn hd_hd<T: Into<usize>>(&mut self, idx: T) -> &mut RawValue {
+    let hd = self.data[idx.into()].head;
+    &mut self.data[hd.0 as usize].head
+  }
+
+  pub fn hd_tl<T: Into<usize>>(&mut self, idx: T) -> &mut RawValue {
+    let hd = self.data[idx.into()].head;
+    &mut self.data[hd.0 as usize].tail
+  }
+
+  pub fn tl_tl<T: Into<usize>>(&mut self, idx: T) -> &mut RawValue {
+    let tl = self.data[idx.into()].tail;
+    &mut self.data[tl.0 as usize].tail
+  }
+
+  pub fn tl_hd<T: Into<usize>>(&mut self, idx: T) -> &mut RawValue {
+    let tl = self.data[idx.into()].tail;
+    &mut self.data[tl.0 as usize].head
+  }
 
   /// Resolves a reference to the `HeapCell` it points to.
   pub fn resolve(&self, value: Value) -> Result<HeapCell, ()> {
     match value {
 
       Value::Reference(r) => {
-        Ok(self.data[r])
+        Ok(self.data[r as usize])
       }
 
       _ => {
@@ -117,7 +309,7 @@ impl Heap {
     match value {
 
       Value::Reference(r) => {
-        self.data[r]
+        self.data[r as usize]
       }
 
       _ => panic!("Attempted to dereference a non-reference value.")
@@ -142,7 +334,7 @@ impl Heap {
   /// reference, or if the tag of the referent is not `tag`, returns `Err(())`.
   pub fn expect(&self, tag: Tag, reference: Value) -> Result<HeapCell, ()> {
     if let Value::Reference(idx) = reference {
-      let found_cell = self.data[idx];
+      let found_cell = self.data[idx as usize];
       if found_cell.tag == tag {
         return Ok(found_cell);
       } else {
@@ -155,9 +347,9 @@ impl Heap {
 
   /// If maybe_reference is a reference, dereference it, and check that its tag is `tag`. If so, return the head.
   /// Otherwise, return None.
-  pub fn expect_head(&self, tag: Tag, reference: Value) -> ValueOption{
+  pub fn expect_head(&self, tag: Tag, reference: Value) -> ValueResult {
     if let Value::Reference(idx) = reference {
-      let cell = self.data[idx];
+      let cell = self.data[idx as usize];
       if cell.tag == tag {
         return Ok(cell.head.into());
       }
@@ -172,9 +364,9 @@ impl Heap {
   /// Otherwise, return None.
   ///
   /// Because `expect_tail` takes an `Option<Value>`, it is composable with itself.
-  pub fn expect_tail(&self, tag: Tag, reference: Value) -> ValueOption{
+  pub fn expect_tail(&self, tag: Tag, reference: Value) -> ValueResult {
     if let Value::Reference(idx) = reference {
-      let cell = self.data[idx];
+      let cell = self.data[idx as usize];
       if cell.tag == tag {
         return Ok(cell.tail.into());
       }
@@ -185,8 +377,8 @@ impl Heap {
   }
 
   /// Resolve the string cell to the string value.
-  pub fn resolve_string(&self, value: RawValue) -> Result<&str, ()> {
-    return Ok(self.strings[value.0].as_str());
+  pub fn resolve_string(&self, value: RawValue) -> Result<String, ()> {
+    return Ok(self.strings[value.0 as usize].clone());
   }
 
   // endregion
@@ -197,6 +389,7 @@ impl Heap {
   /// Retrieves the identifier information pointed to by the given reference.
   /// The argument must be a reference.
   pub fn get_identifier(&self, reference: Value) -> Result<Identifier, ()> {
+    // The `Identifier` knows how to encode/decode itself.
     Identifier::get(reference, self)
   }
 
@@ -221,10 +414,17 @@ impl Heap {
   // region Heap cell creation convenience functions
 
   // todo: Do real string interning so multiple copies of the same string aren't being made.
-  pub fn string(&mut self, text: &str) -> Value {
-    let idx = self.strings.len();
-    self.strings.push(text.to_string());
-    self.put(Tag::String, Value::Data(idx), RawValue(0).into())
+  /// Registers the string in the strings list, creates the string object on the heap, and places a reference to the
+  /// heap string object into the symbol table, returning the heap reference.
+  pub fn string<T: Into<String>>(&mut self, text: T) -> Value {
+    let name = text.into();
+    let idx  = self.strings.len();
+
+    let string_ref = self.put(Tag::String, Value::Data(idx as ValueRepresentationType), Value::None);
+    self.symbol_table[&name] = string_ref;
+    self.strings.push(name);
+
+    string_ref
   }
 
   pub fn data_pair(&mut self, x: Value, y: Value) -> Value {
@@ -407,13 +607,14 @@ impl Heap {
 
 #[cfg(test)]
 mod tests {
+  use crate::data::IdentifierValueType;
   use crate::data::types::Type;
   use super::*;
 
   #[test]
   fn round_trip_values() {
-    let x        : Value    = Value::Data(42usize);
-    let y        : Value    = Value::Data(43usize);
+    let x        : Value    = Value::Data(42);
+    let y        : Value    = Value::Data(43);
     let expected : HeapCell = HeapCell::new(Tag::DataPair, x, y);
     let mut heap : Heap     = Heap::new();
     let reference: Value    = heap.data_pair(x, y);
@@ -432,26 +633,26 @@ mod tests {
     heap.strings.push(String::from("salad.ml"));
 
     let x = heap.cons(
-      RawValue(2usize).into(),
-      RawValue(1usize).into() // "wontons"
+      RawValue(2).into(),
+      RawValue(1).into() // "wontons"
     );
     let y = heap.cons(
-      RawValue(IdentifierValueType::PlaceHolder as usize).into(),
-      RawValue(Combinator::Nil as usize).into()
+      RawValue(IdentifierValueType::PlaceHolder as ValueRepresentationType).into(),
+      RawValue(Combinator::Nil as ValueRepresentationType).into()
     );
     let value = heap.cons(
       x,
       y
     ); //cons(cons(arity,showfn),cons(placeholder_t,NIL))
 
-    let aka = heap.data_pair(Value::Data(0usize), Value::Data(0usize));   // Aliasing noodles.
-    let y   = heap.file_info(Value::Data(2usize), Value::Data(328usize)); // salad.ml
+    let aka = heap.data_pair(Value::Data(0), Value::Data(0));   // Aliasing noodles.
+    let y   = heap.file_info(Value::Data(2), Value::Data(328)); // salad.ml
     let who = heap.cons(aka, y);
     // cons(aka,hereinfo)
     // fileinfo(script,line_no)
 
-    let x = heap.strcons(RawValue(0usize).into(), who);
-    let id_head = heap.cons(x, Value::Data(Type::Number as usize));
+    let x = heap.strcons(RawValue(0).into(), who);
+    let id_head = heap.cons(x, Value::Data(Type::Number as ValueRepresentationType));
     let  id = heap.put(Tag::Id,id_head,value); // cons(strcons(name,who),type)
 
     match heap.get_identifier(id) {

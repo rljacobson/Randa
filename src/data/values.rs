@@ -20,20 +20,19 @@ From Miranda:
 
  */
 
-use num_traits::{FromPrimitive, ToPrimitive};
+use num_traits::{FromPrimitive};
 
-use crate::compiler::Token;
-use crate::data::{
-  ATOM_LIMIT,
-  COMBINATOR_BASE,
-  TOKEN_BASE,
-  Combinator,
-  ValueRepresentationType,
+use crate::{
+  data::{
+    ATOM_LIMIT,
+    COMBINATOR_BASE,
+    TOKEN_BASE,
+    Combinator,
+    ValueRepresentationType,
+  },
+  compiler::Token,
 };
-use super::tag::Tag;
 
-
-pub type Heap = Vec<HeapCell>;
 
 #[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Debug, Default)]
 pub struct RawValue(pub ValueRepresentationType);
@@ -41,6 +40,8 @@ pub struct RawValue(pub ValueRepresentationType);
 impl RawValue {
   pub fn from_value(value: Value) -> RawValue {
     match value {
+
+      Value::Tag(tag) => RawValue(tag),
 
       Value::Char(c) => RawValue((c as u32) as ValueRepresentationType),
 
@@ -50,15 +51,20 @@ impl RawValue {
 
       Value::Reference(p) => RawValue(p + ATOM_LIMIT),
 
-      Value::Data(d) => RawValue(d)
+      Value::Data(d) => RawValue(d),
 
+      // The `RawValue`s for the variants used by the parser shouldn't be needed, as they not real Miranda values. We
+      // recycle `Value::None` to use as a "zero" `Value` and make the rest errors. Note that like
+      // `Value::Data`, `Value::None` cannot round-trip, because it collides with `Value::Char`.
+      Value::None => RawValue(0),
+
+      _ => unreachable!("Attempted to convert a parser-only value to a RawValue. This is a bug.")
     }
   }
 }
 
 
-impl From<Value> for RawValue
-{
+impl From<Value> for RawValue {
   fn from(v: Value) -> Self {
     RawValue::from_value(v)
   }
@@ -75,7 +81,18 @@ impl<T> From<T> for RawValue
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 pub enum Value {
+  /// Required by parser.
+  None,
+  /// Required by parser.
+  Uninitialized,
+  /// Required by parser.
+  Stolen,
+
+
+  Tag(ValueRepresentationType),       // 0..23, distinguished from context.
   Char(char),                         // 0..TOKEN_BASE-1               ==   0..255
+  /// Required by parser and used by compiler.
+  /// Represents a token that is returned from a Lexer
   Token(Token),                       // TOKEN_BASE..COMBINATOR_BASE-1 == 256..305
   Combinator(Combinator),             // COMBINATOR_BASE..ATOM_LIMIT-1 == 306..446
   Reference(ValueRepresentationType), // Reference to another cell.
@@ -97,17 +114,41 @@ impl From<RawValue> for Value {
       )
     } else if v < COMBINATOR_BASE {
       Value::Token(
-        Token::from_usize(v).unwrap()
+        Token::from_isize(v).unwrap()
       )
     } else if v < ATOM_LIMIT {
       Value::Combinator(
-        Combinator::from_usize(v).unwrap()
+        Combinator::from_isize(v).unwrap()
       )
     } else {
       Value::Reference(v - ATOM_LIMIT)
     }
   }
 }
+
+impl Default for Value {
+  fn default() -> Self {
+    Self::Stolen
+  }
+}
+
+impl Value {
+  /// Required method, parser expects it to be defined.
+  ///
+  /// Constructor for `LexicalValue::Token(token)` variant.
+  pub(crate) fn from_token(value: Token) -> Self {
+    Self::Token(value)
+  }
+
+  pub(crate) fn new_uninitialized() -> Self {
+    Self::Uninitialized
+  }
+
+  pub(crate) fn is_uninitialized(&self) -> bool {
+    matches!(self, Self::Uninitialized)
+  }
+}
+
 
 impl From<char> for Value {
   fn from(c: char) -> Self {
@@ -124,44 +165,5 @@ impl From<Combinator> for Value {
 impl From<Token> for Value {
   fn from(token: Token) -> Value {
     Value::Token(token)
-  }
-}
-
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
-pub struct HeapCell {
-  pub tag: Tag,
-  pub head: RawValue,
-  pub tail: RawValue
-}
-
-
-impl HeapCell {
-  pub fn new(tag: Tag, head: Value, tail: Value) -> HeapCell {
-    // Trivial implementation, but nice to have in case we decide we need a nontrivial implementation in the future.
-    HeapCell{
-      tag,
-      head: head.into(),
-      tail: tail.into()
-    }
-  }
-
-  pub fn new_raw(tag: Tag, head: RawValue, tail: RawValue) -> HeapCell {
-    // Trivial implementation, but nice to have in case we decide we need a nontrivial implementation in the future.
-    HeapCell{
-      tag,
-      head,
-      tail
-    }
-  }
-
-}
-
-
-
-#[cfg(test)]
-mod tests {
-  #[test]
-  fn it_works() {
-    assert_eq!(2 + 2, 4);
   }
 }

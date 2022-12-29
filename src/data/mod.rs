@@ -2,18 +2,21 @@
 
 The `data` module collects things having to do with representing (encoding/decoding) _values_. Everything is stored
 on a heap. The heap holds `HeapCell`s, which have the form
+```
   ┌─────┬───────────┬───────────┐
   │ Tag │ HeadValue │ TailValue │
   └─────┴───────────┴───────────┘
-A `Tag` has representation `TagRepresentationType`, which will probably be a `u32`. The head and tail
+```
+A `Tag` has representation `TagRepresentationType`, which will probably be a `i32`. The head and tail
 values will have type `Value` (an enum) in client code, which is represented internally and on the
 heap by a `ValueRepresentationType`, a `usize`. With very little effort, `ValueRepresentationType`
 could probably be a `u32`, but this is not what Miranda does on 64-bit systems, so neither do we.
 
-As is common in functional programming languages, Miranda treats code as data, storing what is essentially the AST
-of the code on the heap with the rest of the data. In the context of code, a HeapCell can be thought of as a bytecode
-consisting of an instruction stored in the `tag` and up to two arguments, one in `head` and one in `tail`. Larger
-pieces of code are built up using composition, where references to nested instructions are stored in `head`/`tail`.
+As is common in functional programming languages, Miranda treats code as data, storing the code as the
+composition of combinators, what is essentially the AST of the code, on the heap with the rest of the
+data. In the context of code, a HeapCell can be thought of as a bytecode consisting of an instruction
+stored in the `tag` and up to two arguments, one in `head` and one in `tail`. Larger pieces of code
+are built up using composition, where references to nested instructions are stored in `head`/`tail`.
 
 Miranda stores the addresses of C-style (null-terminated) strings as values when it needs to reference a string. We
 instead intern strings and store the interned string's handle as values.
@@ -58,7 +61,7 @@ pub mod combinator;
 pub mod tag;
 pub mod types;
 mod identifier;
-mod values;
+pub(crate) mod values;
 mod heap;
 
 
@@ -76,20 +79,32 @@ pub use crate::{
 };
 
 /// The type used to represent tokens, combinators, pointers, Randa types...
-// Miranda uses size of a pointer, 64-bits, which removes an indirection for pointer data.
-// If the bit-width of `ValueRepresentationType` changes, synchronize it with
-//    * `Heap::resolve_string()`
-//    * instances of `IdentifierValueType::from_usize`
-pub(crate) type ValueRepresentationType = usize;
-pub const TOKEN_BASE            : ValueRepresentationType = 256; // There are 80 token values.
-pub const COMBINATOR_BASE       : ValueRepresentationType = 336; // There are 141 combinators.
-pub const ATOM_LIMIT            : ValueRepresentationType = COMBINATOR_BASE + 141; // = 477
+/// Miranda uses size of a pointer, 64-bits, which removes an indirection for pointer data.
+/// If the bit-width of `ValueRepresentationType` changes, synchronize it with
+///    * `Heap::resolve_string()`
+///    * instances of `IdentifierValueType::from_usize`
+pub(crate) type ValueRepresentationType = isize;
+pub const TOKEN_BASE     : ValueRepresentationType = 256; // There are 80 token values.
+pub const COMBINATOR_BASE: ValueRepresentationType = 336; // There are 141 combinators.
+pub const ATOM_LIMIT     : ValueRepresentationType = COMBINATOR_BASE + 141; // = 477
 
 
+/**
+  The `File` struct is an implementation language struct corresponding to the following Miranda structure (from
+  Miranda's `data.h`):
+      `files` is a cons list of elements, each of which is of the form
+          `cons(cons(fileinfo(filename,mtime),share),definienda)`
+      where `share` (=0,1) says if repeated instances are shareable. Current script at
+      the front followed by subsidiary files due to `%insert` and `%include` elements due
+      to `%insert` have `NIL` `definienda` (they are attributed to the inserting script).
+
+  (A definiendum is a term that is being defined or clarified. The plural form of definiendum is definienda.)
+*/
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 pub struct File<'t> {
   name      : &'t str,
-  mtime     : &'t str, // type?
-  sharable  : bool,   // repeated instances are shareable?
-  definienda: u32     // type??
+  mtime     : &'t str, // What is this field?
+  sharable  : bool,    // Are repeated instances shareable.
+  definienda: u32      // A definiendum is a term that is being defined or clarified.
+                       // The plural form of definiendum is definienda.
 }

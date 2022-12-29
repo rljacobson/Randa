@@ -1,0 +1,30 @@
+Implement:
+
+   - [ ] `listdiff_fn`, a `Value`
+   - [ ] `block`
+   - [ ] `compose`
+   - [ ] `heap.make_id`
+   - [ ] `syntax`
+   - [ ] `errs`, a `Value`
+   - [ ] `label`
+   - [ ] `strictif`,  a bool
+   - [ ] `SYNERR`
+   - [ ] `layout`
+   - [ ] `setlmargin`
+   - [ ] `unsetlmargin`
+   - [ ] `compzf`
+   - [ ] `pair`
+   - [ ] `inlex`
+   - [ ] `redtvars`
+   - [ ] `decltype`
+   - [ ] `specify`
+   - [ ] `add1()`
+   - [ ] `is_nat()`
+   - [ ] `get_int()`
+   - [ ] `get_id()`
+   - [ ] `member()`
+   - [ ] `acterror()`
+   - [ ] `lexstates`,  an `i32` or `RawValue` ?
+   - [ ] ``
+   - [ ] ``
+   - [ ] ``

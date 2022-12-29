@@ -6,9 +6,8 @@
 use std::fmt::{Display, Formatter};
 
 use logos::Logos;
-// use crate::logos::Logos;
 
-use saucepan::Span;
+// use saucepan::Span;
 // use num_traits::{FromPrimitive, ToPrimitive, Primitive};
 
 use crate::{
@@ -107,7 +106,7 @@ static TOKEN_STRINGS: [&str; 80] = [
 
 // Equivalent to `#define`s in y.tab.h
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, Logos, Primitive)]
-#[repr(usize)]
+#[repr(i32)]
 pub enum Token{
   Value                                 = 256, // = 0 + TOKEN_BASE,  // VALUE
   Eval                                  = 257, // = 1 + TOKEN_BASE,  // EVAL
@@ -194,7 +193,7 @@ pub enum Token{
   #[token("mod")]
   Remainder                             = 302, // = 46 + TOKEN_BASE, // "mod"
   #[token("div")]
-  IntegerDivide                         = 303, // = 47 + TOKEN_BASE, // "div"
+  DivideInteger                         = 303, // = 47 + TOKEN_BASE, // "div"
   #[regex(r"\$[a-z][a-zA-Z0-9_']*")]
   InfixName                             = 304, // = 48 + TOKEN_BASE, // $NAME
   #[regex(r"\$[A-Z][a-zA-Z0-9_']*")]
@@ -216,7 +215,7 @@ pub enum Token{
   #[token("*")]
   Times                                 = 313, // = 57 + TOKEN_BASE, // "*"
   #[token("/")]
-  Divide                                = 314, // = 58 + TOKEN_BASE, // "/"
+  DivideFloat                           = 314, // = 58 + TOKEN_BASE, // "/"
   #[token("^")]
   Caret                                 = 315, // = 59 + TOKEN_BASE, // "^"
   #[token(".")]
@@ -257,14 +256,11 @@ pub enum Token{
   Float                                 = 333, // = 77 + TOKEN_BASE, // FLOAT
   EOF                                   = 334, // = 78 + TOKEN_BASE, // EOF
 
-
   #[error]
   #[regex(r"[ \t]*\|\|[^\n]*\n", logos::skip)]
   #[regex(r"[ \t]*", logos::skip)]
   Error = 335, // = 79 + TOKEN_BASE,  // ERROR
 }
-
-
 
 
 impl Display for Token {
@@ -276,7 +272,7 @@ impl Display for Token {
 impl Token {
   pub fn string_representation(&self) -> &str {
     // println!("self: {}\tTOKEN_BASE: {}", (*self as ValueRepresentationType), TOKEN_BASE);
-    TOKEN_STRINGS[*self as usize - TOKEN_BASE]
+    TOKEN_STRINGS[(*self as isize - TOKEN_BASE) as usize]
   }
 
   pub fn into_value(self) -> Value {

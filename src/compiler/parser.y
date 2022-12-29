@@ -4,6 +4,7 @@
 */
 
 %define api.parser.struct {Parser}
+%define api.parser.generic {<'t /* 'fix quotes */>}
 %define api.value.type {Value}
 %define api.parser.check_debug { self.debug }
 
@@ -13,14 +14,24 @@
 %code use {
 // all use goes here
 use super::{
-  token::Token as LexerToken,
-  token_wrapper::TokenWrapper as Token,
+  token::Token,
   lexer::Lexer,
-  error::Error,
-  Loc
+  errors::LexerError,
+  Loc,
 };
 
-use crate::data::values;
+use crate::{
+    data::{
+        tag::Tag,
+        values::{
+            Value,
+            RawValue
+        },
+        combinator::Combinator,
+        Heap,
+    }
+};
+
 }
 
 %code parser_fields {
@@ -29,7 +40,18 @@ use crate::data::values;
   /// Enables debug printing
   pub debug: bool,
   /// The heap on which everything is constructed.
-  heap: &mut Heap,
+  heap: Heap,
+
+  lexstates   : RawValue,
+
+  // Parser state.
+  inbnf             : u8,   // 0=false, 1=true, 2=something about offside rule
+  inexplist         : bool,
+  inlex             : u8,   // 0=false, 1=true, 2=??
+  tvarscope         : bool,
+
+  sreds             : i16,  // counts something
+  open_bracket_count: i16,
 }
 
 %code {
@@ -41,8 +63,8 @@ use crate::data::values;
     AbsoluteType With Diagonal EqualEqual Free Include Export Type Otherwise
     Show PathName BNF Lex EndIR ErrorSymbol EndSymbol EmptySymbol ReadVals LexDef
     CharClass AntiCharClass Begin RightArrow PlusPlus MinusMinus DotDot Vel
-    GreaterEqual NotEqual LessEqual Remainder IntegerDivide InfixName
-    InfixCName Colon Ampersand Greater Equal Less Plus Minus Times Divide
+    GreaterEqual NotEqual LessEqual Remainder DivideInteger InfixName
+    InfixCName Colon Ampersand Greater Equal Less Plus Minus Times DivideFloat
     Caret Dot Bang Tilde Hash Comma Pipe QuestionMark Semicolon Newline
     OpenBrace CloseBrace OpenParenthesis CloseParenthesis OpenBracket
     CloseBracket StringLiteral Integer Float
@@ -62,6 +84,10 @@ use crate::data::values;
 //%token CMBASE  /* Unnecessary: placeholder to start combinator values */
 
 %{
+
+// Used so often.
+static NIL: Value = Value::Combinator(Combinator::Nil);
+
 /*
 Miranda has text representation of tokens here, but we don't need that,
 because we defined them in `Token::name()`.
@@ -72,14 +98,16 @@ Miranda has all of this global state:
 
   extern word listdiff_fn, indent_fn, outdent_fn;
   word lastname=0;
-  word suppressids=NIL;
   word idsused=NIL;
   word tvarscope=0;
   word includees=NIL, embargoes=NIL, exportfiles=NIL, freeids=NIL, exports=NIL;
   word lexdefs=NIL, lexstates=NIL, inlex=0, inexplist=0;
   word inbnf=0, col_fn=0, fnts=NIL, eprodnts=NIL, nonterminals=NIL, sreds=0;
   word ihlist=0, ntspecmap=NIL, ntmap=NIL, lasth=0;
-  word obrct=0;
+  word open_bracket_count=0;
+
+  // Global state in Miranda that is apparently not used.
+  word suppressids=NIL;
 
 
 
@@ -189,12 +217,12 @@ diop1:
     | PlusPlus { $$ = Combinator::Append.into(); }
     | Colon { $$ = Combinator::P.into(); }
     | MinusMinus { $$ = listdiff_fn; }
-    | Vel { $$ = Combinator::OR.into(); }
+    | Vel { $$ = Combinator::Or.into(); }
     | Ampersand { $$ = Combinator::And.into(); }
     | relop
     | Times { $$ = Combinator::Times.into(); }
-    | Divide { $$ = Combinator::Divide.into(); }
-    | IntegerDivide { $$ = Combinator::IntegerDivide.into(); }
+    | DivideFloat { $$ = Combinator::DivideFloat.into(); }
+    | DivideInteger { $$ = Combinator::DivideInteger.into(); }
     | Remainder { $$ = Combinator::Remainder.into(); }
     | Caret { $$ = Combinator::Power.into(); }
     | Dot { $$ = Combinator::B.into(); }
@@ -204,12 +232,12 @@ diop1:
     ;
 
 relop:
-    Greater { $$ = GR; }
-    | GreaterEqual { $$ = GRE; }
-    | eqop { $$ = EQ; }
-    | NotEqual { $$ = NEQ; }
-    | LessEqual { $$ = self.heap.apply(C, GRE); }
-    | Less { $$ = self.heap.apply(C, GR); }
+    Greater { $$ = Combinator::Gr.into(); }
+    | GreaterEqual { $$ = Combinator::Gre.into(); }
+    | eqop { $$ = Combinator::Eq.into(); }
+    | NotEqual { $$ = Combinator::NEq.into(); }
+    | LessEqual { $$ = self.heap.apply(Combinator::C.into(), Combinator::Gre.into()); }
+    | Less { $$ = self.heap.apply(Combinator::C.into(), Combinator::Gr.into()); }
     ;
 
 eqop:
@@ -225,14 +253,14 @@ rhs:
     ;
 
 cases:
-    exp Comma if exp { $$ = self.heap.cons(self.heap.apply2(COND, $4, $1), NIL); }
+    exp Comma if exp { $$ = self.heap.cons(self.heap.apply2(Combinator::Cond.into(), $4, $1), NIL); }
     | exp Comma Otherwise {
-    	let ow = self.heap.apply(Otherwise, $1);
-    	$$ = self.heap.cons(ow, NIL);
+        let ow = self.heap.apply(Token::Otherwise.into(), $1);
+        $$ = self.heap.cons(ow, NIL);
     }
     | cases reindent ElseEqual alt {
         $$ = self.heap.cons($4, $1);
-        if(self.hd_hd($1) == Otherwise){
+        if self.hd_hd($1) == Token::Otherwise.into() {
           syntax("\"otherwise\" must be last case\n");
         }
       }
@@ -242,10 +270,10 @@ alt:
     here exp {
         errs=$1;
         syntax("obsolete syntax, \", otherwise\" missing\n");
-        $$ = self.heap.apply(Otherwise, label($1, $2));
+        $$ = self.heap.apply(Token::Otherwise.into(), label($1, $2));
       }
-    | here exp Comma if exp { $$ = label($1, self.heap.apply2(COND, $5, $2)); }
-    | here exp Comma Otherwise { $$ = self.heap.apply(Otherwise, label($1, $2)); }
+    | here exp Comma if exp { $$ = label($1, self.heap.apply2(Combinator::Cond.into(), $5, $2)); }
+    | here exp Comma Otherwise { $$ = self.heap.apply(Token::Otherwise.into(), label($1, $2)); }
     ;
 
 if:
@@ -296,68 +324,68 @@ liste:  /* NB - returns list in reverse order */
     ;
 
 e1:
-    Tilde e1 %prec Equal { $$ = self.heap.apply(NOT, $2); }
-    | e1 PlusPlus e1 { $$ = self.heap.apply2(Append, $1, $3); }
+    Tilde e1 %prec Equal { $$ = self.heap.apply(Combinator::Not.into(), $2); }
+    | e1 PlusPlus e1 { $$ = self.heap.apply2(Combinator::Append.into(), $1, $3); }
     | e1 Colon e1 { $$ = self.heap.cons($1, $3); }
     | e1 MinusMinus e1 { $$ = self.heap.apply2(listdiff_fn, $1, $3);  }
-    | e1 Vel e1 { $$ = self.heap.apply2(OR, $1, $3); }
-    | e1 Ampersand e1 { $$ = self.heap.apply2(And, $1, $3); }
+    | e1 Vel e1 { $$ = self.heap.apply2(Combinator::Or.into(), $1, $3); }
+    | e1 Ampersand e1 { $$ = self.heap.apply2(Combinator::And.into(), $1, $3); }
     | reln
     | e2
     ;
 
 es1:                     /* e1 or presection */
-    Tilde e1 %prec Equal { $$ = self.heap.apply(NOT, $2); }
-    | e1 PlusPlus e1 { $$ = self.heap.apply2(Append, $1, $3); }
-    | e1 PlusPlus { $$ = self.heap.apply(Append, $1); }
+    Tilde e1 %prec Equal { $$ = self.heap.apply(Combinator::Not.into(), $2); }
+    | e1 PlusPlus e1 { $$ = self.heap.apply2(Combinator::Append.into(), $1, $3); }
+    | e1 PlusPlus { $$ = self.heap.apply(Combinator::Append.into(), $1); }
     | e1 Colon e1 { $$ = self.heap.cons($1, $3); }
-    | e1 Colon { $$ = self.heap.apply(P, $1); }
+    | e1 Colon { $$ = self.heap.apply(Combinator::P.into(), $1); }
     | e1 MinusMinus e1 { $$ = self.heap.apply2(listdiff_fn, $1, $3);  }
     | e1 MinusMinus { $$ = self.heap.apply(listdiff_fn, $1);  }
-    | e1 Vel e1 { $$ = self.heap.apply2(OR, $1, $3); }
-    | e1 Vel { $$ = self.heap.apply(OR, $1); }
-    | e1 Ampersand e1 { $$ = self.heap.apply2(And, $1, $3); }
-    | e1 Ampersand { $$ = self.heap.apply(And, $1); }
+    | e1 Vel e1 { $$ = self.heap.apply2(Combinator::Or.into(), $1, $3); }
+    | e1 Vel { $$ = self.heap.apply(Combinator::Or.into(), $1); }
+    | e1 Ampersand e1 { $$ = self.heap.apply2(Combinator::And.into(), $1, $3); }
+    | e1 Ampersand { $$ = self.heap.apply(Combinator::And.into(), $1); }
     | relsn
     | es2
     ;
 
 e2:
-    Minus e2 %prec Minus { $$ = self.heap.apply(NEG, $2); }
-    | Hash e2 %prec Dot { $$ = self.heap.apply(LENGTH, $2);  }
-    | e2 Plus e2 { $$ = self.heap.apply2(Plus, $1, $3); }
-    | e2 Minus e2 { $$ = self.heap.apply2(Minus, $1, $3); }
-    | e2 Times e2 { $$ = self.heap.apply2(Times, $1, $3); }
-    | e2 Divide e2 { $$ = self.heap.apply2(Divide, $1, $3); }
-    | e2 IntegerDivide e2 { $$ = self.heap.apply2(IntegerDivide, $1, $3); }
-    | e2 Remainder e2 { $$ = self.heap.apply2(Remainder, $1, $3); }
-    | e2 Caret e2 { $$ = self.heap.apply2(Power, $1, $3); }
-    | e2 Dot e2 { $$ = self.heap.apply2(B, $1, $3);  }
-    | e2 Bang e2 { $$ = self.heap.apply2(SUBSCRIPT, $3, $1); }
+    Minus e2 %prec Minus { $$ = self.heap.apply(Combinator::Neg.into(), $2); }
+    | Hash e2 %prec Dot { $$ = self.heap.apply(Combinator::Length.into(), $2);  }
+    | e2 Plus e2 { $$ = self.heap.apply2(Combinator::Plus.into(), $1, $3); }
+    | e2 Minus e2 { $$ = self.heap.apply2(Combinator::Minus.into(), $1, $3); }
+    | e2 Times e2 { $$ = self.heap.apply2(Combinator::Times.into(), $1, $3); }
+    | e2 Divide e2 { $$ = self.heap.apply2(Combinator::Divide.into(), $1, $3); }
+    | e2 IntegerDivide e2 { $$ = self.heap.apply2(Combinator::IntegerDivide.into(), $1, $3); }
+    | e2 Remainder e2 { $$ = self.heap.apply2(Combinator::Remainder.into(), $1, $3); }
+    | e2 Caret e2 { $$ = self.heap.apply2(Combinator::Power.into(), $1, $3); }
+    | e2 Dot e2 { $$ = self.heap.apply2(Combinator::B.into(), $1, $3);  }
+    | e2 Bang e2 { $$ = self.heap.apply2(Combinator::Subscript.into(), $3, $1); }
     | e3
     ;
 
 es2:               /* e2 or presection */
-    Minus e2 %prec Minus { $$ = self.heap.apply(NEG, $2); }
-    | Hash e2 %prec Dot { $$ = self.heap.apply(LENGTH, $2);  }
-    | e2 Plus e2 { $$ = self.heap.apply2(Plus, $1, $3); }
-    | e2 Plus { $$ = self.heap.apply(Plus, $1); }
-    | e2 Minus e2 { $$ = self.heap.apply2(Minus, $1, $3); }
-    | e2 Minus { $$ = self.heap.apply(Minus, $1); }
-    | e2 Times e2 { $$ = self.heap.apply2(Times, $1, $3); }
-    | e2 Times { $$ = self.heap.apply(Times, $1); }
-    | e2 Divide e2 { $$ = self.heap.apply2(Divide, $1, $3); }
-    | e2 Divide { $$ = self.heap.apply(Divide, $1); }
-    | e2 IntegerDivide e2 { $$ = self.heap.apply2(IntegerDivide, $1, $3); }
-    | e2 IntegerDivide { $$ = self.heap.apply(IntegerDivide, $1); }
-    | e2 Remainder e2 { $$ = self.heap.apply2(Remainder, $1, $3); }
-    | e2 Remainder { $$ = self.heap.apply(Remainder, $1); }
-    | e2 Caret e2 { $$ = self.heap.apply2(Power, $1, $3); }
-    | e2 Caret { $$ = self.heap.apply(Power, $1); }
-    | e2 Dot e2 { $$ = self.heap.apply2(B, $1, $3);  }
-    | e2 Dot { $$ = self.heap.apply(B, $1);  }
-    | e2 Bang e2 { $$ = self.heap.apply2(SUBSCRIPT, $3, $1); }
-    | e2 Bang { $$ = self.heap.apply2(C, SUBSCRIPT, $1); }
+    Minus e2 %prec Minus { $$ = self.heap.apply(Combinator::Neg.into(), $2); }
+    | Hash e2 %prec Dot { $$ = self.heap.apply(Combinator::Length.into(), $2);  }
+    | e2 Plus e2 { $$ = self.heap.apply2(Combinator::Plus.into(), $1, $3); }
+    | e2 Plus { $$ = self.heap.apply(Combinator::Plus.into(), $1); }
+    | e2 Minus e2 { $$ = self.heap.apply2(Combinator::Minus.into(), $1, $3); }
+    | e2 Minus { $$ = self.heap.apply(Combinator::Minus.into(), $1); }
+    | e2 Times e2 { $$ = self.heap.apply2(Combinator::Times.into(), $1, $3); }
+    | e2 Times { $$ = self.heap.apply(Combinator::Times.into(), $1); }
+    | e2 Divide e2 { $$ = self.heap.apply2(Combinator::Divide.into(), $1, $3); }
+    | e2 Divide { $$ = self.heap.apply(Combinator::Divide.into(), $1); }
+    | e2 IntegerDivide e2 { $$ = self.heap.apply2(Combinator::IntegerDivide.into(), $1, $3); }
+    | e2 IntegerDivide { $$ = self.heap.apply(Combinator::IntegerDivide.into(), $1); }
+    | e2 Remainder e2 { $$ = self.heap.apply2(Combinator::Remainder.into(), $1, $3); }
+    | e2 Remainder { $$ = self.heap.apply(Combinator::Remainder.into(), $1); }
+    | e2 Caret e2 { $$ = self.heap.apply2(Combinator::Power.into(), $1, $3); }
+    | e2 Caret { $$ = self.heap.apply(Combinator::Power.into(), $1); }
+    | e2 Dot e2 { $$ = self.heap.apply2(Combinator::B.into(), $1, $3);  }
+    | e2 Dot { $$ = self.heap.apply(Combinator::B.into(), $1);  }
+    | e2 Bang e2 { $$ = self.heap.apply2(Combinator::Subscript.into(), $3, $1); }
+    | e2 Bang { $$ = self.heap.apply2(Combinator::C.into(), Combinator::Subscript.into(), $1); }
     | es3
     ;
 
@@ -386,13 +414,13 @@ reln:
         /* EFFICIENCY PROBLEM - subject gets re-evaluated (and
             retypechecked) - fix later */
             let hd = self.heap[$1].head;
-        let subject = if self.heap[hd].head == And {
+        let subject = if self.heap[hd].head == Combinator::And.into() {
           self.tl_tl($1)
         } else {
           self.heap[$1].tail
         };
-        let rhs = self.heap.apply2($2, subject, $3);
-        $$ = self.heap.apply2(And, $1, rhs);
+        let rhs = self.heap.apply2($2, subject.into(), $3);
+        $$ = self.heap.apply2(Combinator::And.into(), $1, rhs);
       }
     ;
 
@@ -403,13 +431,13 @@ relsn:                     /* reln or presection */
         /* EFFICIENCY PROBLEM - subject gets re-evaluated (and
                     retypechecked) - fix later */
 
-        let subject = if self.hd_hd($1) == And {
+        let subject = if self.hd_hd($1) == Combinator::And.into() {
           self.tl_tl($1)
         } else {
           self.heap[$1].tail
         };
-        let rhs = self.heap.apply2($2, subject, $3);
-        $$ = self.heap.apply2(And, $1, rhs);
+        let rhs = self.heap.apply2($2, subject.into(), $3);
+        $$ = self.heap.apply2(Combinator::And.into(), $1, rhs);
       }
     ;
 
@@ -428,7 +456,7 @@ arg:
                       while lexstates!=NIL {
                         if !echoed {
                           if echoing {
-                            println!("");
+                            println!();
                           }
                           echoed = 1;
                         }
@@ -482,21 +510,21 @@ arg:
     | OpenBracket exp CloseBracket { $$ = self.heap.cons($2, NIL); }
     | OpenBracket exp Comma exp CloseBracket {
         let rhs = self.heap.cons($4, NIL);
-    	$$ = self.heap.cons($2, rhs);
+        $$ = self.heap.cons($2, rhs);
     }
     | OpenBracket exp Comma exp Comma liste CloseBracket {
        let rhs = self.heap.cons($4, reverse($6));
-    	$$ = self.heap.cons($2, rhs);
+        $$ = self.heap.cons($2, rhs);
     }
-    | OpenBracket exp DotDot exp CloseBracket { $$ = self.heap.apply3(STEPUNTIL, big_one, $4, $2); }
-    | OpenBracket exp DotDot CloseBracket { $$ = self.heap.apply2(STEP, big_one, $2); }
+    | OpenBracket exp DotDot exp CloseBracket { $$ = self.heap.apply3(Combinator::StepUntil.into(), big_one, $4, $2); }
+    | OpenBracket exp DotDot CloseBracket { $$ = self.heap.apply2(Combinator::Step.into(), big_one, $2); }
     | OpenBracket exp Comma exp DotDot exp CloseBracket {
-        let minus_expr = self.heap.apply2(Minus, $4, $2);
-        $$ = self.heap.apply3(STEPUNTIL, minus_expr, $6, $2);
+        let minus_expr = self.heap.apply2(Combinator::Minus.into(), $4, $2);
+        $$ = self.heap.apply3(Combinator::StepUntil.into(), minus_expr, $6, $2);
     }
     | OpenBracket exp Comma exp DotDot CloseBracket {
-        let minus_expr= self.heap.apply2(Minus, $4, $2);
-        $$ = self.heap.apply2(STEP, minus_expr, $2);
+        let minus_expr= self.heap.apply2(Combinator::Minus.into(), $4, $2);
+        $$ = self.heap.apply2(Combinator::Step.into(), minus_expr, $2);
      }
     | OpenBracket exp Pipe qualifiers CloseBracket {
         $$ = if SYNERR {
@@ -517,86 +545,92 @@ arg:
     | OpenParenthesis diop1 e1 CloseParenthesis /* postsection */ {
         /* optimisation */
         let hd = self.heap[$2].head;
-        $$ = if self.heap[$2].tag == AP && hd == C {
-          self.heap.apply(hd, $3)
+        $$ = if self.heap[$2].tag == Tag::Ap && hd == Combinator::C.into() {
+          self.heap.apply(hd.into(), $3)
         } else {
-          self.heap.apply2(C, $2, $3)
+          self.heap.apply2(Combinator::C.into(), $2, $3)
         };
       }
-    | OpenParenthesis CloseParenthesis { $$ = Void; }  /* the void tuple */
+    | OpenParenthesis CloseParenthesis {
+        $$ = self.const_(HeapConstant::Void); /* the void tuple */
+      }
     | OpenParenthesis exp Comma liste CloseParenthesis {
-        if self.heap[$4].tail==NIL {
+    	/*
+    	A tuple. The heap representation of the tuple `(a1, ..., an)` is
+        `self.heap.cons(a1, self.heap.cons(a2, ...pair(a(n-1), an)))`.
+        */
+        if self.heap[$4].tail.into() == NIL {
           $$ = pair($2, self.heap[$4].head);
         } else {
           let tl = self.heap[$4].tail;
           $$ = pair(self.heap[tl].head, self.heap[$4].head);
-          $4 = self.heap[tl].tail;
-          while ($4!=NIL) {
-            let hd = self.heap[$4].head;
-            $$ = self.heap.cons(hd, $$);
-            $4 = self.heap[$4].tail;
+          let mut next_item = self.heap[tl].tail;
+          while next_item != NIL {
+            let hd = self.heap[next_item].head;
+            $$ = self.heap.cons(hd.into(), $$);
+            next_item = self.heap[next_item].tail.into();
           }
           $$ = self.heap.cons($2, $$);
         }
-        /* representation of the tuple (a1, ..., an) is
-            self.heap.cons(a1, self.heap.cons(a2, ...pair(a(n-1), an))) */
+
       }
     ;
 
 lexrules:
-    lexrules lstart here re indent { if(!SYNERR){ inlex=2; } }
+    lexrules lstart here re indent { if !SYNERR { inlex = 2; } }
 
-    Arrow exp lpostfix { if(!SYNERR){ inlex=1; } } outdent {
-        if $9<0 && e_re($4) {
+    Arrow exp lpostfix { if !SYNERR { inlex = 1; } } outdent {
+        if $9 < 0 && e_re($4) {
           errs = $3;
           syntax("illegal lex rule - lhs matches empty\n");
         }
         let cons_a = self.heap.cons($2, 1+$9);
         let cons_b = self.heap.cons($4, label($3, $8));
-        let cons = self.heap.cons(cons_a, cons_a)
+        let cons = self.heap.cons(cons_a, cons_a);
         $$ = self.heap.cons(cons, $1);
       }
     | lexdefs { $$ = NIL; }
     ;
 
 lstart:
-    /* empty */ { $$ = 0; }
+    /* empty */ { $$ = RawValue(0).into(); }
     | Less cnames Greater {
         let mut ns = NIL;
-	while $2 != NIL {
-	  let mut x = &lexstates;
-	  let mut i = 1;
+        let mut next_item = $2;
+    while next_item != NIL {
+      let mut x = &lexstates;
+      let mut i = 1;
 
-	  loop {
-	      if x != NIL && self.hd_hd(x) != self.heap[$2].head {
-		  break;
-	      }
-	      i += 1;
-	      x = &self.heap[*x].tail;
-	  }
-
-	  if *x == NIL {
-	      let hd = self.heap[$2].head;
-	      let cons = self.heap.cons(hd, 2);
-	      *x = self.heap.cons(cons, NIL);
-	  } else {
-	      self.hd_tl(*x) |= 2;
-	  }
-	  ns = add1(i, ns);
-	  $2 = self.heap[$2].tail
-	}
-	$$ = ns;
+      loop {
+          if x != NIL && self.hd_hd(x) != self.heap[next_item].head {
+          break;
+          }
+          i += 1;
+          x = &self.heap[*x].tail;
+      }
+        // Todo: What does any of this do?
+      if *x == NIL {
+          let hd = self.heap[next_item].head;
+          let cons = self.heap.cons(hd.into(), RawValue(2).into());
+          *x = self.heap.cons(cons, NIL);
+      } else {
+          self.hd_tl(*x) |= 2;
+      }
+      ns = add1(i, ns);
+      next_item = self.heap[next_item].tail.into()
+    }
+    $$ = ns;
       }
     ;
 
 cnames:
-    ConstructorName { $$=self.heap.cons($1, NIL); }
+    ConstructorName { $$ = self.heap.cons($1, NIL); }
     | cnames ConstructorName {
         if member($1, $2) {
           println!(
             "{}syntax error: repeated name \"{}\" in start conditions\n",
             if echoing {"\n"} else {""},
-            get_id( $2)
+            get_id($2)
           );
           acterror();
         }
@@ -605,57 +639,57 @@ cnames:
     ;
 
 lpostfix:
-        /* empty */ { $$ = -1; }
+        /* empty */ { $$ = RawValue(-1).into(); }
         | Begin ConstructorName
         {
           let mut x = &lexstates;
-	      let mut i = 1;
-	      loop
-	      {
-		if *x == NIL { break; }
-		let hd = self.heap[*x].head;
-		if self.heap[hd].head == $2 { break; }
-		i += 1;
-		x = &tl[*x];
-	      }
-	      if *x == NIL {
-		  let cons = self.heap.cons($2, 1);
-		  *x = self.heap.cons(cons, NIL);
-	      } else {
-		let hd = self.heap[*x].head;
-		self.heap[hd].tail |= 1;
-	      }
-            $$ = i;
+          let mut i = 1;
+          loop
+          {
+        if *x == NIL { break; }
+        let hd = self.heap[x].head;
+        if self.heap[hd].head == $2 { break; }
+        i += 1;
+        x = self.heap[x].tail;
+          }
+          if *x == NIL {
+          let cons = self.heap.cons($2, RawValue(1).into());
+          x = self.heap.cons(cons, NIL);
+          } else {
+        let hd = self.heap[x].head;
+        self.heap[hd].tail |= 1;
+          }
+            $$ = RawValue(i).into();
           }
         | Begin Constant {
-            if (!isnat($2) || get_int($2)!=0) {
+            if !isnat($2) || get_int($2)!=0 {
               syntax("%begin not followed by IDENTIFIER or 0\n");
             }
-            $$ = 0;
+            $$ = RawValue(0).into();
           }
         ;
 
 lexdefs:
     lexdefs LexDef indent Equal re outdent {
-    		let cons = self.heap.cons($2, $5);
-	    	lexdefs = self.heap.cons(cons, lexdefs);
-	    }
-    | /* empty */ { lexdefs = NIL; }
+            let cons = self.heap.cons($2, $5);
+            self.lexdefs = self.heap.cons(cons, self.lexdefs);
+        }
+    | /* empty */ { self.lexdefs = NIL; }
     ;
 
 re:   /* regular expression */
-    re1 Pipe re { $$ = self.heap.apply2(LEX_OR, $1, $3); }
+    re1 Pipe re { $$ = self.heap.apply2(Combinator::Lex_Or.into(), $1, $3); }
     | re1
     ;
 
 re1:
-    lterm Divide lterm { $$ = self.heap.apply2(LEX_RCONTEXT, $1, $3); }
-    | lterm Divide { $$ = self.heap.apply2(LEX_RCONTEXT, $1, 0); }
+    lterm Divide lterm { $$ = self.heap.apply2(Combinator::Lex_RContext.into(), $1, $3); }
+    | lterm Divide { $$ = self.heap.apply2(Combinator::Lex_RContext.into(), $1, RawValue(0).into()); }
     | lterm
     ;
 
 lterm:
-    lfac lterm { $$ = self.heap.apply2(LEX_SEQ, $1, $2); }
+    lfac lterm { $$ = self.heap.apply2(Combinator::Lex_Seq.into(), $1, $2); }
     | lfac
     ;
 
@@ -664,10 +698,10 @@ lfac:
         if (e_re($1)) {
           syntax("illegal regular expression - arg of * matches empty\n");
         }
-        $$ = self.heap.apply(LEX_STAR, $1);
+        $$ = self.heap.apply(Combinator::Lex_Star.into(), $1);
       }
-    | lunit Plus { $$ = self.heap.apply2(LEX_SEQ, $1, self.heap.apply(LEX_STAR, $1)); }
-    | lunit QuestionMark { $$ = self.heap.apply(LEX_OPT, $1); }
+    | lunit Plus { $$ = self.heap.apply2(Combinator::Lex_Seq.into(), $1, self.heap.apply(Combinator::Lex_Star.into(), $1)); }
+    | lunit QuestionMark { $$ = self.heap.apply(Combinator::Lex_Opt.into(), $1); }
     | lunit
     ;
 
@@ -676,21 +710,21 @@ lunit:
     | Constant {
         if(!isstring($1)){
           print!(
-	      "{}syntax error - unexpected token \"",
-	      if echoing {"\n"} else {""}
-	    );
-	    out(stdout,  yystack.owned_value_at(0));
-	    print!("\" in regular expression\n");
-	    acterror();
-	  };
+          "{}syntax error - unexpected token \"",
+          if echoing {"\n"} else {""}
+        );
+        out(stdout,  yystack.owned_value_at(0));
+        print!("\" in regular expression\n");
+        acterror();
+      };
         $$ = if $1==NILS {
-          self.heap.apply(LEX_STRING, NIL)
+          self.heap.apply(Combinator::Lex_String.into(), NIL)
         } else{
           if self.heap[$1].tail==NIL {
             let hd = self.heap[$1].head;
-            self.heap.apply(LEX_CHAR, hd)
+            self.heap.apply(Combinator::Lex_Char.into(), hd)
           } else{
-            self.heap.apply(LEX_STRING, $1)
+            self.heap.apply(Combinator::Lex_String.into(), $1)
           }
         };
       }
@@ -699,62 +733,62 @@ lunit:
           syntax("empty character class `` cannot match\n");
         }
         $$ = if self.heap[$1].tail==NIL {
-          self.heap.apply(LEX_CHAR, self.heap[$1].head)
+          self.heap.apply(Combinator::Lex_Char.into(), self.heap[$1].head)
         } else {
-          self.heap.apply(LEX_CLASS, $1)
+          self.heap.apply(Combinator::Lex_Class.into(), $1)
         };
       }
     | AntiCharClass {
-        let cons = self.heap.cons(ANTICHARCLASS, $1);
-        $$ = self.heap.apply(LEX_CLASS, cons);
+        let cons = self.heap.cons(Token::AntiCharClass.into(), $1);
+        $$ = self.heap.apply(Combinator::Lex_Class.into(), cons);
       }
-    | Dot { $$ = LEX_DOT; }
+    | Dot { $$ = Combinator::Lex_Dot.into(); }
     | name {
-        let x = lexdefs;
-	loop {
-	    if x == NIL { break; }
-	    let hd = self.heap[x].head;
-	    if self.heap[hd].head == $1 { break; }
-	    x=tl[x];
-	}
-	if x==NIL {
-	  print!(
-	    "{}syntax error: undefined lexeme {} in regular expression\n",
-	    if echoing {"\n"} else {""},
-	    get_id( $1 )
-	  );
-	  acterror();
-	} else {
-	    let hd = self.heap[x].head;
-	    $$ = self.heap[hd].tail;
-	}
+        let x = self.lexdefs;
+    loop {
+        if x == NIL { break; }
+        let hd = self.heap[x].head;
+        if self.heap[hd].head == $1 { break; }
+        x=tl[x];
+    }
+    if x==NIL {
+      print!(
+        "{}syntax error: undefined lexeme {} in regular expression\n",
+        if echoing {"\n"} else {""},
+        get_id( $1 )
+      );
+      acterror();
+    } else {
+        let hd = self.heap[x].head;
+        $$ = self.heap[hd].tail;
+    }
       }
     ;
 
 name: Name | ConstructorName ;
 
 qualifiers:
-    exp { $$ = self.heap.cons(self.heap.cons(GUARD, $1), NIL);  }
+    exp { $$ = self.heap.cons(self.heap.cons(Combinator::GUARD.into(), $1), NIL);  }
     | generator { $$ = self.heap.cons($1, NIL);  }
     | qualifiers Semicolon generator { $$ = self.heap.cons($3, $1);   }
-    | qualifiers Semicolon exp { $$ = self.heap.cons(self.heap.cons(GUARD, $3), $1);   }
+    | qualifiers Semicolon exp { $$ = self.heap.cons(self.heap.cons(Combinator::GUARD.into(), $3), $1);   }
     ;
 
 generator:
     e1 Comma generator {
         /* fix syntax to disallow patlist on lhs of iterate generator */
-        if (self.heap[$3].head==GENERATOR) {
+        if (self.heap[$3].head==Combinator::GENERATOR.into()) {
           let e = tl[tl[$3]];
           if (
-            tag[e]==AP
-            && tag[hd[e]]==AP
-            && (hd[hd[e]]==ITERATE || hd[hd[e]]==ITERATE1)
+            tag[e]==Tag::Ap
+            && tag[hd[e]]==Tag::Ap
+            && (hd[hd[e]]==Combinator::Iterate.into() || hd[hd[e]]==Combinator::Iterate1.into())
           )
           {
             syntax("ill-formed generator\n");
           }
         }
-        $$ = self.heap.cons(REPEAT, self.heap.cons(genlhs($1), $3));
+        $$ = self.heap.cons(Combinator::Repeat.into(), self.heap.cons(genlhs($1), $3));
         idsused = NIL;
       }
     | generator1
@@ -762,18 +796,18 @@ generator:
 
 generator1:
     e1 LeftArrow exp {
-        $$ = self.heap.cons(GENERATOR, self.heap.cons(genlhs($1), $3));
+        $$ = self.heap.cons(Combinator::Generator.into(), self.heap.cons(genlhs($1), $3));
         idsused = NIL;
       }
     | e1 LeftArrow exp Comma exp DotDot {
         let p = genlhs($1);
         idsused = NIL;
         $$ = self.heap.cons(
-          GENERATOR,
+          Combinator::Generator.into(),
           self.heap.cons(
             p,
             self.heap.apply2(
-              if irrefutable(p) {ITERATE} else {ITERATE1},
+              if irrefutable(p) {Combinator::Iterate.into()} else {Combinator::Iterate1.into()},
               lambda(p, $5),
               $3
             )
@@ -789,12 +823,12 @@ defs:
 
 def:
     v act2 indent Equal here rhs outdent {
-        let l = $1;
-        let r = $6;
+        let mut l = $1;
+        let mut r = $6;
         let f = head(l);
-        if (tag[f]==ID && !isconstructor(f)) {
+        if self.heap[f].tag==Tag::Id && !isconstructor(f) {
           /* fnform defn */
-          while (tag[l]==AP) {
+          while self.heap[l].tag==Tag::Ap {
             r = lambda(self.heap[l].tail, r);
             l = self.heap[l].head;
           }
@@ -807,39 +841,51 @@ def:
 
     | spec {
         let h = reverse(self.heap[$1].head);
-        let hr = hd[tl[$1]];
-        let t = tl[tl[$1]];
-        while (h!=NIL && !SYNERR) {
+        let hr = self.heap.hd_tl($1);
+        let t = self.heap.tl_tl($1);
+        while h!=NIL && !SYNERR {
           specify(self.heap[h].head, t, hr);
           h = self.heap[h].tail;
         }
-        $$ = self.heap.cons(nill, NIL);
+        $$ = self.heap.cons(NIL, Combinator::Nil);
       }
 
     | AbsoluteType here typeforms indent With lspecs outdent {
         // extern word TABSTRS;
         // extern char *dicp, *dicq;
-        let x=reverse($6);
-        let ids = NIL;
-        let tids = NIL;
-        while (x!=NIL && !SYNERR) {
-          specify(hd[hd[x]], self.heap.cons(tl[tl[hd[x]]], NIL), hd[tl[hd[x]]]);
-          ids = self.heap.cons(hd[hd[x]], ids);
+        let mut x = reverse($6);
+        let mut ids = NIL;
+        let mut tids = NIL;
+        while x!=NIL && !SYNERR {
+          let hd_x = self.heap[x].head;
+          let hd_hd_x = self.heap[hd_x].head;
+          specify(
+            hd_hd_x,
+            self.heap.cons(
+              self.tl_tl(hd_x),
+              NIL
+            ),
+            self.hd_tl(hd_x)
+          );
+          ids = self.heap.cons(hd_hd_x, ids);
           x = self.heap[x].tail;
         }
         /* each id in specs has its id_type set to const(t, NIL) as a way
             of flagging that t is an abstract type */
         x = reverse($3);
-        while (x!=NIL && !SYNERR) {
-          let shfn;
+        while x!=NIL && !SYNERR {
           decltype(self.heap[x].head, abstract_t, undef_t, $2);
           tids = self.heap.cons(head(self.heap[x].head), tids);
           /* check for presence of showfunction */
-          (void)strcpy(dicp, "show");
-          (void)strcat(dicp, get_id(self.heap[tids].head));
-          dicq = dicp + strlen(dicp) + 1;
-          shfn = name();
-          if (member(ids, shfn)) {
+          // Are  dicp  and  dicq  parts of a hash table?
+          self.dicp = "show".to_string() + get_id(self.heap[tids].head);
+
+      // Todo: I can't make any sense of this. Is it  retrieving `Identifier` info? Then  use `get_identifier()`. Is
+      //       it  writing `Identifier` info? Then use `put_identifier()`.
+      // Two past the end?
+          self.dicq = dicp + strlen(dicp) + 1;
+          let shfn = name();
+          if member(ids, shfn) {
             t_showfn(self.heap[tids].head) = shfn;
           }
           x = self.heap[x].tail;
@@ -850,25 +896,27 @@ def:
 
     | typeform indent act1 here EqualEqual type act2 outdent {
         let x = redtvars(self.heap.apply($1, $6));
-        decltype(self.heap[x].head, synonym_t, self.heap[x].tail, $4);
+        decltype(self.heap[x].head, IdentifierValueType::Synonym, self.heap[x].tail, $4);
         $$ = self.heap.cons(nill, NIL);
       }
 
     | typeform indent act1 here Colon2Equal construction act2 outdent {
         let rhs = $6;
-        let r_ids = $6;
-        let n = 0;
-        while (r_ids!=NIL) {
-          r_ids = self.heap[r_ids].tail;
+        let mut r_ids = $6;
+        let mut n = 0;
+
+        while r_ids!=NIL {
+          r_ids = self.heap[r_ids].tail.into();
           n += 1;
         }
-        while (rhs!=NIL && !SYNERR) {
-          let h = self.heap[rhs].head;
-          let t = $1;
-          let stricts = NIL;
-          let i = 0;
-          while(tag[h]==AP) {
-            if (tag[self.heap[h].tail]==AP && hd[self.heap[h].tail]==strict_t) {
+
+        while rhs!=NIL && !SYNERR {
+          let mut h = self.heap[rhs].head;
+          let mut t = $1;
+          let mut stricts = NIL;
+          let mut i = 0;
+          while self.heap[h].tag==Tag::Ap {
+            if (tag[self.heap[h].tail]==Tag::Ap && hd[self.heap[h].tail]==strict_t) {
               stricts = self.heap.cons(i, stricts);
               self.heap[h].tail = tl[self.heap[h].tail];
             }
@@ -915,7 +963,7 @@ def:
           syntax("multiple %export statements are illegal\n");
         } else {
           if ($4==NIL && exportfiles==NIL && embargoes!=NIL) {
-            exportfiles = self.heap.cons(Plus, NIL);
+            exportfiles = self.heap.cons(Combinator::Plus.into(), NIL);
           }
           exports = self.heap.cons($2, $4);  /* self.heap.cons(hereinfo, identifiers) */
         }
@@ -1086,7 +1134,7 @@ binding:
         let x = redtvars(self.heap.apply($1, $5));
         let arity = 0;
         let h = self.heap[x].head;
-        while (tag[h]==AP) {
+        while (tag[h]==Combinator::AP.into()) {
           arity += 1;
           h = self.heap[h].head;
         }
@@ -1215,7 +1263,7 @@ ldef:
         let r = $6;
         word f = head(l);
         if(tag[f]==ID&&!isconstructor(f)) { /* fnform defn */
-          while(tag[l]==AP){
+          while(tag[l]==Combinator::AP.into()){
             r = lambda(self.heap[l].tail, r);
             l = self.heap[l].head;
           }
@@ -1243,7 +1291,7 @@ v1:
         if (!isnat($3)){
           syntax("inappropriate use of \"+\" in pattern\n");
         }
-        $$ = self.heap.apply2(Plus, $3, $1);
+        $$ = self.heap.apply2(Combinator::Plus.into(), $3, $1);
       }
     | Minus Constant {
         /* if(tag[$2]==DOUBLE)
@@ -1398,7 +1446,7 @@ parts: /* returned in reverse order */
     | parts PathName { $$ = $1; } /*the pathnames are placed on exportfiles in yylex*/
     | parts Plus {
         $$ = $1;
-        exportfiles = self.heap.cons(Plus, exportfiles);
+        exportfiles = self.heap.cons(Combinator::Plus.into(), exportfiles);
       }
     | Name { $$ = add1($1, NIL); }
     | Minus Name {
@@ -1408,7 +1456,7 @@ parts: /* returned in reverse order */
     | PathName { $$ = NIL; }
     | Plus {
         $$ = NIL;
-        exportfiles=self.heap.cons(Plus, exportfiles);
+        exportfiles=self.heap.cons(Combinator::Plus.into(), exportfiles);
       }
     ;
 
@@ -1684,14 +1732,14 @@ count_factors:
         syntax("unexpected token after empty\n");
         sreds = 0;
         $$ = NIL;
-	    }
-    | { obrct=0; } factors { }
+        }
+    | { open_bracket_count=0; } factors { }
     ;
 
 factors:
     factor { $$ = self.heap.cons($1, NIL); }
     | factors factor {
-        if (self.heap[$1].head==G_END) {
+        if (self.heap[$1].head==Combinator::G_END.into()) {
           syntax("unexpected token after end\n");
         }
         $$ = self.heap.cons($2, $1);
@@ -1704,25 +1752,42 @@ factor:
         $$ = self.heap.apply(outdent_fn, self.heap.apply2(indent_fn, getcol_fn(), $2));
       }
     | OpenBrace unit {
-        obrct += 1;
+        open_bracket_count += 1;
         $$ = self.heap.apply2(indent_fn, getcol_fn(), $2);
       }
     | unit CloseBrace {
-        obrct -= 1;
-	      if obrct < 0 {
-	        syntax("unmatched `}' in grammar rule\n");
-	      }
+        open_bracket_count -= 1;
+          if open_bracket_count < 0 {
+            syntax("unmatched `}' in grammar rule\n");
+          }
         $$ = self.heap.apply(outdent_fn, $1);
       }
     ;
 
 unit:
     symbol
-    | symbol Times { $$ = self.heap.apply(G_STAR, $1); }
+    | symbol Times { $$ = self.heap.apply(Combinator::G_STAR.into(), $1); }
     | symbol Plus {
-        $$ = self.heap.apply2(G_SEQ, $1, self.heap.apply2(G_SEQ, self.heap.apply(G_STAR, $1), self.heap.apply(G_RULE, self.heap.apply(C, P))));
+        $$ = self.heap.apply2(
+                    Combinator::G_SEQ.into(),
+                    $1,
+                    self.heap.apply2(
+                      Combinator::G_SEQ.into(),
+                      self.heap.apply(
+                        Combinator::G_STAR.into(),
+                        $1
+                      ),
+                      self.heap.apply(
+                        Combinator::G_RULE.into(),
+                        self.heap.apply(
+                          Combinator::C.into(),
+                          Combinator::P.into()
+                        )
+                      )
+                    )
+                  );
       }
-    | symbol QuestionMark { $$ = self.heap.apply(G_OPT, $1); }
+    | symbol QuestionMark { $$ = self.heap.apply(Combinator::G_OPT.into(), $1); }
     ;
 
 symbol:
@@ -1733,51 +1798,87 @@ symbol:
           ntmap = self.heap.cons(self.heap.cons($1, lasth), ntmap);
         }
       }
-    | EndSymbol { $$ = G_END; }
+    | EndSymbol { $$ = Combinator::G_END.into(); }
     | Constant {
         if(!isstring($1)) {
-          printf(
-            "%ssyntax error: illegal terminal ",
+          print!(
+            "{}syntax error: illegal terminal ",
             if echoing {"\n" }else {""}
           );
           out(stdout, $1);
-          printf(" (should be string-const)\n");
+          print!(" (should be string-const)\n");
           acterror();
         }
-        $$ = self.heap.apply(G_SYMB, $1);
+        $$ = self.heap.apply(Combinator::G_SYMB.into(), $1);
       }
-    | Caret { $$=G_STATE; }
-    | {inbnf=0;} OpenBracket exp {inbnf=1;} CloseBracket { $$ = self.heap.apply(G_SUCHTHAT, $3); }
-    | Minus { $$ = G_ANY; }
+    | Caret { $$=Combinator::G_STATE.into(); }
+    | {inbnf=0;} OpenBracket exp {inbnf=1;} CloseBracket { $$ = self.heap.apply(Combinator::G_SUCHTHAT.into(), $3); }
+    | Minus { $$ = Combinator::G_ANY.into(); }
     ;
 
 %%
 /*  end of Miranda rules  */
 
 
+
 impl Parser {
+    pub fn new(lexer: Lexer) -> Self {
+      Self {
+        yy_error_verbose: true,
+        yynerrs: 0,
+        yyerrstatus_: 0,
+        result: None,
+        debug: false,
+        yylexer: lexer,
 
-	// Todo: Do we need mut versions? We take `&mut self` but only return `&HeapCell.`
-	fn hd_hd(&mut self, idx: Into<usize>) -> &mut HeapCell {
-	  let hd = self.heap[x.into()].head;
-	  self.heap[hd.into()].head
-	}
+        lexstates : Combinator::Nil.into(),
+        inbnf: 0,
+        inexplist: false,
+        inlex: 0,
+        tvarscope: false,
+        sreds: 0,
+        open_bracket_count: 0,
 
-	fn hd_tl(&mut self, idx: Into<usize>) -> &mut HeapCell {
-	  let hd = self.heap[x.into()].head;
-	  self.heap[hd.into()].tail
-	}
-
-	fn tl_tl(&mut self, idx: Into<usize>) -> &mut HeapCell {
-	  let hd = self.heap[x.into()].tail;
-	  self.heap[hd.into()].tail
-	}
-
-	fn tl_hd(&mut self, idx: Into<usize>) -> &mut HeapCell {
-	  let hd = self.heap[x.into()].tail;
-	  self.heap[hd.into()].head
-	}
-
+        heap: Default::default(),
+      }
+    }
 
 
+    fn next_token(&mut self) -> Token {
+      match self.yylexer.yylex() {
+        Ok(token) => token,
+        Err(error) => {
+          eprintln!("Lexer error: {}", error);
+          panic!();
+          // return Ok(Self::YYABORT);
+        }
+      }
+    }
+
+
+    fn report_syntax_error(&mut self, ctx: &Context) {
+        let token_id: usize = ctx.token().code().try_into().unwrap();
+        let token_name = Lexer::TOKEN_NAMES[id];
+        let error_loc = ctx.location();
+
+        eprintln!("Unexpected token {} at {:?}", token_name, loc);
+    }
+
+
+    // Todo: Do we need mut versions? We take `&mut self` but only return `&HeapCell.`
+    fn hd_hd<T: Into<RawValue>>(&mut self, idx: T) -> &mut RawValue {
+        self.heap.hd_hd(idx.into().0)
+    }
+
+    fn hd_tl<T: Into<RawValue>>(&mut self, idx: T) -> &mut RawValue {
+        self.heap.hd_tl(idx.into().0)
+    }
+
+    fn tl_tl<T: Into<RawValue>>(&mut self, idx: T) -> &mut RawValue {
+        self.heap.tl_tl(idx.into().0)
+    }
+
+    fn tl_hd<T: Into<RawValue>>(&mut self, idx: T) -> &mut RawValue {
+        self.heap.tl_hd(idx.into().0)
+    }
 }

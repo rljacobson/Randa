@@ -5,11 +5,11 @@
  */
 
 
-// mod parser;
 pub mod token;
 pub mod errors;
 mod lexer;
-mod lexical_value;
+// mod lexical_value;
+mod parser;
 
 
 pub use saucepan::Span;

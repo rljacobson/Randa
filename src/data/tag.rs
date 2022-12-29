@@ -4,14 +4,13 @@
 
 */
 
-use num_traits::{FromPrimitive, ToPrimitive};
 
 // Keep in sync with `#[repr(u32)]` for Tag.
 // Miranda uses a char.
-pub type TagRepresentationType = u32;
+pub type TagRepresentationType = i32;
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, Primitive)]
-#[repr(u32)]
+#[repr(i32)]
 pub enum Tag {
   Atom            = 0,
   Double          = 1,

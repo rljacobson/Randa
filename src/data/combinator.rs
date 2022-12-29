@@ -157,7 +157,7 @@ static COMBINATOR_NAMES: [&str; 141] = [
 // endregion
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Primitive)]
-#[repr(usize)]
+#[repr(isize)]
 #[allow(non_camel_case_types)]
 pub enum Combinator{
   S            = 336, // = 0 + COMBINATOR_BASE   // "S"
@@ -216,9 +216,9 @@ pub enum Combinator{
   Minus        = 389, // = 53 + COMBINATOR_BASE  // "MINUS"
   Plus         = 390, // = 54 + COMBINATOR_BASE  // "PLUS"
   Times        = 391, // = 55 + COMBINATOR_BASE  // "TIMES"
-  IntDiv       = 392, // = 56 + COMBINATOR_BASE  // "INTDIV"
-  FDiv         = 393, // = 57 + COMBINATOR_BASE  // "FDIV"
-  Mod          = 394, // = 58 + COMBINATOR_BASE  // "MOD"
+  DivideInteger= 392, // = 56 + COMBINATOR_BASE  // "INTDIV"
+  DivideFloat  = 393, // = 57 + COMBINATOR_BASE  // "FDIV"
+  Remainder    = 394, // = 58 + COMBINATOR_BASE  // "MOD"
   Gr           = 395, // = 59 + COMBINATOR_BASE  // "GR"
   Gre          = 396, // = 60 + COMBINATOR_BASE  // "GRE"
   Power        = 397, // = 61 + COMBINATOR_BASE  // "POWER"
@@ -301,8 +301,10 @@ pub enum Combinator{
   Nil          = 474, // = 138 + COMBINATOR_BASE // "NIL"
   Nils         = 475, // = 139 + COMBINATOR_BASE // "NILS"
   Undef        = 476, // = 140 + COMBINATOR_BASE // "UNDEF"
-  AtomLimit    = 477, // = 141 + COMBINATOR_BASE // AtomLimit, not a combinator.
 }
+
+static ATOM_LIMIT: ValueRepresentationType = 141 + COMBINATOR_BASE; // = 477;
+
 
 impl Combinator {
   pub fn name(&self) -> &str{
