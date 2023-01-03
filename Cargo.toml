@@ -5,22 +5,24 @@ version = "0.1.0"
 authors = ["Robert Jacobson <rljacobson@gmail.com>"]
 edition = "2021"
 
-readme = "README.md"
-keywords = ["programming language, functional, Miranda"]
-homepage = "https://github.com/rljacobson/Randa"
+readme     = "README.md"
+keywords   = ["programming language, functional, Miranda"]
+homepage   = "https://github.com/rljacobson/Randa"
 repository = "https://github.com/rljacobson/Randa"
-license = "BSD"
+license    = "BSD"
 
 
 publish = false
 
 
 [dependencies]
-saucepan = {path = "../saucepan", features = ["reporting", "nom-parsing", "runtime-dispatch-simd"]}
-lazy_static = "1.4"
 enum-primitive-derive = "0.2.2"
-num-traits = "0.2.15"
-logos = "0.12.1"
+saucepan = {path = "../saucepan", features = ["reporting", "nom-parsing", "runtime-dispatch-simd"]}
+logos    = "0.12.1"
+atty     = "0.2.14" # Checks if stdin is a terminal or piped input. Determines verbosity level.
+argparse = "0.2.2"  # Command line argument and environment variable parsing of options.
+gag      = "1.0.0"  # For redirecting stderr to file.
+#dirs     = "4.0.0"  # For redirecting stderr to file.
 
 [dependencies.regex]
 # The following enables only the minimal necessary features of regex.
@@ -29,5 +31,7 @@ default-features = false
 # regex currently requires the standard library, you must re-enable it.
 features = ["std"]
 
+
 [build-dependencies]
 rust-bison-skeleton = {path = "../rust-bison-skeleton/rust-bison-skeleton"} #"0.41.0"
+chrono = "0.4.23" # For date and time.

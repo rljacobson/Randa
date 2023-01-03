@@ -2,28 +2,24 @@
 #![feature(arbitrary_enum_discriminant)]
 #![feature(pattern)]
 
-#[macro_use]
-extern crate enum_primitive_derive;
-extern crate num_traits;
 
+use crate::options::{Options, setup_argument_parser};
 
-mod data;
-mod compiler;
-mod vm;
+// mod data;
+// mod compiler;
+// mod vm;
+mod options;
+mod constants;
 
 fn main() {
-  /*
-  There are mild impedance mismatches between libraries. Logos returns ranges as "spans". Saucepan can make a
-  `saucepan::Span` from a range for a `Source` using slice notation: `let span: Span = source[range];`. OTOH, so can
-  Logos: `text[range]` gives the token as a slice. The advantage of using Saucepan is that Saucepan keeps track of
-  multiple files.
 
-  Bison has distinct notions of token and value. A value wraps a token. Rules produce values. For us, values will be
-  AST nodes.
-  */
+
+  let ops: Options = setup_argument_parser();
+
+  println!("\n{ops}");
 }
 
-
+/*
 #[cfg(test)]
 mod tests {
   use logos::{Logos, Lexer as LogosLexer};
@@ -70,3 +66,4 @@ mod tests {
     }
   }
 }
+*/

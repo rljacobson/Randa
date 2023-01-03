@@ -14,7 +14,7 @@ could probably be a `u32`, but this is not what Miranda does on 64-bit systems, 
 
 As is common in functional programming languages, Miranda treats code as data, storing the code as the
 composition of combinators, what is essentially the AST of the code, on the heap with the rest of the
-data. In the context of code, a HeapCell can be thought of as a bytecode consisting of an instruction
+data. In the context of code, a `HeapCell` can be thought of as a bytecode consisting of an instruction
 stored in the `tag` and up to two arguments, one in `head` and one in `tail`. Larger pieces of code
 are built up using composition, where references to nested instructions are stored in `head`/`tail`.
 
@@ -60,12 +60,11 @@ However, Miranda does it this way, so we do to.
 pub mod combinator;
 pub mod tag;
 pub mod types;
-mod identifier;
-pub(crate) mod values;
-mod heap;
+pub mod identifier;
+pub mod values;
+pub(crate) mod heap;
 
 
-use saucepan::LineNumber;
 
 pub use crate::{
   compiler::Token,

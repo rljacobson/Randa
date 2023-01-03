@@ -46,6 +46,13 @@ pub enum ActivityReset {
 /// [`VM::setup_constants()`](crate::data::heap::Heap::setup_constants()), and
 /// [`VM::setup_standard_types()`](crate::data::heap::Heap::setup_standard_types()).
 pub struct VM {
+  // Flags and other state that does not live on the heap.
+
+  /// There are two types of Miranda process: "compiling" (the main process) and subsidiary processes
+  /// launched for each evaluation. The `compiling  flag tells us which kind of process we are in.
+  // Todo: How is this state thread local?
+  compiling: bool,
+
   activity                 : ActivityReset,
   command_mode             : bool,
   abstype_declarations     : Vec<String>,
@@ -64,7 +71,7 @@ pub struct VM {
 
   heap                     : Heap,
 
-  // region Flags and other state
+  // region Flags and other state that lives on the heap.
 
   /**
   From Miranda:
@@ -152,7 +159,7 @@ impl Default for VM {
   /// [`VM::setup_standard_types()`](crate::data::heap::Heap::setup_standard_types()).
   fn default() -> Self {
     let mut vm = VM{
-
+      compiling                : true,
       activity                 : ActivityReset::Collecting, // Arbitrary value.
       command_mode             : false,
       abstype_declarations     : vec![],

@@ -26,7 +26,7 @@ pub enum Type {
   Comma     = 5,
   Arrow     = 6,
   Void      = 7,
-  Wrong     = 8,
+  Wrong     = 8,  // A type error
   Bind      = 9,
   Type      = 10, // User defined type
   Strict    = 11,

@@ -26,37 +26,33 @@ use crate::{
     Combinator,
     Identifier,
     ValueRepresentationType,
+    IdentifierDefinition,
+    IdentifierValueType
+  },
+  constants::{
+    DEFAULT_SPACE,
+    SPACE_LIMIT,
+    INIT_SPACE,
+    BIG_TOP,
+    DEFAULT_DICT_SPACE,
+    DICT_SPACE,
   }
 };
-use crate::data::{IdentifierDefinition, IdentifierValueType};
-
 
 type ValueResult = Result<Value, ()>;
 
-// Todo: Give these a home
+// Todo: Give these a home. Seems like they should be combinators.
 static GENERATOR: ValueRepresentationType = 0;
 static GUARD    : ValueRepresentationType = 1;
 static REPEAT   : ValueRepresentationType = 2;
 
-// Constants for heap size and GC
-/// Default size of heap.
-static DEFAULT_SPACE: usize = 2500000;
-/// SPACE_LIMIT controls the size of the heap (i.e. the number of heap cells available) -
-/// the minimum survivable number given the need to compile the prelude, etc., is probably
-/// about 6000.
-static SPACE_LIMIT  : usize = DEFAULT_SPACE;
-/// False ceiling in heap to improve paging behaviour during compilation
-static INIT_SPACE   : usize = 1250000;
-static BIG_TOP      : usize = SPACE_LIMIT; //+ (ATOM_LIMIT as usize);   // 2500000 + 477 = 2500477
-
-
+/// The fundamental unit of data for data that lives in the heap.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub struct HeapCell {
   pub tag : Tag,
   pub head: RawValue,
   pub tail: RawValue,
 }
-
 
 impl HeapCell {
   pub fn new(tag: Tag, head: Value, tail: Value) -> HeapCell {
@@ -210,7 +206,7 @@ impl Heap {
   }
 
 
-  fn make(&self, t: u8, x: u16, y: u16) -> u16 {
+  fn make(&mut self, t: u8, x: u16, y: u16) -> u16 {
     let mut listp = 0;
 
     while self.data[listp].tag as i32 > 0 {
