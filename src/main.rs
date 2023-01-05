@@ -5,9 +5,9 @@
 
 use crate::options::{Options, setup_argument_parser};
 
-// mod data;
-// mod compiler;
-// mod vm;
+mod data;
+mod compiler;
+mod vm;
 mod options;
 mod constants;
 

@@ -8,7 +8,8 @@ use std::fmt::{Display, Formatter};
 use logos::Logos;
 
 // use saucepan::Span;
-// use num_traits::{FromPrimitive, ToPrimitive, Primitive};
+use num_traits::{FromPrimitive, ToPrimitive}; // For conversion from `i32` to Token
+use enum_primitive_derive::Primitive;         // For conversion from `i32` to Token
 
 use crate::{
   data::{

@@ -38,17 +38,20 @@ The value field (tail) of type identifier takes one of the following forms:
  * `cons(cons(arity,showfn),cons(placeholder_t,NIL))`
  * `cons(cons(arity,showfn),cons(free_t,NIL))`
  * `UNDEF` (combinator literal)
- * _Some other value literal._
+ * _Some other value_
 
-|               | Arity    | Show Functions |            | Type             | Info             |
-|:--------------| :------- | :------------- | :--------- | :--------------- | :--------------- |
-| `cons(cons(`  | `arity,` | `showfn`       | `), cons(` | `algebraic_t,`   | `constructors )` |
-| `cons(cons(`  | `arity,` | `showfn`       | `), cons(` | `synonym_t,`     | `rhs  ))`        |
-| `cons(cons(`  | `arity,` | `showfn`       | `), cons(` | `abstract_t,`    | `basis ))`       |
-| `cons(cons(`  | `arity,` | `showfn`       | `), cons(` | `placeholder_t,` | `NIL ))`         |
-| `cons(cons(`  | `arity,` | `showfn`       | `), cons(` | `free_t,`        | `NIL ))`         |
- | `UNDEF`       |
- | _Value Literal_ |
+An example of "some other value" is in the case of identifiers that are also constructors. Their value field 
+contains `construct(value, id_ref)`, where `id_ref` is a (circular) reference back to the identifier itself.
+
+|              | Arity    | Show Functions |            | Type             | Info             |
+|:-------------| :------- | :------------- | :--------- | :--------------- | :--------------- |
+| `cons(cons(` | `arity,` | `showfn`       | `), cons(` | `algebraic_t,`   | `constructors )` |
+| `cons(cons(` | `arity,` | `showfn`       | `), cons(` | `synonym_t,`     | `rhs  ))`        |
+| `cons(cons(` | `arity,` | `showfn`       | `), cons(` | `abstract_t,`    | `basis ))`       |
+| `cons(cons(` | `arity,` | `showfn`       | `), cons(` | `placeholder_t,` | `NIL ))`         |
+| `cons(cons(` | `arity,` | `showfn`       | `), cons(` | `free_t,`        | `NIL ))`         |
+ | `UNDEF`      |
+ | _Value_      |
 
 where
 

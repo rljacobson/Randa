@@ -129,6 +129,7 @@ impl Default for Heap {
 }
 
 
+// region Index impls
 impl Index<RawValue> for Heap {
   type Output = HeapCell;
 
@@ -158,7 +159,7 @@ impl IndexMut<Value> for Heap{
     &mut self.data[index.0 as usize]
   }
 }
-
+// endregion
 
 impl Heap {
 
@@ -177,7 +178,7 @@ impl Heap {
 
   /// Extracts the type of an identifier represented on the stack. Assumes `value` is a reference to an identifier.
   pub(crate) fn id_type(&mut self, value: Value) -> &mut RawValue {
-    self.tl_hd(Into::<RawValue>::into(value).0 as usize)
+    self.tl_hd_mut(Into::<RawValue>::into(value).0 as usize)
   }
 
   /// Extracts the value of an identifier represented on the stack. Assumes `value` is a reference to an identifier.
@@ -192,10 +193,32 @@ impl Heap {
   //   cons(cons(arity,show_function), cons(class_,info))
   // }
 
+  /// A convenience method used by "privlib" and "stdlib", see below. It creates an identifier with the given name,
+  /// value, and datatype, constructing the value according to whether the name is that of a constructor
+  /// (capitalized) or not.
+  pub(crate) fn predefine_identifier(&mut self, name: &str, value: Value, datatype: Type) -> Value {
+    let id_ref = Identifier {
+      name: name.to_string(),
+      definition: IdentifierDefinition::Undefined,
+      datatype,
+      value: None // To be filled in after we get a reference to this identifier, i.e. after compilation.
+    }.compile(&mut self.heap);
 
-  /// Registers `name` in the symbol table and strings list and creates a "bare bones" identifier structure on the heap
-  /// for the given name, returning a reference to the heap object.
-  pub fn make_id(&mut self, name: &str) -> Value {
+    let id_value = if is_capitalized(name) {
+      self.constructor(value, id_ref)
+    } else {
+      value
+    };
+
+    self[id_ref].tail = id_value.into();
+
+    id_ref
+  }
+
+
+  /// Registers `name` in the symbol table and strings list (both via `compile()`) and creates a "bare bones"
+  /// identifier structure on the heap for the given name, returning a reference to the heap object.
+  pub fn make_empty_identifier(&mut self, name: &str) -> Value {
     Identifier{
       name: name.to_string(),
       definition: IdentifierDefinition::Undefined,
@@ -261,25 +284,46 @@ impl Heap {
   }
 
 
-  // Todo: Do we need mut versions? We take `&mut self` but only return `&HeapCell.`
-  pub fn hd_hd<T: Into<usize>>(&mut self, idx: T) -> &mut RawValue {
+  /// Returns a mutable reference to the RawValue in the head of the head of the provided reference.
+  pub fn hd_hd_mut<T: Into<usize>>(&mut self, idx: T) -> &mut RawValue {
     let hd = self.data[idx.into()].head;
     &mut self.data[hd.0 as usize].head
   }
 
-  pub fn hd_tl<T: Into<usize>>(&mut self, idx: T) -> &mut RawValue {
+  /// Returns a copy of the RawValue in the head of the head of the provided reference.
+  pub fn hd_hd<T: Into<usize>>(&self, idx: T) -> RawValue {
+    let hd = self.data[idx.into()].head;
+    self.data[hd.0 as usize].head
+  }
+
+  pub fn hd_tl_mut<T: Into<usize>>(&mut self, idx: T) -> &mut RawValue {
     let hd = self.data[idx.into()].head;
     &mut self.data[hd.0 as usize].tail
   }
 
-  pub fn tl_tl<T: Into<usize>>(&mut self, idx: T) -> &mut RawValue {
+  pub fn hd_tl<T: Into<usize>>(&self, idx: T) -> RawValue {
+    let hd = self.data[idx.into()].head;
+    self.data[hd.0 as usize].tail
+  }
+
+  pub fn tl_tl_mut<T: Into<usize>>(&mut self, idx: T) -> &mut RawValue {
     let tl = self.data[idx.into()].tail;
     &mut self.data[tl.0 as usize].tail
   }
 
-  pub fn tl_hd<T: Into<usize>>(&mut self, idx: T) -> &mut RawValue {
+  pub fn tl_tl<T: Into<usize>>(&self, idx: T) -> RawValue {
+    let tl = self.data[idx.into()].tail;
+    self.data[tl.0 as usize].tail
+  }
+
+  pub fn tl_hd_mut<T: Into<usize>>(&mut self, idx: T) -> &mut RawValue {
     let tl = self.data[idx.into()].tail;
     &mut self.data[tl.0 as usize].head
+  }
+
+  pub fn tl_hd<T: Into<usize>>(&self, idx: T) -> RawValue {
+    let tl = self.data[idx.into()].tail;
+    self.data[tl.0 as usize].head
   }
 
   /// Resolves a reference to the `HeapCell` it points to.
@@ -502,17 +546,35 @@ impl Heap {
 
   // region Type creation and checking functions
 
-  /// Is the type referenced by `reference` an Arrow type?
+  /// Returns true iff the value is 1) an identifier that 2) is a constructor,
+  /// which occurs iff 1) its tag is `Tag::Identifier` and 2) its name is capitalized.
+  pub fn is_constructor(&self, reference: Value) -> bool {
+    let identifier_cell: HeapCell =
+        match self.expect(Tag::Id, reference) {
+          Ok(cell) => cell,
+          Err(_) => return false,
+        };
+
+    let strcons = self.hd_hd(identifier_cell);
+    let name_ref = self.data[strcons].head();
+
+    is_capitalized(self.strings[name_ref].as_str())
+  }
+
+  /// Is the type referenced by `reference` an Arrow type? Not only checks the type but also that the correct
+  /// `HeapCell` `Tag` is present at each level of the composition.
   pub fn is_arrow_type(&self, reference: Value) -> bool {
     self.is_type_auxiliary(reference, Type::Arrow)
   }
 
-  /// Is the type referenced by `reference` a Comma type?
+  /// Is the type referenced by `reference` a Comma type?  Not only checks the type but also that the correct
+  /// `HeapCell` `Tag` is present at each level of the composition.
   pub fn is_comma_type(&self, reference: Value) -> bool {
     self.is_type_auxiliary(reference, Type::Comma)
   }
 
-  // Code common to is_arrow_type and is_comma_type is factored out into this auxiliary function.
+  /// Code common to is_arrow_type and is_comma_type is factored out into this auxiliary function. Note that this
+  /// function checks that correct tags are present.
   fn is_type_auxiliary(&self, reference: Value, type_required: Type) -> bool {
     let type_cell: HeapCell =
       match self.expect(Tag::Ap, reference) {
@@ -530,7 +592,8 @@ impl Heap {
     return head_cell.head == RawValue(type_required as ValueRepresentationType) ;
   }
 
-  /// Is the type referenced by reference a list type?
+  /// Is the type referenced by reference a list type? Not only checks the type but also that the correct
+  /// `HeapCell` `Tag` is present at each level of the composition.
   pub fn is_list_type(&self, reference: Value) -> bool {
     let type_cell: HeapCell =
       match self.expect(Tag::Ap, reference) {
@@ -597,8 +660,24 @@ impl Heap {
 
   // endregion
 
-
 }
+
+
+// Todo: Find a better home for this function.
+
+/// Returns true iff the first non-'$' character of word is uppercase.
+pub(crate) fn is_capitalized(word: &str) -> bool {
+  for c in word.chars() {
+    if c == '$' {
+      continue;
+    }
+    return c.is_uppercase();
+  }
+  // Consists only of '$'
+  return false;
+}
+
+
 
 
 #[cfg(test)]
@@ -653,7 +732,7 @@ mod tests {
 
     match heap.get_identifier(id) {
       Ok(ident) => {
-        println!("Identifier:\n\t{:?}", ident);
+        println!("Identifier:\n\t{}", ident.name);
         // ident
       },
 

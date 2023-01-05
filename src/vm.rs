@@ -14,6 +14,7 @@ use std::{
 use crate::{
   compiler::Token,
   data::{
+    heap::{is_constructor, is_capitalized},
     Combinator,
     Heap,
     Identifier,
@@ -26,6 +27,7 @@ use crate::{
     values::RawValue
   }
 };
+use crate::options::{Options, setup_argument_parser};
 
 
 pub enum ActivityReset {
@@ -46,7 +48,10 @@ pub enum ActivityReset {
 /// [`VM::setup_constants()`](crate::data::heap::Heap::setup_constants()), and
 /// [`VM::setup_standard_types()`](crate::data::heap::Heap::setup_standard_types()).
 pub struct VM {
-  // Flags and other state that does not live on the heap.
+  // Flags and other state that do not live on the heap.
+
+  // The `options` function should be produced by the `setup_argument_parser()` function.
+  options: Options,
 
   /// There are two types of Miranda process: "compiling" (the main process) and subsidiary processes
   /// launched for each evaluation. The `compiling  flag tells us which kind of process we are in.
@@ -74,16 +79,19 @@ pub struct VM {
   // region Flags and other state that lives on the heap.
 
   /**
+  The cons list `files` is also called the environment in the Miranda source code.
+
   From Miranda:
 
-  > `files` is a cons list of elements, each of which is of the form
-  >      `cons(cons(fileinfo(filename,mtime),share),definienda)`
-  > where `share` (=0,1) says if repeated instances are shareable. Current script at
-  > the front followed by subsidiary files due to `%insert` and `%include` elements due
-  >to `%insert` have `NIL` `definienda` (they are attributed to the inserting script).
+    > `files` is a cons list of elements, each of which is of the form
+    >   `cons(cons(fileinfo(filename,mtime),share),definienda)`
+    > where `share` (=0,1) says if repeated instances are shareable. Current script at
+    > the front followed by subsidiary files due to `%insert` and `%include` elements due
+    > to `%insert` have `NIL` `definienda` (they are attributed to the inserting script).
 
+  The "definienda" is itself a cons list of items (types, identifiers, etc.) that are defined in the current file.
   (A definiendum is a term that is being defined or clarified. The plural form of definiendum is definienda.)
-   */
+  */
   files       : Value,
   col_fn      : Value,
   embargoes   : Value,
@@ -159,18 +167,19 @@ impl Default for VM {
   /// [`VM::setup_standard_types()`](crate::data::heap::Heap::setup_standard_types()).
   fn default() -> Self {
     let mut vm = VM{
+      options                  : setup_argument_parser(),
       compiling                : true,
       activity                 : ActivityReset::Collecting, // Arbitrary value.
       command_mode             : false,
       abstype_declarations     : vec![],
-      sui_generis_constructors : vec![],  // user defined sui-generis constructors
-      new_type_names           : vec![],  // newly declared type names in current code unit
-      algebraic_show_functions : vec![],  // show functions of algebraic types in scope
-      special_show_forms       : vec![],  // all occurrences of special forms (show) encountered during
+      sui_generis_constructors : vec![],  // User defined sui-generis constructors
+      new_type_names           : vec![],  // Newly declared type names in current code unit
+      algebraic_show_functions : vec![],  // Show functions of algebraic types in scope
+      special_show_forms       : vec![],  // All occurrences of special forms (show) encountered during
       // type check
       in_export_list           : false,
       in_semantic_redeclaration: false,
-      rv_script                : false,   // flags readvals in use (for garbage collector)
+      rv_script                : false,   // Flags readvals in use (for garbage collector)
       file_queue               : vec![],
       in_file                  : None,
       last_expression          : Value::None, // A reference to the last expression evaluated.
@@ -265,7 +274,7 @@ impl VM {
   fn setup_constants(&mut self) {
     // Referenced below
     // Nill lives in `Heap` (`Heap::nill`) because some `Heap` functions use it.
-    self.void_     = self.heap.make_id("()");
+    self.void_     = self.heap.make_empty_identifier("()");
 
     *self.heap.id_type(self.void_) = RawValue(Type::Void as isize);
     *self.heap.id_val(self.void_)  = self.heap.constructor(RawValue(0).into(), self.void_).into();
@@ -277,26 +286,27 @@ impl VM {
         RawValue(0).into(),
         RawValue(0).into()
       ),
+      // Todo: Should Offside be a combinator?
       Token::Offside.into()
     );
-    self.concat        = self.heap.make_id("concat");
-    self.diagonalise   = self.heap.make_id("diagonalise");
-    self.indent_fn     = self.heap.make_id("indent");
-    self.listdiff_fn   = self.heap.make_id("listdiff");
-    self.main_id       = self.heap.make_id("main"); // Miranda: change to magic scripts 19.11.2013
-    self.message       = self.heap.make_id("sys_message");
-    self.outdent_fn    = self.heap.make_id("outdent");
-    self.showabstract  = self.heap.make_id("showabstract");
-    self.showbool      = self.heap.make_id("showbool");
-    self.showchar      = self.heap.make_id("showchar");
-    self.showfunction  = self.heap.make_id("showfunction");
-    self.showlist      = self.heap.make_id("showlist");
-    self.shownum1      = self.heap.make_id("shownum1");
-    self.showpair      = self.heap.make_id("showpair");
-    self.showparen     = self.heap.make_id("showparen");
-    self.showstring    = self.heap.make_id("showstring");
-    self.showvoid      = self.heap.make_id("showvoid");
-    self.showwhat      = self.heap.make_id("showwhat");
+    self.concat        = self.heap.make_empty_identifier("concat");
+    self.diagonalise   = self.heap.make_empty_identifier("diagonalise");
+    self.indent_fn     = self.heap.make_empty_identifier("indent");
+    self.listdiff_fn   = self.heap.make_empty_identifier("listdiff");
+    self.main_id       = self.heap.make_empty_identifier("main"); // Miranda: change to magic scripts 19.11.2013
+    self.message       = self.heap.make_empty_identifier("sys_message");
+    self.outdent_fn    = self.heap.make_empty_identifier("outdent");
+    self.showabstract  = self.heap.make_empty_identifier("showabstract");
+    self.showbool      = self.heap.make_empty_identifier("showbool");
+    self.showchar      = self.heap.make_empty_identifier("showchar");
+    self.showfunction  = self.heap.make_empty_identifier("showfunction");
+    self.showlist      = self.heap.make_empty_identifier("showlist");
+    self.shownum1      = self.heap.make_empty_identifier("shownum1");
+    self.showpair      = self.heap.make_empty_identifier("showpair");
+    self.showparen     = self.heap.make_empty_identifier("showparen");
+    self.showstring    = self.heap.make_empty_identifier("showstring");
+    self.showvoid      = self.heap.make_empty_identifier("showvoid");
+    self.showwhat      = self.heap.make_empty_identifier("showwhat");
     self.standardout   = self.heap.constructor(RawValue(0).into(), self.heap.string("Stdout"));
 
   }
@@ -327,13 +337,16 @@ impl VM {
     self.range_step_until_type = self.heap.arrow_type(Type::Number.into(), self.range_step_type);
   }
 
-  // Used by "primlib", see below
-  // fn primdef(&mut self, n    : &str                  , v: Value, t: Type) {
+  /*
+  // The primdef function just creates an identifier on the heap. We can do this more declaratively, although with
+  // slightly more copy+pasted boilerplate. This function would be used by` primlib()`.
+  // fn primdef(&mut self, n: &str, v: Value, t: Type) {
   //   let x: Value                = self.heap.make_id(n);
   //   self.primitive_environment  = self.heap.cons(x, self.primitive_environment);
   //   *self.heap.id_val(x)  = v.into();
   //   *self.heap.id_type(x) = RawValue(t as ValueRepresentationType);
   // }
+  */
 
   /// Enters the primitive identifiers into the primitive environment, sets up predefined ids, not referred to by
   /// `parser.y`. Called by [VM::mira_setup()].
@@ -410,13 +423,13 @@ impl VM {
 
     self.primitive_environment  = self.heap.cons(false_id, self.primitive_environment);
 
+    // The preceding code is the equivalent of the following.
     // self.primdef("num"  , make_typ(0, 0, IdentifierValueType::Synonym, Type::Number), Type::Type);
     // self.primdef("char" , make_typ(0, 0, IdentifierValueType::Synonym, Type::Char)  , Type::Type);
     // self.primdef("bool" , make_typ(0, 0, IdentifierValueType::Synonym, Type::Bool)  , Type::Type);
     // self.primdef("True" , Value::Data(1), Type::Bool); // accessible only to 'finger'
     // self.primdef("False", Value::Data(0), Type::Bool); // likewise - FIX LATER
   }
-
 
 
   // / Reset all variables used by the compiler.
@@ -450,85 +463,93 @@ impl VM {
   */
 
 
+  /// Adds the item (type, identifier, etc.) to the environment, i.e. cons it onto the definienda of the first
+  /// item in the `files` cons list.
+  fn add_to_environment(&mut self, item: Value) {
+    // The thread of pointers goes like this:
+    //     self.files == cons(first, rest);
+    //     head(self.files) == first
+    //     first == cons(cons(fileinfo(filename, mtime), share), definienda)
+    //     tail( first  ) == definienda
 
+    let rest = self.heap.tl_hd(self.files);
+    *self.heap.tl_hd_mut(self.files) = self.heap.cons(item, rest.into()).into();
+  }
+
+  /// A convenience method used by `privlib(..)` and `stdlib(..)`, see below. It creates an identifier
+  /// with the given name, value, and datatype, constructing the value according to whether the name is
+  /// that of a constructor (capitalized) or not, and then it adds the identifier to the environment.
+  fn predefine_identifier(&mut self, name: &str, value: Value, datatype: Type) {
+    let id_ref = self.heap.predefine_identifier(name, value, datatype);
+
+    self.add_to_environment(id_ref);
+  }
+
+  // Todo: Why aren't privlib, primlib, and stdlib combined into one and/or all called at once?
+  // Todo: Is it ok that some of these are identical to the ones in `stdlib(..)`?
+  ///  Adds some internally defined identifiers to the environment. Called when compiling `<prelude>`.
+  fn privlib(&mut self) {
+    self.predefine_identifier("offside", Token::Offside.into(), self.char_list_type.into()); // Used by `indent' in prelude
+    self.predefine_identifier("changetype", Combinator::I.into(), Type::Wrong); // Type::Wrong to prevent being typechecked
+    self.predefine_identifier("first", Combinator::Hd.into(), Type::Wrong);
+    self.predefine_identifier("rest", Combinator::Tl.into(), Type::Wrong);
+    // The following added to make prelude compilable without `stdenv`
+    self.predefine_identifier("code", Combinator::Code.into(), Type::Undefined);
+    self.predefine_identifier("concat", ap2(Combinator::Foldr.into(), Combinator::Append, Combinator::Nil), Type::Undefined);
+    self.predefine_identifier("decode", Combinator::Decode.into(), Type::Undefined);
+    self.predefine_identifier("drop", Combinator::Drop.into(), Type::Undefined);
+    self.predefine_identifier("error", Combinator::Error.into(), Type::Undefined);
+    self.predefine_identifier("filter", Combinator::Filter.into(), Type::Undefined);
+    self.predefine_identifier("foldr", Combinator::FoldR.into(), Type::Undefined);
+    self.predefine_identifier("hd", Combinator::Hd.into(), Type::Undefined);
+    self.predefine_identifier("map", Combinator::Map.into(), Type::Undefined);
+    self.predefine_identifier("shownum", Combinator::Shownum.into(), Type::Undefined);
+    self.predefine_identifier("take", Combinator::Take.into(), Type::Undefined);
+    self.predefine_identifier("tl", Combinator::Tl.into(), Type::Undefined);
+  }
+
+  /// Called when compiling `<stdenv>`. Adds some internally defined identifiers to the environment
+  fn stdlib(&mut self) {
+
+    self.predefine_identifier("arctan", Combinator::Arctan_Fn.into(), Type::Undefined);
+    self.predefine_identifier("code", Combinator::Code.into(), Type::Undefined);
+    self.predefine_identifier("cos", Combinator::Cos_Fn.into(), Type::Undefined);
+    self.predefine_identifier("decode", Combinator::Decode.into(), Type::Undefined);
+    self.predefine_identifier("drop", Combinator::Drop.into(), Type::Undefined);
+    self.predefine_identifier("entier", Combinator::Entier_Fn.into(), Type::Undefined);
+    self.predefine_identifier("error", Combinator::Error_.into(), Type::Undefined);
+    self.predefine_identifier("exp", Combinator::Exp_Fn.into(), Type::Undefined);
+    self.predefine_identifier("filemode", Combinator::FileMode.into(), Type::Undefined);
+    self.predefine_identifier("filestat", Combinator::FileStat.into(), Type::Undefined); // Added Feb 91
+    self.predefine_identifier("foldl", Combinator::FoldL.into(), Type::Undefined);
+    self.predefine_identifier("foldl1", Combinator::FoldL1.into(), Type::Undefined); // New at release 2
+    // Todo: Implement `Heap::store_double()`
+    self.predefine_identifier("hugenum", sto_dbl(f64::MAX), Type::Undefined);
+    self.predefine_identifier("last", Combinator::ListLast.into(), Type::Undefined);
+    self.predefine_identifier("foldr", Combinator::FoldR.into(), Type::Undefined);
+    self.predefine_identifier("force", Combinator::Force.into(), Type::Undefined);
+    self.predefine_identifier("getenv", Combinator::GetEnv.into(), Type::Undefined);
+    self.predefine_identifier("integer", Combinator::Integer.into(), Type::Undefined);
+    self.predefine_identifier("log", Combinator::Log_Fn.into(), Type::Undefined);
+    self.predefine_identifier("log10", Combinator::Log10_Fn.into(), Type::Undefined); // New at release 2
+    self.predefine_identifier("merge", Combinator::Merge.into(), Type::Undefined); // New at release 2
+    self.predefine_identifier("numval", Combinator::NumVal.into(), Type::Undefined);
+    self.predefine_identifier("read", Combinator::StartRead.into(), Type::Undefined);
+    self.predefine_identifier("readb", Combinator::StartReadBin.into(), Type::Undefined);
+    self.predefine_identifier("seq", Combinator::Seq.into(), Type::Undefined);
+    self.predefine_identifier("shownum", Combinator::ShowNum.into(), Type::Undefined);
+    self.predefine_identifier("showhex", Combinator::ShowHex.into(), Type::Undefined);
+    self.predefine_identifier("showoct", Combinator::ShowOct.into(), Type::Undefined);
+    self.predefine_identifier("showfloat", Combinator::ShowFloat.into(), Type::Undefined); // New at release 2
+    self.predefine_identifier("showscaled", Combinator::ShowScaled.into(), Type::Undefined); // New at release 2
+    self.predefine_identifier("sin", Combinator::Sin_Fn.into(), Type::Undefined);
+    self.predefine_identifier("sqrt", Combinator::Sqrt_Fn.into(), Type::Undefined);
+    self.predefine_identifier("system", Combinator::Exec.into(), Type::Undefined); // New at release 2
+    self.predefine_identifier("take", Combinator::Take.into(), Type::Undefined);
+    self.predefine_identifier("tinynum", sto_dbl(f64::MIN_POSITIVE), Type::Undefined); // New at release 2
+    self.predefine_identifier("zip2", Combinator::Zip.into(), Type::Undefined); // New at release 2
+  }
 
 }
 
-/*
 
-
-
-//  used by "privlib" and "stdlib", see below
-fn predef(n: &str, v: ValueRepresentationType, t: ValueRepresentationType) {
-  word x;
-  x= make_id(n);
-  addtoenv(x);
-  id_val(x)= isconstructor(x)?constructor(v,x):v;
-  id_type(x)=t;
-}
-
-// called when compiling <prelude>, adds some
-// internally defined identifiers to the environment
-fn privlib() {
-  // extern word ltchar;
-  predef("offside",OFFSIDE,ltchar);  /* used by `indent' in prelude */
-  predef("changetype",I,wrong_t); /* wrong_t to prevent being typechecked */
-  predef("first",HD,wrong_t);
-  predef("rest",TL,wrong_t);
-  // the following added to make prelude compilable without stdenv
-  predef("code",CODE,undef_t);
-  predef("concat",ap2(FOLDR,APPEND,NIL),undef_t);
-  predef("decode",DECODE,undef_t);
-  predef("drop",DROP,undef_t);
-  predef("error",ERROR,undef_t);
-  predef("filter",FILTER,undef_t);
-  predef("foldr",FOLDR,undef_t);
-  predef("hd",HD,undef_t);
-  predef("map",MAP,undef_t);
-  predef("shownum",SHOWNUM,undef_t);
-  predef("take",TAKE,undef_t);
-  predef("tl",TL,undef_t);
-}
-
-// called when compiling <stdenv>, adds some
-// internally defined identifiers to the environment
-fn stdlib() {
-  predef("arctan",ARCTAN_FN,undef_t);
-  predef("code",CODE,undef_t);
-  predef("cos",COS_FN,undef_t);
-  predef("decode",DECODE,undef_t);
-  predef("drop",DROP,undef_t);
-  predef("entier",ENTIER_FN,undef_t);
-  predef("error",ERROR,undef_t);
-  predef("exp",EXP_FN,undef_t);
-  predef("filemode",FILEMODE,undef_t);
-  predef("filestat",FILESTAT,undef_t);  /* added Feb 91 */
-  predef("foldl",FOLDL,undef_t);
-  predef("foldl1",FOLDL1,undef_t);  /* new at release 2 */
-  predef("hugenum",sto_dbl(DBL_MAX),undef_t);
-  predef("last",LIST_LAST,undef_t);
-  predef("foldr",FOLDR,undef_t);
-  predef("force",FORCE,undef_t);
-  predef("getenv",GETENV,undef_t);
-  predef("integer",INTEGER,undef_t);
-  predef("log",LOG_FN,undef_t);
-  predef("log10",LOG10_FN,undef_t); /* new at release 2 */
-  predef("merge",MERGE,undef_t); /* new at release 2 */
-  predef("numval",NUMVAL,undef_t);
-  predef("read",STARTREAD,undef_t);
-  predef("readb",STARTREADBIN,undef_t);
-  predef("seq",SEQ,undef_t);
-  predef("shownum",SHOWNUM,undef_t);
-  predef("showhex",SHOWHEX,undef_t);
-  predef("showoct",SHOWOCT,undef_t);
-  predef("showfloat",SHOWFLOAT,undef_t); /* new at release 2 */
-  predef("showscaled",SHOWSCALED,undef_t); /* new at release 2 */
-  predef("sin",SIN_FN,undef_t);
-  predef("sqrt",SQRT_FN,undef_t);
-  predef("system",EXEC,undef_t); /* new at release 2 */
-  predef("take",TAKE,undef_t);
-  predef("tinynum",mktiny(),undef_t); /* new at release 2 */
-  predef("zip2",ZIP,undef_t); /* new at release 2 */
-}
-
-*/

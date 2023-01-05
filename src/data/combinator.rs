@@ -5,7 +5,9 @@
 */
 #![allow(dead_code)]
 
+
 use num_traits::{FromPrimitive, ToPrimitive};
+use enum_primitive_derive::Primitive;
 
 use super::COMBINATOR_BASE;
 use crate::data::{Value, ValueRepresentationType};

@@ -16,20 +16,21 @@ publish = false
 
 
 [dependencies]
-enum-primitive-derive = "0.2.2"
-saucepan = {path = "../saucepan", features = ["reporting", "nom-parsing", "runtime-dispatch-simd"]}
-logos    = "0.12.1"
-atty     = "0.2.14" # Checks if stdin is a terminal or piped input. Determines verbosity level.
-argparse = "0.2.2"  # Command line argument and environment variable parsing of options.
-gag      = "1.0.0"  # For redirecting stderr to file.
-#dirs     = "4.0.0"  # For redirecting stderr to file.
+saucepan   = {path = "../saucepan", features = ["reporting", "nom-parsing", "runtime-dispatch-simd"]}
+logos      = "0.12.1"
+atty       = "0.2.14" # Checks if stdin is a terminal or piped input. Determines verbosity level.
+argparse   = "0.2.2"  # Command line argument and environment variable parsing of options.
+gag        = "1.0.0"  # For redirecting stderr to file.
+num-traits = "0.2.15" # Conversion from repr to enum
+enum-primitive-derive = "0.2.2"  # Conversion from repr to enum
+#dirs      = "4.0.0"  # For redirecting stderr to file.
 
 [dependencies.regex]
 # The following enables only the minimal necessary features of regex.
-version = "1"
+version          = "1"
 default-features = false
 # regex currently requires the standard library, you must re-enable it.
-features = ["std"]
+features         = ["std"]
 
 
 [build-dependencies]

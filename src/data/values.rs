@@ -20,7 +20,7 @@ From Miranda:
 
  */
 
-use num_traits::{FromPrimitive};
+use num_traits::{FromPrimitive}; // For conversion from `i32` to `Token` or `Combinator`
 
 use crate::{
   data::{
