@@ -12,6 +12,8 @@ NOTES:
 
 */
 
+use enum_primitive_derive::Primitive;
+
 use crate::data::{Value, ValueRepresentationType};
 
 #[derive(Copy, Clone, PartialOrd, Eq, PartialEq, Hash, Debug, Default, Primitive)]

@@ -6,7 +6,6 @@
 #![allow(dead_code)]
 
 
-use num_traits::{FromPrimitive, ToPrimitive};
 use enum_primitive_derive::Primitive;
 
 use super::COMBINATOR_BASE;
@@ -304,8 +303,6 @@ pub enum Combinator{
   Nils         = 475, // = 139 + COMBINATOR_BASE // "NILS"
   Undef        = 476, // = 140 + COMBINATOR_BASE // "UNDEF"
 }
-
-static ATOM_LIMIT: ValueRepresentationType = 141 + COMBINATOR_BASE; // = 477;
 
 
 impl Combinator {

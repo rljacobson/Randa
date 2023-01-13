@@ -1,8 +1,6 @@
 /*!
 
-Summary of the heap representation of an identifier:
-
-
+See [Data Representation.md](Data%20Representation.md) for details about how Identifiers are represented on the heap.
 
 */
 
@@ -26,7 +24,8 @@ pub struct Identifier {
   pub name: String,
   // `String` or `&str`?
   pub definition: IdentifierDefinition,
-  pub datatype: Type,
+  // Note: `datatype` cannot be type `Type` because, e.g. `char_list_type` is of type Value.
+  pub datatype: Value,
   pub value: Option<IdentifierValue>
 }
 
@@ -37,7 +36,7 @@ impl Identifier {
     let who = self.definition.compile(heap);
     let string_ref = heap.string(self.name.clone());
     let mut id_head = heap.strcons(string_ref, who);
-    id_head = heap.cons(id_head, self.datatype.into());
+    id_head = heap.cons(id_head, self.datatype);
     let value = if let Some(value) = &self.value {
       value.compile(heap)
     } else {
@@ -67,7 +66,7 @@ impl Identifier {
     let cons_cell    : HeapCell             = heap.expect(Tag::Cons, id_cell.head.into() )?;
     let strcons_cell : HeapCell             = heap.expect(Tag::StrCons, cons_cell.head.into())?;
     let id_definition: IdentifierDefinition = IdentifierDefinition::get(strcons_cell.tail.into(), heap)?;
-    let datatype     : Type                 = Type::from_isize(cons_cell.tail.0).unwrap();
+    let datatype     : Value                = cons_cell.tail.into();
     let name         : String               = heap.resolve_string(strcons_cell.head)?;
 
     Ok(
@@ -82,21 +81,15 @@ impl Identifier {
 
 }
 
-// Todo: Should references to files and sources in `IdentifierDefinition` be interned, e.g. references to elements of
-//       `heap.files`?
 // #[derive(Clone, Eq, PartialEq, Hash, Debug)]
 pub enum IdentifierDefinition {
-  Undefined, // The identifier is completely undefined.
+  Undefined,          // The identifier is completely undefined.
 
-  DefinedAt{
-    script_file: String,   // `String` or `&str`?
-    line       : LineNumber // Span?
-  },
+  HereInfo(HereInfo), // source_file and line_number
 
   Alias{
-    script_file: String,    // `String` or `&str`?
-    line       : LineNumber, // Span?
-    source     : String,    // Old name
+    here_info: HereInfo, // source_file and line_number
+    source   : HeapString,   // Old name
   }
 }
 
@@ -113,24 +106,23 @@ impl IdentifierDefinition {
       } => {
         // hereinfo := `fileinfo(script,line_no)`
         let script = heap.string(script_file);
-        let hereinfo = heap.file_info(script, RawValue(line.0 as ValueRepresentationType).into());
-        hereinfo
+        let here_info = heap.file_info(script, RawValue(line.0 as ValueRepresentationType).into());
+        here_info
       }
 
       IdentifierDefinition::Alias {
-        script_file,
-        line,
+        here_info,
         source
       } => {
         // `cons(aka,hereinfo)` for a name that has been aliased, where `aka`
         // is of the form `datapair(oldn,0)`, `oldn` being a string.
         // hereinfo := `fileinfo(script,line_no)`
-        let source = heap.string(source);
-        let aka = heap.data_pair(source, RawValue(0).into());
-        let script = heap.string(script_file);
-        let hereinfo = heap.file_info(script, RawValue(line.0 as ValueRepresentationType).into());
+        let h_source = heap.string(source);
+        let h_aka = heap.data_pair(source, RawValue(0).into());
+        let h_script = heap.string(script_file);
+        let h_here_info = heap.file_info(script, RawValue(here_info.line.0 as ValueRepresentationType).into());
 
-        heap.cons(aka, hereinfo)
+        heap.cons(aka, here_info)
       }
     }
   }
@@ -333,14 +325,13 @@ impl IdentifierValue {
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 pub enum IdentifierValueType{
-  // todo: incorporate constructors, source, basis.
-  Algebraic{                     // Numerical representation.
+  Algebraic{                     //  "type"       = numerical representation within Miranda.
     constructors: Value
-  },                             // 0
-  Synonym{ source_type: Type },  // 1
-  Abstract{ basis: Value },      // 2
-  PlaceHolder,                   // 3
-  Free                           // 4
+  },                             // algebraic_t   = 0
+  Synonym{ source_type: Type },  // synonym_t     = 1
+  Abstract{ basis: Value },      // abstract_t    = 2
+  PlaceHolder,                   // placeholder_t = 3
+  Free                           // free_t        = 4
 }
 
 impl IdentifierValueType {

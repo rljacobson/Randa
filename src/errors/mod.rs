@@ -1,44 +1,24 @@
-use std::fmt::{Display, Formatter};
+mod lexical;
+mod bytecode;
+mod heap_objects;
+
 use std::error::Error;
-use std::rc::Rc;
+use std::process::exit;
 
-#[derive(Clone, Debug)]
-pub enum LexError{
-  EOF,
-  BlankErr,
-  UnknownError(Rc<dyn Error>)
+
+use console::{style, Term};
+
+pub use lexical::LexError;
+pub use bytecode::BytecodeError;
+
+pub fn emit_error(e: &dyn Error) {
+  let term = Term::stderr();
+  // term.write_fmt(format_args!("{} {}\n", style("Error:").red(), e)).ok();
+  term.write_line(format!("{} {}", style("Error:").red(), e).as_str()).ok();
 }
 
-impl LexError {
-
-
-
-}
-
-impl Display for LexError {
-  fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-    match self {
-      LexError::EOF => {
-        write!(f, "encountered EOF\n")
-      }
-
-      LexError::BlankErr => {
-        write!(f, "formal text not delimited by blank line\n")
-      }
-
-      LexError::UnknownError(e) => {
-        write!(f, "unknown error: {}", e)
-      }
-    }
-  }
-}
-
-
-impl Error for LexError {
-
-}
-
-
-pub fn emit_error(e: LexError) {
-  println!("Error: {}", e);
+pub fn fatal_error(msg: &str) -> ! {
+  let term = Term::stderr();
+  term.write_line(format!("{} {}", style("Fatal Error: []").red(), msg).as_str()).ok();
+  exit(1);
 }

@@ -1,22 +1,27 @@
 #![allow(ambiguous_associated_items)]
+#![allow(dead_code)]
 #![feature(arbitrary_enum_discriminant)]
 #![feature(pattern)]
 
 
-use crate::options::{Options, setup_argument_parser};
-
+mod errors;
 mod data;
 mod compiler;
 mod vm;
 mod options;
 mod constants;
 
+
+
+use crate::vm::VM;
+
 fn main() {
 
+  let mut vm: VM = VM::new();
 
-  let ops: Options = setup_argument_parser();
+  vm.announce();
 
-  println!("\n{ops}");
+  // println!("\n{}", vm.options);
 }
 
 /*

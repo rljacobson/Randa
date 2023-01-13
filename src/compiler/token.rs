@@ -8,14 +8,13 @@ use std::fmt::{Display, Formatter};
 use logos::Logos;
 
 // use saucepan::Span;
-use num_traits::{FromPrimitive, ToPrimitive}; // For conversion from `i32` to Token
+use num_traits::{FromPrimitive}; // For conversion from `i32` to Token
 use enum_primitive_derive::Primitive;         // For conversion from `i32` to Token
 
 use crate::{
   data::{
     TOKEN_BASE,
-    Value,
-    ValueRepresentationType
+    Value
   }
 };
 
@@ -64,7 +63,7 @@ static TOKEN_STRINGS: [&str; 80] = [
   "\"++\"",           // 295 = 39 + TOKEN_BASE
   "\"--\"",           // 296 = 40 + TOKEN_BASE
   "\"..\"",           // 297 = 41 + TOKEN_BASE
-  "\"\\/\"",           // 298 = 42 + TOKEN_BASE
+  "\"\\/\"",          // 298 = 42 + TOKEN_BASE
   "\">=\"",           // 299 = 43 + TOKEN_BASE
   "\"~=\"",           // 300 = 44 + TOKEN_BASE
   "\"<=\"",           // 301 = 45 + TOKEN_BASE
@@ -90,7 +89,7 @@ static TOKEN_STRINGS: [&str; 80] = [
   "\"|\"",            // 321 = 65 + TOKEN_BASE
   "\"?\"",            // 322 = 66 + TOKEN_BASE
   "\";\"",            // 323 = 67 + TOKEN_BASE
-  "Newline",      // 324 = 68 + TOKEN_BASE
+  "Newline",          // 324 = 68 + TOKEN_BASE
   "\"{\"",            // 325 = 69 + TOKEN_BASE
   "\"}\"",            // 326 = 70 + TOKEN_BASE
   "\"(\"",            // 327 = 71 + TOKEN_BASE

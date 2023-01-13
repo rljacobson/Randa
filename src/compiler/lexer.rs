@@ -19,7 +19,7 @@ use super::Token;
 
 pub struct Lexer<'t> {
   token_iterator: SpannedIter<'t, Token>,
-  source: Source<'t, 't>,
+  source: &'t Source<'t, 't>,
   span: Range<usize>, //Span<'t, 't>,
   token: Token,
 }
@@ -32,7 +32,7 @@ impl<'t> Debug for Lexer<'t> {
 
 
 impl<'t> Lexer<'t> {
-  pub fn new(source: Source<'t, 't>) -> Lexer<'t> {
+  pub fn new(source: &'t Source<'t, 't>) -> Lexer<'t> {
     // A filler value for span.
     //let span = source.slice(0..0);
     let token_iterator = Token::lexer(source.text()).spanned();

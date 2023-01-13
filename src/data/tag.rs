@@ -4,8 +4,10 @@
 
 */
 
+use enum_primitive_derive::Primitive;
 
-// Keep in sync with `#[repr(u32)]` for Tag.
+
+// Keep in sync with `#[repr(i32)]` for Tag.
 // Miranda uses a char.
 pub type TagRepresentationType = i32;
 

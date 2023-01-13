@@ -20,7 +20,7 @@ From Miranda:
 
  */
 
-use num_traits::{FromPrimitive}; // For conversion from `i32` to `Token` or `Combinator`
+use num_traits::{FromPrimitive, Num as Numeric}; // For conversion from `i32` to `Token` or `Combinator`
 
 use crate::{
   data::{
@@ -70,8 +70,14 @@ impl From<Value> for RawValue {
   }
 }
 
+impl From<Value> for ValueRepresentationType {
+  fn from(value: Value) -> Self {
+    RawValue::from_value(value).0
+  }
+}
+
 impl<T> From<T> for RawValue
-  where T: Into<ValueRepresentationType>
+  where T: Into<ValueRepresentationType> + Numeric
 {
   fn from(c: T) -> Self {
     RawValue(Into::<ValueRepresentationType>::into(c))
@@ -102,6 +108,9 @@ pub enum Value {
 
 
 impl From<RawValue> for Value {
+
+  /// Warning: Use this method with care! `Value::Data(n)` will never round trip! However, the `RawValue` r it
+  /// encodes to will always be the same even under composition of `Value<-->RawValue` conversions.
   fn from(value: RawValue) -> Self {
     let v = value.0;
 
@@ -110,7 +119,7 @@ impl From<RawValue> for Value {
       // Make sure `Value::Char`'s only hold ASCII characters.
       Value::Char(
         // This must be kept in sync with the target of the type alias `ValueRepresentationType`.
-        unsafe { char::from_u32(v as u32).unwrap() }
+        char::from_u32(v as u32).unwrap()
       )
     } else if v < COMBINATOR_BASE {
       Value::Token(

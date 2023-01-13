@@ -13,16 +13,26 @@ AST nodes.
 pub mod token;
 pub mod errors;
 mod lexer;
-mod parser;
+mod bytecode;
+// mod parser;
 
 
-use std::collections::HashMap;
+
 pub use saucepan::Span;
 pub use token::Token;
 pub use lexer::Lexer;
+use crate::data::api::HeapString;
 
 pub type Loc = std::ops::Range<u32>;
 
+// Todo: Make this a span?
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HereInfo {
+  pub(crate) script_file: HeapString,
+  pub(crate) line_number: isize
+}
+
+/*
 // Todo: Why only these keywords? This list is from steer.c, line ~1582.
 pub static KEYWORDS: HashMap<&str, u8> = HashMap::from([
   ("abstype", 21),
@@ -36,3 +46,4 @@ pub static KEYWORDS: HashMap<&str, u8> = HashMap::from([
   ("where", 15),
   ("with", 21)
 ]);
+*/

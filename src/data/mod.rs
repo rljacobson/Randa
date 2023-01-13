@@ -60,20 +60,21 @@ However, Miranda does it this way, so we do to.
 pub mod combinator;
 pub mod tag;
 pub mod types;
-pub mod identifier;
+// pub mod identifier;
 pub mod values;
 pub(crate) mod heap;
-
+pub(crate) mod api;
 
 
 pub use crate::{
   compiler::Token,
   data::{
     combinator::Combinator,
-    types::Type,
-    values::Value,
+    heap::{Heap, HeapCell},
     identifier::*,
-    heap::Heap
+    types::Type,
+    values::{Value, RawValue},
+    tag::Tag
   }
 };
 
@@ -84,9 +85,9 @@ pub use crate::{
 ///    * instances of `IdentifierValueType::from_usize`
 pub(crate) type ValueRepresentationType = isize;
 pub const TOKEN_BASE     : ValueRepresentationType = 256; // There are 80 token values.
-pub const COMBINATOR_BASE: ValueRepresentationType = 336; // There are 141 combinators.
+pub const COMBINATOR_BASE: ValueRepresentationType = TOKEN_BASE + 80; // 336; // There are 141 combinators.
 pub const ATOM_LIMIT     : ValueRepresentationType = COMBINATOR_BASE + 141; // = 477
-
+// Note: X_LIMIT=`ATOM_LIMIT` - 256 + 16 must remain >=512 for bytecode representation to work.
 
 /**
   The `File` struct is an implementation language struct corresponding to the following Miranda structure (from

@@ -19,6 +19,7 @@ publish = false
 saucepan   = {path = "../saucepan", features = ["reporting", "nom-parsing", "runtime-dispatch-simd"]}
 logos      = "0.12.1"
 atty       = "0.2.14" # Checks if stdin is a terminal or piped input. Determines verbosity level.
+console    = "0.15.4" # Formatting & Coloring console text.
 argparse   = "0.2.2"  # Command line argument and environment variable parsing of options.
 gag        = "1.0.0"  # For redirecting stderr to file.
 num-traits = "0.2.15" # Conversion from repr to enum

@@ -8,6 +8,11 @@ space delimited value file of the form HDVE: heap space, dict size, version, edi
 
 */
 
+// Remaining Miranda functionality missing from Randa relevant to this file:
+//    Todo: Persist `space_limit`, `dict_space`, `version`, and `editor` in the `.mirarc` file.
+//    Todo: Figure out what `mirahdr`/`lmirahdr` is.
+
+
 
 use std::{
   process::exit,
@@ -33,37 +38,37 @@ pub type List = Vec<String>;
 
 pub struct Options {
 
-  version             : i32,          // Compatible Miranda version X 1000 (see above), `2066`
-  xversion            : i32,          // Bytecode version (see above), `84`
-  build_date          : &'static str, // "Dec 11 2022"
-  compiler_host_target: &'static str, // "x86_64 Darwin 22.1.0"
+  pub(crate) version             : i32,          // Compatible Miranda version X 1000 (see above), `2066`
+  pub(crate) xversion            : i32,          // Bytecode version (see above), `84`
+  pub(crate) build_date          : &'static str, // "Dec 11 2022"
+  pub(crate) compiler_host_target: &'static str, // "x86_64 Darwin 22.1.0"
 
-  no_stdenv       : bool,   // Do not load standard environment
-  at_count        : bool,   // Print stats after evaluation
-  listing         : bool,   // Print scripts to the screen during compilation
-  strict_if       : bool,   // Deny deprecated elision of "if" after guard comma
-  at_gc           : bool,   // Print GC stats
-  at_object       : bool,   // Makes `?identifier(s)` shows combinator code
-  miralib         : String, // Location of miralib directory
-  dict_space      : usize,  // Size of dictionary in bytes (ignored)
-  space_limit     : usize,  // Size of heap in cells
-  editor          : String, // Text editor program
-  verbose         : bool,   // Interpreter provides prompt and other text
-  magic           : bool,   // Script will start with UNIX magic string
-  manual_only     : bool,   // Only show the manual
-  exec            : bool,   // Run script as standalone program
-  stderr_redirect : Option<Redirect<File>>, // Log errors to file (e.g. with `-exec2`)
-  make_file_list  : List,   // Files to check if bytecode is up-to-date
-  make_exports    : List,   // Print identifiers of given source files
-  make_sources    : List,   // Print files on which the given source files directly or indirectly depend
-  use_utf8        : bool,   // Assume a UTF-8 locale
-  recheck_mira    : bool,   // Monitor changes to relevant source file
-  shell           : String, // Shell to use for `!` escapes.
-  mira_prompt     : String, // String for session prompt
-  viewer          : String, // Program used to display pages of the online manual
-  return_to_menu  : bool,   // Return to menu without printing prompt
-  menu_viewer     : String, // Program used to display manual contents pages
-  script          : String, // File of Miranda definitions
+  pub(crate) no_stdenv       : bool,   // Do not load standard environment
+  pub(crate) at_count        : bool,   // Print stats after evaluation
+  pub(crate) listing         : bool,   // Print scripts to the screen during compilation
+  pub(crate) strict_if       : bool,   // Deny deprecated elision of "if" after guard comma
+  pub(crate) at_gc           : bool,   // Print GC stats
+  pub(crate) at_object       : bool,   // Makes `?identifier(s)` shows combinator code
+  pub(crate) miralib         : String, // Location of miralib directory
+  pub(crate) dict_space      : usize,  // Size of dictionary in bytes (ignored)
+  pub(crate) space_limit     : usize,  // Size of heap in cells
+  pub(crate) editor          : String, // Text editor program
+  pub(crate) verbose         : bool,   // Interpreter provides prompt and other text
+  pub(crate) magic           : bool,   // Script will start with UNIX magic string
+  pub(crate) manual_only     : bool,   // Only show the manual
+  pub(crate) exec            : bool,   // Run script as standalone program
+  pub(crate) stderr_redirect : Option<Redirect<File>>, // Log errors to file (e.g. with `-exec2`)
+  pub(crate) make_file_list  : List,   // Files to check if bytecode is up-to-date
+  pub(crate) make_exports    : List,   // Print identifiers of given source files
+  pub(crate) make_sources    : List,   // Print files on which the given source files directly or indirectly depend
+  pub(crate) use_utf8        : bool,   // Assume a UTF-8 locale
+  pub(crate) recheck_mira    : bool,   // Monitor changes to relevant source file
+  pub(crate) shell           : String, // Shell to use for `!` escapes.
+  pub(crate) mira_prompt     : String, // String for session prompt
+  pub(crate) viewer          : String, // Program used to display pages of the online manual
+  pub(crate) return_to_menu  : bool,   // Return to menu without printing prompt
+  pub(crate) menu_viewer     : String, // Program used to display manual contents pages
+  pub(crate) script          : String, // File of Miranda definitions
 }
 
 impl Default for Options {
@@ -237,7 +242,7 @@ fn detect_utf8() -> bool {
 
 /// Converts an integer version of the form 1234 into a version string of the form "1.234". If the given integer
 /// version is out of range, returns the string "???".
-fn make_version_string(version_number: i32) -> String {
+pub fn make_version_string(version_number: i32) -> String {
   // Sanity check.
   if version_number < 0 || version_number > 999999 {
     return "???".to_string();
