@@ -196,6 +196,7 @@ impl Heap {
 
   // region Generic read/write functions
 
+  /*
   /// Extracts the type of an identifier represented on the stack. Assumes `value` is a reference to an identifier.
   pub(crate) fn id_type(&mut self, value: Value) -> &mut RawValue {
     self.tl_hd_mut(value)
@@ -205,6 +206,7 @@ impl Heap {
   pub(crate) fn id_val(&mut self, value: Value) -> &mut RawValue {
     &mut self.index_mut(value).tail
   }
+  */
 
   /// A convenience method used by "privlib" and "stdlib", see below. It creates an identifier with the given name,
   /// value, and datatype, constructing the value according to whether the name is that of a constructor

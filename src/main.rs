@@ -10,7 +10,7 @@ mod compiler;
 mod vm;
 mod options;
 mod constants;
-
+mod algorithms;
 
 
 use crate::vm::VM;

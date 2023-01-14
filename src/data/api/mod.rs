@@ -20,11 +20,13 @@ parameter.
 mod file_record;
 mod cons_list;
 mod identifier_record;
+mod open_file;
 
 // Implementors of HeapObjectProxy (defined below)
 pub(crate) use file_record::FileRecord;
 pub(crate) use identifier_record::*;
 pub(crate) use cons_list::ConsList;
+pub(crate) use open_file::OpenFile;
 
 use crate::{
   data::{

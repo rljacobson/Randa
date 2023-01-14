@@ -60,10 +60,10 @@ However, Miranda does it this way, so we do to.
 pub mod combinator;
 pub mod tag;
 pub mod types;
-// pub mod identifier;
 pub mod values;
 pub(crate) mod heap;
 pub(crate) mod api;
+pub(crate) mod path;
 
 
 pub use crate::{
@@ -88,23 +88,3 @@ pub const TOKEN_BASE     : ValueRepresentationType = 256; // There are 80 token 
 pub const COMBINATOR_BASE: ValueRepresentationType = TOKEN_BASE + 80; // 336; // There are 141 combinators.
 pub const ATOM_LIMIT     : ValueRepresentationType = COMBINATOR_BASE + 141; // = 477
 // Note: X_LIMIT=`ATOM_LIMIT` - 256 + 16 must remain >=512 for bytecode representation to work.
-
-/**
-  The `File` struct is an implementation language struct corresponding to the following Miranda structure (from
-  Miranda's `data.h`):
-      `files` is a cons list of elements, each of which is of the form
-          `cons(cons(fileinfo(filename,mtime),share),definienda)`
-      where `share` (=0,1) says if repeated instances are shareable. Current script at
-      the front followed by subsidiary files due to `%insert` and `%include` elements due
-      to `%insert` have `NIL` `definienda` (they are attributed to the inserting script).
-
-  (A definiendum is a term that is being defined or clarified. The plural form of definiendum is definienda.)
-*/
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
-pub struct File<'t> {
-  name      : &'t str,
-  mtime     : &'t str, // What is this field?
-  sharable  : bool,    // Are repeated instances shareable.
-  definienda: u32      // A definiendum is a term that is being defined or clarified.
-                       // The plural form of definiendum is definienda.
-}

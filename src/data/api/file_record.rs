@@ -32,11 +32,11 @@ impl FileRecord {
   /// Create a new file record of the form `cons(cons(fileinfo(filename ,mtime), share), definienda)` on the heap.
   /// The `definienda` should be a cons list of items, but we take a value for flexibility.
   pub fn new(
-    heap: &mut Heap,
-    file_name: HeapString,
+    heap         : &mut Heap,
+    file_name    : HeapString,
     last_modified: SystemTime,
-    share: bool,
-    definienda: ConsList
+    share        : bool,
+    definienda   : ConsList
   ) -> Self
   {
     // Todo: How is mtime stored on the heap?
@@ -82,7 +82,7 @@ impl FileRecord {
   pub fn push_item(&self, heap: &mut Heap, item: Value) {
     // Works even if definienda is NIL.
     let new_list = heap.cons(item, heap[self.reference].tail.into());
-    self.set_definienda(new_list);
+    self.set_definienda(heap, new_list);
   }
 }
 

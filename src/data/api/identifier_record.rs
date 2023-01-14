@@ -58,8 +58,8 @@ use crate::data::{Heap, HeapCell, ValueRepresentationType, RawValue, Value, Tag,
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub struct IdentifierRecordData {
-  pub name: HeapString,
-  // `String` or `&str`?
+  pub name: HeapString, // `String` or `&str`?
+  /// The `who` field
   pub definition: IdentifierDefinition,
   // Note: `datatype` cannot be type `Type` because, e.g. `char_list_type` is of type Value.
   pub datatype: Value,
@@ -136,6 +136,20 @@ impl IdentifierRecord {
     heap[self.reference].tail = id_value.reference;
   }
 
+  /// Sets the identifier's "who" field.
+  pub fn set_definiton(&self, heap: &mut Heap, definition: IdentifierDefinition) {
+    // ID HEAD: cons(strcons(name,who),type)
+    // ID TAIL: cons(cons(arity, showfn), cons(type, NIL))
+    let id_head = heap[self.reference].head;
+    heap.tl_hd_mut(id_head) = definition.into();
+  }
+
+  /// Sets the identifier's type (not the value type)
+  pub fn set_type(&self, heap: &mut Heap, new_type: Type) {
+    let id_head = heap[self.reference].head;
+    heap[id_head].tail = new_type.into()
+  }
+
   /// Fetches all of the data associated with the `IdentifierRecord`.
   pub fn get_data(&self, heap: &Heap) -> Result<IdentifierRecordData, ()> {
     let id_cell: HeapCell = heap.expect(Tag::Id, reference)?;
@@ -163,6 +177,15 @@ impl IdentifierRecord {
         value
       }
     )
+  }
+
+  /// An IdentifierRecord is "unset" if its `value` is `UNDEF`, its `who` is `NIL`, and its `type` is `undef_t`
+  pub fn unset_id(&self, heap: &mut Heap) {
+    assert_eq!( heap[self.reference].tag, Tag::Id.into() );
+
+    self.set_value(heap, Combinator::Undef.into());
+    self.set_definition(heap, IdentifierDefinition::undefined());
+    self.set_type(heap, Type::Undefined);
   }
 }
 

@@ -8,10 +8,14 @@ manipulation, environment initialization, and compilation from generic heap func
 
 use std::{
   fs::File,
-  io::BufRead,
+  io::{
+    BufRead,
+    BufReader,
+    Read
+  },
+  process::exit,
+  time::SystemTime
 };
-use std::process::exit;
-use std::time::SystemTime;
 
 
 use console::{Alignment, pad_str, style, Term};
@@ -21,18 +25,28 @@ use crate::{
   data::{
     Combinator,
     Heap,
+    path::*,
     Identifier,
     IdentifierDefinition,
     IdentifierValue,
     IdentifierValueType,
     Type,
     Value,
-    values::RawValue,
+    RawValue,
     api::{
       HeapObjectProxy,
       ConsList,
       FileRecord,
-    }
+      IdentifierDefinition,
+      IdentifierRecord,
+      IdentifierValue,
+      IdentifierValueData,
+      IdentifierValueType,
+      IdentifierValueTypeData,
+      IdentifierValueTypeDataSpecifier,
+      OpenFile
+    },
+    ValueRepresentationType
   },
   constants::DEFAULT_SPACE,
   options::{
@@ -40,10 +54,14 @@ use crate::{
     Options,
     setup_argument_parser
   },
-  errors::{BytecodeError, emit_error, fatal_error}
+  errors::{
+    BytecodeError,
+    emit_error,
+    fatal_error
+  },
 };
-use crate::data::api::{IdentifierDefinition, IdentifierRecord, IdentifierValue, IdentifierValueData, IdentifierValueType, IdentifierValueTypeData, IdentifierValueTypeDataSpecifier};
-use crate::data::ValueRepresentationType;
+use crate::constants::XVERSION;
+use crate::data::Tag;
 
 
 const NIL: Value = Value::Combinator(Combinator::Nil);
@@ -80,6 +98,7 @@ pub struct VM {
   compiling   : bool,
   initializing: bool,
   making      : bool,
+  loading     : bool,
 
   activity                : ActivityReset,
   command_mode            : bool,
@@ -88,7 +107,6 @@ pub struct VM {
   in_export_list           : bool,
   in_semantic_redeclaration: bool,
   rv_script                : bool,        // flags readvals in use (for garbage collector)
-  file_queue               : Vec<File>,
   in_file                  : Option<Box<dyn BufRead>>,
   last_expression          : Value,       // A reference to the last expression evaluated.
   last_mame                : Option<&'static str>,
@@ -99,14 +117,21 @@ pub struct VM {
 
   // region Flags and other state that lives on the heap.
 
+  // list of currently open-for-input files, of form `cons(strcons(stream,<ptr to element of 'files'>),...)`
+  file_queue  : ConsList<OpenFile>, // Miranda's `file_q`
+  // ToDo: Why is this on the heap? Can we just use a vector?
+  prefix_stack: ConsList, // Paths are made relative to current file. If we descend into another file, need to record
+                          // prefix.
   col_fn      : Value,
   embargoes   : Value,
   eprodnts    : Value,
   exportfiles : Value,
   exports     : Value,
-  fnts        : Value, // fnts is flag indicating %bnf in use. Treated as Value?
+  fnts        : Value, // `fnts` is flag indicating %bnf in use. Treated as Value?
   free_ids    : ConsList<IdentifierRecord>,
-  idsused     : Value,
+  internals   : ConsList<IdentifierRecord>, // list of names not exported, used by fix/unfixexports
+  idsused     : ConsList<IdentifierRecord>,
+  clashes     : ConsList<IdentifierRecord>,
   ihlist      : Value,
   includees   : ConsList,
   lasth       : Value,
@@ -138,8 +163,8 @@ pub struct VM {
   files                   : ConsList<FileRecord>,
   sui_generis_constructors: ConsList, // user defined sui-generis constructors (Miranda's SGC)
   type_abstractions       : ConsList, // cons list of abstype declarations (Miranda's TABSTR)
-  undefined_names         : ConsList, // undefined names used in script (Miranda's ND)
-  new_type_names          : ConsList, // newly declared type names in current code unit (Miranda's `newtyps`)
+  undefined_names         : ConsList<IdentifierRecord>, // undefined names used in script (Miranda's ND)
+  new_type_names          : ConsList<IdentifierRecord>, // newly declared type names in current code unit (Miranda's `newtyps`)
   algebraic_show_functions: ConsList, // show functions of algebraic types in scope (Miranda's `algshfns`)
   special_show_forms      : ConsList, // all occurrences of special forms (show) encountered during type check
 
@@ -171,7 +196,7 @@ pub struct VM {
   showstring   : IdentifierRecord,
   showvoid     : IdentifierRecord,
   showwhat     : IdentifierRecord,
-  standardout  : Value,
+  stdout       : Value,
 
   // These might be constants
   indent_fn  : IdentifierRecord,
@@ -198,18 +223,22 @@ pub struct VM {
 // pub fn reset(activity_reset: ActivityReset)-
 
 impl Default for VM {
-  /// Setup and initialization of [`Heap`](crate::data::heap::Heap) occurs in
-  /// [`VM::default()`](crate::data::heap::Heap::default()),
+  /// Setup and initialization of [`Heap`](Heap) occurs in
+  /// [`VM::default()`](Heap::default()),
   /// [`VM::setup_constants()`](crate::data::heap::Heap::setup_constants()), and
   /// [`VM::setup_standard_types()`](crate::data::heap::Heap::setup_standard_types()).
   fn default() -> Self {
     let mut vm = VM {
       // region State that doesn't live on the heap
       options                 : setup_argument_parser(),
+
       terminal                : None,
+
       compiling               : true,
-      making                  : false,
       initializing            : true,                      // Checked in `undump(..)`
+      making                  : false,
+      loading                 : false,
+
       activity                : ActivityReset::Collecting, // Arbitrary value.
       command_mode            : false,
       sorted                  : false,
@@ -217,7 +246,6 @@ impl Default for VM {
       in_export_list           : false,
       in_semantic_redeclaration: false,
       rv_script                : false,       // Flags readvals in use (for garbage collector)
-      file_queue               : vec![],
       in_file                  : None,
       last_expression          : Value::None, // A reference to the last expression evaluated.
       last_mame                : None,
@@ -227,9 +255,11 @@ impl Default for VM {
 
       // region Flags and other state that lives on the heap.
 
-      listdiff_fn: IdentifierRecord::UNINITIALIZED,
-      indent_fn  : IdentifierRecord::UNINITIALIZED,
-      outdent_fn : IdentifierRecord::UNINITIALIZED,
+      file_queue  : ConsList::EMPTY,
+      prefix_stack: ConsList::EMPTY,
+      listdiff_fn : IdentifierRecord::UNINITIALIZED,
+      indent_fn   : IdentifierRecord::UNINITIALIZED,
+      outdent_fn  : IdentifierRecord::UNINITIALIZED,
 
       // Common compound types.
       numeric_function_type : Value::Uninitialized,
@@ -254,7 +284,9 @@ impl Default for VM {
       exports     : NIL,
       fnts        : NIL,
       free_ids    : ConsList::EMPTY,
-      idsused     : NIL,
+      internals   : ConsList::EMPTY,
+      idsused     : ConsList::EMPTY,
+      clashes     : ConsList::EMPTY,
       ihlist      : Value::None,
       includees   : ConsList::EMPTY,
       lasth       : Value::None,
@@ -295,7 +327,7 @@ impl Default for VM {
       showstring   : IdentifierRecord::UNINITIALIZED,
       showvoid     : IdentifierRecord::UNINITIALIZED,
       showwhat     : IdentifierRecord::UNINITIALIZED,
-      standardout  : Value::Uninitialized,
+      stdout       : Value::Uninitialized,
       // endregion
 
     };
@@ -399,8 +431,8 @@ impl VM {
 
     let load_result = self.load_script(
       &in_file,
-      source_path,
-      NIL,
+      source_path.to_string(),
+      ConsList::EMPTY,
       NIL,
       is_main_script
     );
@@ -440,7 +472,7 @@ impl VM {
           println!("Cannot load {} due to name clashes: {}", binary_path, self.printlist(sorted));
         }
         self.unload();
-        self.loading = 0;
+        self.loading = false;
         return load_result.map(|_| ());
       }
 
@@ -489,16 +521,96 @@ impl VM {
     Ok(())
   }
 
+  fn prefix(&self) -> Result<String, ()> {
+    let str_ref = self.prefix_stack.head(&self.heap).ok_or_else(())?;
+    self.heap.resolve_string(str_ref.into())
+  }
+
   /// Loads a compiled script from `in_file` for the `source_file`.
   fn load_script(
     &mut self,
-    in_file: &File,
-    source_file: &str,
-    aliases: Value,
-    parameters: Value,
+    in_file        : &File,
+    mut source_file: String,
+    mut aliases    : ConsList, // List of cons(new_id, old_id)
+    parameters     : Value,
     is_main_script: bool
   ) -> Result<ConsList<FileRecord>, BytecodeError>
   {
+    /*
+    extern word nextpn,ND,errline,algshfns,internals,freeids,includees,SGC;
+    extern char *dicp, *dicq;
+    word ch,files=NIL;
+    TORPHANS=BAD_DUMP=0;
+    CLASHES=NIL;
+    */
+    { // scope of prefix
+      let prefix = self.prefix().unwrap_or_else(|_| "".to_string());
+      make_relative_path(&mut source_file, &prefix);
+    }
+
+    self.files = ConsList::EMPTY;
+
+    let mut file_bytes = vec![];
+    { // Scope of f_reader
+      let mut f_reader = BufReader::new(in_file);
+      let bytes_read = f_reader.read_to_end(&mut file_bytes)
+                                .map_err(|e| BytecodeError::UnexpectedEOF)?;
+      if bytes_read < 2 {
+        return Err(BytecodeError::UnexpectedEOF);
+      }
+    }
+    let mut byte = file_bytes.iter();
+    if byte.next().unwrap() != WORD_SIZE {
+      return Err(BytecodeError::ArchitectureMismatch);
+    }
+    if byte.next().unwrap() != XVERSION {
+      return Err(BytecodeError::WrongBytecodeVersion);
+    }
+
+    if !aliases.is_empty() {
+      // For each `old' install diversion to `new'.
+      // If alias is of form `-old`, `new' is a `pname` (private name).
+
+      let mut original_aliases = aliases;
+      let mut alias_iterator   = aliases; // Not technically an iterator.
+
+      while !alias_iterator.is_empty() {
+        // cons(
+        //   cons(strcons(name,who),type),
+        //   cons(cons(arity,showfn),cons(free_t,NIL))
+        // )
+        let mut a   = alias_iterator.pop(&mut self.heap);
+        let old     = IdentifierRecord::from_ref( self.tl_hd(a) );
+        let new_ref = self.hd_hd(a);
+
+
+        let hold = { // scope of temporaries
+          // cons(  id_who(old), cons(  id_type(old), id_val(old))  );
+          let old_who  = old.get_definition(&self.heap).unwrap();
+          let old_type = old.get_datatype(&self.heap).unwrap();
+          let old_val  = old.get_value(&self.heap).unwrap();
+          let tl       = self.heap.cons(old_type.into(), old_val.into());
+          self.heap.cons( old_who.into(), tl);
+        };
+
+        old.set_type(&mut self.heap, Type::Alias);
+        old.set_val(&mut self.heap, new_ref);
+
+        if self.heap[new_ref].tag == Tag::Id {
+          let new = IdentifierRecord::from_ref(new_ref);
+          let new_datatype = new.get_datatype(&self.heap);
+          if (new_datatype != Type::Undefined || new.get_value(&self.heap).unwrap().is_some())
+              && new_datatype != Type::Alias
+          {
+            // Insert new into self.clashes such that self.clashes remains in ascending address order.
+            // Todo: Why order these?
+            self.clashes = add1(new, &mut self.clashes);
+          }
+        }
+
+      }
+    }
+
 
 
     Err(BytecodeError::ArchitectureMismatch)
@@ -594,7 +706,7 @@ impl VM {
   /// [`Heap::setup_standard_types()`](crate::data::heap::Heap::setup_standard_types()).
   fn setup_constants(&mut self) {
     // Referenced below
-    // Nill lives in `Heap` (`Heap::nill`) because some `Heap` functions use it
+    // Nil lives in `Heap` (`Heap::nill`) because some `Heap` functions use it
     self.void_ = self.heap.make_empty_identifier("()");
     IdentifierRecord::new(
       &mut self.heap,
@@ -638,7 +750,7 @@ impl VM {
     self.showvoid     = self.heap.make_empty_identifier("showvoid");
     self.showwhat     = self.heap.make_empty_identifier("showwhat");
     let stdout_       = self.heap.string("Stdout");
-    self.standardout  = self.heap.constructor(RawValue(0).into()        , stdout_);
+    self.stdout = self.heap.constructor(RawValue(0).into(), stdout_);
   }
 
   /// This is tsetup() in Miranda.
@@ -871,10 +983,10 @@ impl VM {
     self.heap.private_symbols.clear();
 
     // Todo: Make `unsetids` take a `ConsList`.
-    self.unsetids(self.new_type_names);
+    self.unset_ids(self.new_type_names);
     self.new_type_names = ConsList::EMPTY;
 
-    self.unsetids(self.free_ids);
+    self.unset_ids(self.free_ids);
     self.free_ids = ConsList::EMPTY;
 
     self.sui_generis_constructors = ConsList::EMPTY;
@@ -882,7 +994,7 @@ impl VM {
     self.type_abstractions        = ConsList::EMPTY;
     self.undefined_names          = ConsList::EMPTY;
 
-    self.unsetids(self.internals);
+    self.unset_ids(self.internals);
     self.internals = ConsList::EMPTY;
 
     while !self.files.is_empty() {
@@ -892,7 +1004,7 @@ impl VM {
 
       let definienda = file.get_definienda(&self.heap);
       if !definienda.is_empty() {
-        self.unsetids(definienda.get_ref().into()) // unsetids(fil_defs(hd[files]));
+        self.unset_ids(definienda.get_ref().into()) // unsetids(fil_defs(hd[files]));
       }
       file.clear_definienda(&mut self.heap); // fil_defs(hd[files]) = NIL;
     }
@@ -907,16 +1019,23 @@ impl VM {
         let definienda: ConsList   = file.get_definienda(&self.heap);
 
         if !definienda.is_empty() {
-          self.unsetids(definienda.get_ref().into()) // unsetids(fil_defs(hd[files]));
+          // Todo: Miranda checks that the item has Tag::Id and just continues if not.
+          //       Do we expect everything in `id_list` to be an identifier?
+          self.unset_ids(definienda.get_ref().into()) // unsetids(fil_defs(hd[files]));
         }
       }
     }
 
-    // for (; ld_stuff != NIL; ld_stuff = tl[ld_stuff]) {
-    //   for (x = hd[ld_stuff]; x != NIL; x = tl[x]) {
-    //     unsetids(fil_defs(hd[x]));
-    //   }
-    // }
+  }
+
+  fn unset_ids(&mut self, mut id_list: ConsList<IdentifierRecord>) {
+    while !id_list.is_empty() {
+      // Todo: Miranda checks that the item has Tag::Id and just continues if not.
+      //       Do we expect everything in `id_list` to be an identifier?
+      let id_record: IdentifierRecord = id_list.pop(&mut self.heap).unwrap();
+      id_record.unset_id(&mut self.heap);
+      // should we remove from namebucket ?
+    }
   }
 
 }
