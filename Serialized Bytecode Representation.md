@@ -1,4 +1,4 @@
-# Bytecode Representation
+# Serialized Bytecode Representation
 
 Things with X in their name are related to bytecode encoding.
 

@@ -87,8 +87,9 @@ pub struct Heap {
   pub(crate) symbol_table: HashMap<String, Value>,
 
   /// The private environment is represented as a vector of references to items of the form `strcons(index, value)`,
-  /// where `index` is the index of the item in `private_symbols`, and `value` is (a reference to) the item.
-  pub(crate) private_symbols: Vec<ValueRepresentationType>,
+  /// where `index` is the index of the item in `private_symbols`, and `value` is (a reference to) the item. This is
+  /// one of the few things Miranda doesn't store as a cons list in the heap.
+  pub(crate) private_symbols: Vec<ValueRepresentationType>, // pnvec
 
   /// Special heap value NILL
   pub(crate) nill: Value

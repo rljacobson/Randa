@@ -11,7 +11,7 @@ use crate::data::Value;
 /// This is Miranda's `BAD_DUMP`. Most of these errors are produced in `VM::load_file()`.
 #[derive(Debug, Eq, PartialEq)]
 pub enum BytecodeError {
-  NameClash(Value),     // BAD_DUMP = -2, Holds a cons list of clashing aliases, Miranda's CLASHES
+  NameClash,     // BAD_DUMP = -2, Holds a cons list of clashing aliases, Miranda's CLASHES
   ArchitectureMismatch, // BAD_DUMP = -1 "(unrecognised dump format)"
   WrongBytecodeVersion, // BAD_DUMP = -1 "(unrecognised dump format)"
   WrongSourceFile,      // BAD_DUMP = 1 "(wrong source file)"
@@ -29,8 +29,8 @@ impl Display for BytecodeError {
       BytecodeError::WrongBytecodeVersion => {
         write!(f, "Wrong bytecode version.")
       }
-      BytecodeError::NameClash(clashes) => {
-        write!(f, "Aliasing causes name clashes: {:?}", clashes)
+      BytecodeError::NameClash => {
+        write!(f, "Aliasing causes name clashes")
       }
       BytecodeError::UnexpectedEOF => {
         write!(f, "File ended unexpectedly.")

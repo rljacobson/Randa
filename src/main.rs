@@ -11,6 +11,7 @@ mod vm;
 mod options;
 mod constants;
 mod algorithms;
+mod bytecode_parser;
 
 
 use crate::vm::VM;

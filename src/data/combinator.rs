@@ -306,6 +306,8 @@ pub enum Combinator{
 
 
 impl Combinator {
+  pub(crate) const NIL: Value = Value::Combinator(Combinator::Nil);
+
   pub fn name(&self) -> &str{
     COMBINATOR_NAMES[(*self as ValueRepresentationType - COMBINATOR_BASE) as usize]
   }

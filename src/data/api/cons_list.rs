@@ -13,14 +13,14 @@ ToDo: Should `ConsList` have a type parameter `ConstList<T>` such that `pop` ret
 
 */
 
-use crate::data::{Combinator, Heap, RawValue, Value};
+use crate::data::{Combinator, Combinator::NIL, Heap, RawValue, Value};
 use crate::data::heap::HeapCell;
 use crate::data::tag::Tag;
 use crate::data::api::HeapObjectProxy;
 
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
-pub struct ConsList<T=RawValue>
+pub struct ConsList<T=RawValue> where T: Into<Value>
 {
   reference: RawValue
 }
@@ -33,6 +33,7 @@ impl<T> ConsList<T>
   pub(crate) const EMPTY: Self = ConsList { reference: RawValue(Combinator::Nil as isize) };
 
   /// Constructs a new cons list on the heap with the given initial value.
+  #[inline(always)]
   pub fn new(heap: &mut Heap, initial_value: T) -> Self {
     let reference = heap.cons(initial_value.into(), Combinator::Nil.into());
 
@@ -41,35 +42,83 @@ impl<T> ConsList<T>
     }
   }
 
-
+  #[inline(always)]
   pub fn is_empty(&self) -> bool {
     self.reference == Combinator::Nil.into()
   }
 
-
+  #[inline(always)]
   pub fn push(&mut self, heap: &mut Heap, item: T) {
     let new_list = heap.cons(item.into(), self.reference.into());
 
     self.reference = new_list.into();
   }
 
-  pub fn rest_unchecked(&self, heap: &Heap) -> ConsList {
+  // Does not check if `self` is empty.
+  #[inline(always)]
+  pub fn rest_unchecked(&self, heap: &Heap) -> Self {
     let rest: RawValue = heap[self.reference].tail;
     Self::from_reference(rest)
   }
 
-  pub fn rest(&self, heap: &Heap) -> Option<ConsList> {
-    if self.reference == Combinator::Nil.into() {
+  #[inline(always)]
+  pub fn rest(&self, heap: &Heap) -> Option<Self> {
+    if self.reference == NIL {
       None
     } else {
       let rest: RawValue = heap[self.reference].tail;
       Some(Self::from_ref(rest))
     }
   }
+
+  /// Inserts `item` into the `ConsList` `list` while maintaining ascending address order. Because the `item` might be inserted
+  /// at the front of the `list`, the internal reference of `list` might change. (Miranda's `add1`.)
+  pub fn insert_ordered(&mut self, heap: &mut Heap, item: T) {
+    let item: Value = item.into();
+    let item_address: RawValue = item.into();
+
+    // If the list is empty, then `self == NIL`.
+    if self.is_empty() || item_address < self.head(heap).into() {
+      let new_cons = heap.cons(item, self.reference.into());
+      self.reference = new_cons.into();
+      return;
+    }
+
+    // First position is a special case, because the logic below only considers the next link in the list.
+    if item_address == self.head(heap).into() {
+      // Item is already in the list. No duplicates allowed.
+      return;
+    }
+
+    // Henceforth the invariant is item_address > cursor.head().
+
+    // Move forward until we're at the last (nonempty) cons or at the position at which `item` should be inserted.
+    let mut cursor = (*self).clone();
+    while !cursor.rest_unchecked(heap).is_empty()
+          && item_address > cursor.rest_unchecked(heap).head(heap).into()
+    {
+      cursor = cursor.rest_unchecked(heap);
+    }
+
+    if cursor.rest_unchecked(heap).is_empty() {
+      let new_cons = heap.cons(item, NIL);
+      // `item` goes on the end
+      heap[cursor.reference].tail = new_cons.into();
+    }
+    else if item_address != cursor.rest_unchecked(heap).head(heap).into() {
+      // Item is not already in the list.
+      let new_cons = heap.cons(item, cursor.rest_unchecked(heap).into());
+      heap[cursor.reference].tail = new_cons.into();
+    }
+    // The remaining case is `item_address != cursor.rest_unchecked(heap).head(heap).into()`, which is a noop,
+    // because no duplicates are allowed.
+  }
+
+
 }
 
 impl<T> ConsList<T>
-    where T: HeapObjectProxy
+    where T: HeapObjectProxy + Into<Value>
 {
   /// If `self = cons(head, rest)`, returns `head` and modifies the internal reference to point to `rest`.
   /// If the list is empty, returns `None`.
@@ -85,11 +134,13 @@ impl<T> ConsList<T>
     }
   }
 
+  #[inline(always)]
   pub fn head_unchecked(&self, heap: &Heap) -> T {
     let head = heap[self.reference].head;
     T::from_ref(head)
   }
 
+  #[inline(always)]
   pub fn head(&self, heap: &Heap) -> Option<T> {
     if self.reference == Combinator::Nil.into() {
       let head = heap[self.reference].head;
@@ -110,20 +161,27 @@ impl ConsList<RawValue> {
     else {
       let head       = self.head_unchecked(heap);
       self.reference = heap[self.reference].tail;
-
       Some(head)
     }
   }
-
-  pub fn head_unchecked(&self, heap: &Heap) -> T {
-    let head = heap[self.reference].head;
+  /// If `self = cons(head, rest)`, returns `head` and modifies the internal reference to point to `rest`.
+  /// This method does not check first if self is empty, nor does it check that `self` is pointing to a well-formed
+  /// cons list.
+  pub fn pop_unchecked(&mut self, heap: &Heap) -> T {
+    let head       = self.head_unchecked(heap);
+    self.reference = heap[self.reference].tail;
     head
   }
 
+  #[inline(always)]
+  pub fn head_unchecked(&self, heap: &Heap) -> T {
+    heap[self.reference].head
+  }
+
+  #[inline(always)]
   pub fn head(&self, heap: &Heap) -> Option<T> {
     if self.reference == Combinator::Nil.into() {
-      let head = heap[self.reference].head;
-      Some(head)
+      Some(heap[self.reference].head)
     } else {
       None
     }

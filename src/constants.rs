@@ -1,10 +1,15 @@
+use std::mem::size_of;
 
 /// The bytecode version. Incremented for every non-backwards compatible release. The last release of Miranda v.2.066
-/// has `XVERSION` 83. Because Randa's bytecode is incompatible, we increment to 84. If Miranda has another
+/// has `XVERSION` 83. Because Randa's bytecode is probably incompatible, we increment to 84. If Miranda has another
 /// bytecode-backwards-incompatible release, we are in trouble.
 pub const XVERSION: i32 = 84;
 /// Corresponds to the latest Miranda version that this version of Randa is language-level compatible with.
 pub const VERSION: i32 = 2066;
+
+/// The serialized bytecode representation depends on `XVERSION` and the size of a machine word on the architecture on
+/// which it was created.
+pub const WORD_SIZE: usize = size_of::<isize>();
 
 // Constants generated as compile time. They are used in `Options.rs` and reported via `/v`, `/V`, `-v`,
 // and `-V`. They are:

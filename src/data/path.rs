@@ -40,11 +40,13 @@ pub fn path_prefix(mut path: &String) -> String {
 }
 
 
-/**
-Makes `path` correct relative to `prefix`. Must use when writing path names to dump. This function modifies `path`
-in place.
-*/
+
+/// Makes `path` correct relative to `prefix`. Must use when writing path names to dump. This function modifies `path`
+/// in place.
 pub fn make_relative_path(path: &mut String, prefix: &String) {
+  // Todo: This algorithm is weird. It strips a prefix, presumably making an absolute path into a relative path,
+  //       OR, if it doesn't have the prefix, it checks that it is in fact an absolute path...?
+  //       Compare to block in `load_script`, factored out as `make_absolute_path` below.
   if Some(rest) = path.strip_prefix(prefix){
     // Replace the value in path with the prefix stripped.
     *path = rest.to_string();
@@ -58,6 +60,13 @@ pub fn make_relative_path(path: &mut String, prefix: &String) {
   }
 }
 
+
+/// If `path` is relative, add `prefix` to `path` in-place.
+pub fn make_absolute_path(path: &mut String, prefix: &String) {
+  if !path.starts_with('/'){
+    *path = prefix + path;
+  }
+}
 
 
 

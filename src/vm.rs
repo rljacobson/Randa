@@ -16,6 +16,9 @@ use std::{
   process::exit,
   time::SystemTime
 };
+use std::iter::Peekable;
+use std::slice::Iter;
+use std::time::Duration;
 
 
 use console::{Alignment, pad_str, style, Term};
@@ -30,6 +33,7 @@ use crate::{
     IdentifierDefinition,
     IdentifierValue,
     IdentifierValueType,
+    Tag,
     Type,
     Value,
     RawValue,
@@ -48,7 +52,7 @@ use crate::{
     },
     ValueRepresentationType
   },
-  constants::DEFAULT_SPACE,
+  constants::{DEFAULT_SPACE, WORD_SIZE, XVERSION},
   options::{
     make_version_string,
     Options,
@@ -59,9 +63,9 @@ use crate::{
     emit_error,
     fatal_error
   },
+  algorithms::get_machine_word
 };
-use crate::constants::XVERSION;
-use crate::data::Tag;
+use crate::bytecode_parser::get_machine_word;
 
 
 const NIL: Value = Value::Combinator(Combinator::Nil);
@@ -108,6 +112,12 @@ pub struct VM {
   in_semantic_redeclaration: bool,
   rv_script                : bool,        // flags readvals in use (for garbage collector)
   in_file                  : Option<Box<dyn BufRead>>,
+
+  /// Tells editor where to find error: `errline` contains location of 1st error in main script, `errs` is `hereinfo`
+  /// of up to one error in `%insert` script (each is 0 if not set). Some errors can set both.
+  error_line: usize,
+  errs      : Vec<ValueRepresentationType>, // Todo: What is this holding? It is `char[24]` in Miranda.
+
   last_expression          : Value,       // A reference to the last expression evaluated.
   last_mame                : Option<&'static str>,
 
@@ -132,6 +142,8 @@ pub struct VM {
   internals   : ConsList<IdentifierRecord>, // list of names not exported, used by fix/unfixexports
   idsused     : ConsList<IdentifierRecord>,
   clashes     : ConsList<IdentifierRecord>,
+  suppressed  : ConsList<IdentifierRecord>, // list of `-id' aliases successfully obeyed, used for error reporting
+  suppressed_t: ConsList<IdentifierRecord>, // list of -typename aliases (illegal just now)
   ihlist      : Value,
   includees   : ConsList,
   lasth       : Value,
@@ -160,16 +172,17 @@ pub struct VM {
   The "definienda" is itself a cons list of items (types, identifiers, etc.) that are defined in the current file.
   (A definiendum is a term that is being defined or clarified. The plural form of definiendum is definienda.)
    */
-  files                   : ConsList<FileRecord>,
+  files          : ConsList<FileRecord>,
+  old_files      : ConsList<FileRecord>, // most recent set of sources, in case of interrupted or failed compilation
+  // list of a list of files to be unloaded if `mkincludes` is interrupted (Miranda's ld_stuff).
+  mkinclude_files: ConsList<ConsList<FileRecord>>,
+
   sui_generis_constructors: ConsList, // user defined sui-generis constructors (Miranda's SGC)
   type_abstractions       : ConsList, // cons list of abstype declarations (Miranda's TABSTR)
   undefined_names         : ConsList<IdentifierRecord>, // undefined names used in script (Miranda's ND)
   new_type_names          : ConsList<IdentifierRecord>, // newly declared type names in current code unit (Miranda's `newtyps`)
   algebraic_show_functions: ConsList, // show functions of algebraic types in scope (Miranda's `algshfns`)
   special_show_forms      : ConsList, // all occurrences of special forms (show) encountered during type check
-
-  // list of a list of files to be unloaded if `mkincludes` is interrupted (Miranda's ld_stuff).
-  mkinclude_files         : ConsList<ConsList<FileRecord>>,
 
   // `spec_location` is a list of `cons(id,hereinfo)` giving location of `spec` for ids both defined and specified.
   // Needed to locate errs in `meta_tcheck`, `abstr_mcheck`.
@@ -247,6 +260,8 @@ impl Default for VM {
       in_semantic_redeclaration: false,
       rv_script                : false,       // Flags readvals in use (for garbage collector)
       in_file                  : None,
+      error_line               : 0,
+      errs                     : vec![],
       last_expression          : Value::None, // A reference to the last expression evaluated.
       last_mame                : None,
       // endregion
@@ -287,6 +302,8 @@ impl Default for VM {
       internals   : ConsList::EMPTY,
       idsused     : ConsList::EMPTY,
       clashes     : ConsList::EMPTY,
+      suppressed  : ConsList::EMPTY,
+      suppressed_t: ConsList::EMPTY,
       ihlist      : Value::None,
       includees   : ConsList::EMPTY,
       lasth       : Value::None,
@@ -296,15 +313,17 @@ impl Default for VM {
       ntmap       : NIL,
       ntspecmap   : NIL,
 
-      files                   : ConsList::EMPTY,
       sui_generis_constructors: ConsList::EMPTY, // user defined sui-generis constructors (Miranda's SGC)
       type_abstractions       : ConsList::EMPTY, // cons list of abstype declarations (Miranda's TABSTR)
       undefined_names         : ConsList::EMPTY, // undefined names used in script (Miranda's ND)
       new_type_names          : ConsList::EMPTY, // newly declared type names in current code unit (Miranda's `newtyps`)
       algebraic_show_functions: ConsList::EMPTY, // show functions of algebraic types in scope (Miranda's `algshfns`)
       special_show_forms      : ConsList::EMPTY, // all occurrences of special forms (show) encountered during type check
-      mkinclude_files         : ConsList::EMPTY, // list of files to be unloaded if `mkincludes` is interrupted (Miranda's ld_stuff).
       spec_location           : ConsList::EMPTY, // list giving location of `spec` for ids both defined and specified.
+
+      files          : ConsList::EMPTY, // The cons list files is also called the environment
+      old_files      : ConsList::EMPTY, // most recent set of sources, in case of interrupted or failed compilation
+      mkinclude_files: ConsList::EMPTY, // list of files to be unloaded if `mkincludes` is interrupted (Miranda's ld_stuff).
 
       // endregion
 
@@ -466,9 +485,9 @@ impl VM {
         true
       }
 
-      Err(BytecodeError::NameClash(clashes)) => {
+      Err(BytecodeError::NameClash) => {
         if ideep == 0 {
-          let sorted = self.alfasort(clashes);
+          let sorted = self.alfasort(self.clashes);
           println!("Cannot load {} due to name clashes: {}", binary_path, self.printlist(sorted));
         }
         self.unload();
@@ -509,7 +528,7 @@ impl VM {
         println!("{} contains undefined names or type errors", source_path);
       }
       else if !self.making && !self.options.magic {
-        println!(source_path); // added &&!magic 26.11.2019
+        println!(source_path); // added && !magic 26.11.2019
       }
     }
 
@@ -524,6 +543,94 @@ impl VM {
   fn prefix(&self) -> Result<String, ()> {
     let str_ref = self.prefix_stack.head(&self.heap).ok_or_else(())?;
     self.heap.resolve_string(str_ref.into())
+  }
+
+  /// Replace aliases with their referent
+  fn obey_aliases(&mut self, aliases: ConsList) -> Result<(), BytecodeError> {
+    if !aliases.is_empty() {
+      // For each `old' install diversion to `new', i.e. make the `old` identifier an alias for the `new` identifier.
+      // If alias is of form `-old`, `new' is a `pname` (private name).
+
+      // ToDo: The uppercase `ALIASES` is a global in Miranda. We aren't mutating `aliases`, so the value of
+      //       `ALIASES` *should* just be the value we passed into `load_script`. Is that enough, or do we need to
+      //       make a new member `VM::aliases`?
+      // let mut original_aliases = aliases;
+      let mut alias_iterator   = aliases; // Not technically an iterator.
+
+      while !alias_iterator.is_empty() {
+        // IdentifierRecord looks like this:
+        //   cons(
+        //     cons(strcons(name,who),type),
+        //     cons(cons(arity,showfn),cons(free_t,NIL))
+        //   )
+        // Entries in `aliases` look like this:
+        //   cons(new_id, old_id)
+        let mut alias = alias_iterator.head_unchecked(heap);
+        let new_ref   = self.heap[alias].head;
+        let old       = IdentifierRecord::from_ref( self.heap[alias].tail );
+
+
+        let hold = { // scope of temporaries
+          // cons(  id_who(old), cons(  id_type(old), id_val(old))  );
+          let old_who  = old.get_definition(&self.heap).unwrap();
+          let old_type = old.get_datatype(&self.heap).unwrap();
+          let old_val  = old.get_value(&self.heap).unwrap();
+          let tl       = self.heap.cons(old_type.into(), old_val.into());
+          self.heap.cons( old_who.into(), tl);
+        };
+
+        old.set_type(&mut self.heap, Type::Alias);
+        // We make old an alias of new.
+        old.set_val(&mut self.heap, new_ref);
+
+        // Todo: This check suggests that `new` might not be an Identifier? Correct, `alias` is replaced by
+        //       `cons( old_who, cons(old_type, old_val) )`, the data required to undo the aliasing.
+        if self.heap[new_ref].tag == Tag::Id {
+          let new = IdentifierRecord::from_ref(new_ref);
+          let new_datatype = new.get_datatype(&self.heap);
+          if (new_datatype != Type::Undefined || new.get_value(&self.heap).unwrap().is_some())
+              && new_datatype != Type::Alias
+          {
+            // Insert new into self.clashes such that self.clashes remains in ascending address order.
+            // Todo: Why order these?
+            // Todo: Why is this a clash? Isn't it just an alias?
+            self.clashes.insert_ordered(&mut self.heap, new); //add1(&mut self.heap, new, &mut self.clashes);
+          }
+        }
+
+        // Replace new_ref with hold
+        // Todo: But `hold` isn't an `IdentifierRecord`...? The alias is replaced with the info required to undo the
+        //       aliasing. The aliasing is undone in the event of an error. But in that case we are potentially
+        //       overwriting a previous `hold` with a "new" `hold`.
+        self.heap[alias].head = hold;
+      }
+
+      if !self.clashes.is_empty() {
+
+        // Todo: I don't think `unscramble` is necessary here.
+        // unscramble(aliases);
+        // return (NIL);
+        return Err(BytecodeError::NameClash); // BAD_DUMP = -2;
+      }
+
+      // The following block was inserted to deal with the pathological case that the destination of an alias (not
+      // part of a cyclic alias) has a direct definition in the file and the aliasee is missing from the file - this is
+      // both name clash and missing aliasee, but without fix the two errors cancel each other out and are unreported
+      let mut alias_iterator = aliases; // Not technically an iterator.
+      while !alias_iterator.is_empty() {
+        let alias = alias_iterator.pop_unchecked(&mut self.heap);
+        let  ch = self.heap[alias].tail;
+        if self.heap[ch].tag == Tag::Id {
+          let ch = IdentifierRecord::from_ref(ch);
+          if ch.get_datatype(&self.heap) != Type::Alias {
+            ch.set_type(&mut self.heap, Type::New);
+          }
+        }
+      } // FIX1
+    }
+
+    Ok(())
+
   }
 
   /// Loads a compiled script from `in_file` for the `source_file`.
@@ -543,74 +650,172 @@ impl VM {
     TORPHANS=BAD_DUMP=0;
     CLASHES=NIL;
     */
-    { // scope of prefix
-      let prefix = self.prefix().unwrap_or_else(|_| "".to_string());
+    // This holds the return value.
+    let mut files: ConsList<FileRecord> = ConsList::EMPTY;
+    self.clashes = ConsList::EMPTY;
+
+    if let Ok(prefix) = self.prefix() {
       make_relative_path(&mut source_file, &prefix);
     }
-
-    self.files = ConsList::EMPTY;
 
     let mut file_bytes = vec![];
     { // Scope of f_reader
       let mut f_reader = BufReader::new(in_file);
       let bytes_read = f_reader.read_to_end(&mut file_bytes)
                                 .map_err(|e| BytecodeError::UnexpectedEOF)?;
-      if bytes_read < 2 {
+      if bytes_read < 16 {
         return Err(BytecodeError::UnexpectedEOF);
       }
     }
-    let mut byte = file_bytes.iter();
-    if byte.next().unwrap() != WORD_SIZE {
+    // An iterator over the bytes of the file.
+    let mut byte_iter: Peekable<Iter<u8>> = file_bytes.iter().peekable();
+
+    // Parse the machine word size
+    // First byte: `__WORDSIZE` (64 bits in my case, so `__WORDSIZE == 64 == 0x40`.)
+    if byte_iter.next().unwrap() != WORD_SIZE {
       return Err(BytecodeError::ArchitectureMismatch);
     }
-    if byte.next().unwrap() != XVERSION {
+
+    // Parse the bytecode version
+    // Second byte: `XVERSION`, the bytecode version. (Latest Miranda` == 83 == 0x53`)
+    if byte_iter.next().unwrap() != XVERSION {
       return Err(BytecodeError::WrongBytecodeVersion);
     }
 
-    if !aliases.is_empty() {
-      // For each `old' install diversion to `new'.
-      // If alias is of form `-old`, `new' is a `pname` (private name).
+    // Todo: Why is this even here? It doesn't depend on the contents of the file!
+    self.obey_aliases(aliases)?;
 
-      let mut original_aliases = aliases;
-      let mut alias_iterator   = aliases; // Not technically an iterator.
+    // PNBASE = nextpn; // base for relocation of internal names in dump
+    // let mut private_name_base = self.heap.private_symbols.len();
+    // I think the idea is that the indices of the names in the serialized binary bytecode are actually offsets, and
+    // adding private_name_base gives the absolute index in the vector of private names.
 
-      while !alias_iterator.is_empty() {
-        // cons(
-        //   cons(strcons(name,who),type),
-        //   cons(cons(arity,showfn),cons(free_t,NIL))
-        // )
-        let mut a   = alias_iterator.pop(&mut self.heap);
-        let old     = IdentifierRecord::from_ref( self.tl_hd(a) );
-        let new_ref = self.hd_hd(a);
+    // ToDo: Is this RE-setting the values of `suppressed*`? Might they be non-empty? Neither appear to be added to
+    //       in this function.
+    self.suppressed:   ConsList = ConsList::EMPTY; // SUPPRESSED  // list of `-id' aliases successfully obeyed
+    self.suppressed_t: ConsList = ConsList::EMPTY; // TSUPPRESSED // list of -typename aliases (illegal just now)
 
+    let mut bad_dump: bool = false; // Flags an error condition
 
-        let hold = { // scope of temporaries
-          // cons(  id_who(old), cons(  id_type(old), id_val(old))  );
-          let old_who  = old.get_definition(&self.heap).unwrap();
-          let old_type = old.get_datatype(&self.heap).unwrap();
-          let old_val  = old.get_value(&self.heap).unwrap();
-          let tl       = self.heap.cons(old_type.into(), old_val.into());
-          self.heap.cons( old_who.into(), tl);
-        };
+    // The following parses the rest of the binary file. See
+    // (Serialized Binary Representation.md)[../Serialized Binary Representation.md]
+    // for more details. The first two bytes containing the word size and bytecode version have already been parsed.
 
-        old.set_type(&mut self.heap, Type::Alias);
-        old.set_val(&mut self.heap, new_ref);
-
-        if self.heap[new_ref].tag == Tag::Id {
-          let new = IdentifierRecord::from_ref(new_ref);
-          let new_datatype = new.get_datatype(&self.heap);
-          if (new_datatype != Type::Undefined || new.get_value(&self.heap).unwrap().is_some())
-              && new_datatype != Type::Alias
-          {
-            // Insert new into self.clashes such that self.clashes remains in ascending address order.
-            // Todo: Why order these?
-            self.clashes = add1(new, &mut self.clashes);
-          }
+    // Each pass through the while loop parses a single
+    // [ [filename]
+    //   [mtime]
+    //   [shareable]
+    //   [definition-list] ]
+    // block. (Note: This is skipped over in the case of a syntax-error script.)
+    while let Some(ch) = byte_iter.next() {
+      if ch == 0 || bad_dump {
+        if !bad_dump {
+          // But we need to also return `files`?
+          // I *think* the returned `files` isn't used if there is an error.
+          return Err(BytecodeError::UnexpectedEOF)
         }
-
+        if !aliases.is_empty() {
+          unscramble(aliases);
+        }
+        return Ok(files);
       }
+
+      // If we encounter a `ch==1` *before* we ever even see a file, it is because it is the magic number for a
+      // type-error script.
+      // Todo: It is awkward to have this inside the loop.
+      if ch == 1 && files.is_empty() {
+        // The next w bytes (8 bytes) give the line number of the error.
+        let error_line_prefetch: usize = get_machine_word(&mut byte_iter);
+        if is_main_script {
+          // But only save it if this is the main script.
+          self.error_line = error_line_prefetch;
+        }
+        // Todo: What if there are multiple type errors?
+      }
+
+      // Parse the file name
+      let mut filename: String;
+
+      { // scope of char_vec
+        let mut char_vec: Vec<u8> = vec![*ch];
+        char_vec.extend(
+          byte_iter.by_ref()
+                   .take_while(|c| *c != 0)
+                   .cloned()
+        );
+        filename = String::from_utf8_lossy(&*char_vec).into();
+      }
+      if let Ok(prefix) = self.prefix() {
+        make_absolute_path(&mut filename, &prefix);
+      }
+
+      // Parse file modified time
+      // Todo: Is this the right way to deserialize an mtime? How is it serialized?
+      let modified_time = SystemTime::UNIX_EPOCH + Duration::from_secs(get_machine_word(&mut byte_iter)? as u64);
+
+      // Parse sharable bit
+      let sharable: bool = byte_iter.next().unwrap_or(&0u8) == 1;
+
+      #[cfg(feature = "DEBUG")]
+      println("loading: {}({})", filename, _modified_time);
+
+      if files.is_empty() {
+        // Is this the right dump file?
+        if filename != source_file {
+          // I don't think unscramble is needed here.
+          // if aliases != NIL {
+          //   unscramble(aliases);
+          // }
+          return Err(BytecodeError::WrongSourceFile);
+        }
+      }
+
+      // Add a new `FileRecord` to `files`
+      { // Scope of `new_defs`, `file_record`
+
+        // Warning: `load_defs` side effects id's in namebuckets, cannot  be  undone  by
+        //          `unload`  until  attached  to  global `files', so interrupts are disabled during
+        //          `load_script` - see steer.c
+        // For big dumps this may be too coarse - FIX
+        let new_defs = self.load_defs(f);
+        let file_record = FileRecord::new(&mut self.heap, filename, modified_time, sharable, new_defs);
+        files.push(&mut self.heap, file_record);
+      }
+
+      // Warning: `load_defs` side effects id's in namebuckets, cannot  be  undone  by
+      //          `unload`  until  attached  to  global `files', so interrupts are disabled during
+      //          `load_script` - see steer.c
+      // For big dumps this may be too coarse - FIX
     }
 
+
+    /*
+    // Note: This mirrors the block inside the while-loop, except it adds to `old_files`, sets `sharable` to false,
+    // and has empty `defienda`.
+    { // Scope of `file_record`
+      // Add a new `FileRecord` to `old_files`
+      // Todo: WTF is `old_files`? Why are we using it instead of `files`? Why are we setting its `sharable` to
+      //       `false`, `defienda` to `NIL`? It is the most recent set of sources, in case of interrupted or failed
+      //       compilation. Why its definitions and sharable flag are not saved is a mystery.
+      let file_record = FileRecord::new(&mut self.heap, filename, modified_time, false, ConsList::EMPTY);
+      self.old_files.push(&mut self.heap, file_record);
+    }
+    */
+
+    // Dump of syntax error state
+    // If we got here, we broke out of the while because we encountered `ch==0`. If we did so before we ever found a
+    // file, it is because the `0` is the magic number for a syntax error script.
+    if files.is_empty() {
+      // The next w bytes (8 bytes) give the line number of the error.
+      { // Scope of `error_line_prefetch`
+        let error_line_prefetch: usize = get_machine_word(&mut byte_iter)?;
+        if is_main_script {
+          // But only save it if this is the main script.
+          self.error_line = error_line_prefetch;
+        }
+      }
+      // Todo: What if there are multiple type errors?
+    }
 
 
     Err(BytecodeError::ArchitectureMismatch)
