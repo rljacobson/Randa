@@ -13,7 +13,7 @@ ToDo: Should `ConsList` have a type parameter `ConstList<T>` such that `pop` ret
 
 */
 
-use crate::data::{Combinator, Combinator::NIL, Heap, RawValue, Value};
+use crate::data::{Combinator, Heap, RawValue, Value};
 use crate::data::heap::HeapCell;
 use crate::data::tag::Tag;
 use crate::data::api::HeapObjectProxy;
@@ -53,6 +53,33 @@ impl<T> ConsList<T>
 
     self.reference = new_list.into();
   }
+
+  /// Like push, but places the new item at the rear of the list instead of on the front.
+  /// Miranda's `append1`
+  #[inline(always)]
+  pub fn append(&mut self, heap: &mut Heap, item: T) {
+    // Special case, as there is no tail.
+    if self.is_empty() {
+      let new_list = heap.cons(item.into(), self.reference.into());
+      self.reference = new_list.into();
+    }
+    else {
+      // Walk to the last cons, which will be cons(last_item, NIL).
+      let mut cursor = (*self).clone();
+      let mut rest = cursor.rest_unchecked(heap);
+      while !rest.is_empty(){
+        cursor = rest;
+        rest = cursor.rest_unchecked(heap);
+      }
+
+      // Place item in the tail
+      let new_cons = heap.cons(item.into(), Combinator::NIL);
+      heap[cursor.reference].tail = new_cons.into();
+    }
+
+  }
+
+
 
   // Does not check if `self` is empty.
   #[inline(always)]
@@ -114,7 +141,30 @@ impl<T> ConsList<T>
     // because no duplicates are allowed.
   }
 
+  /// Returns a shallow copy of the `ConsList` with items in reverse order.
+  pub fn reversed(&self, heap: &mut Heap) -> Self {
+    let mut new_list = Self::EMPTY;
+    let mut cursor: ConsList<T> = (*self).clone();
+    while !cursor.is_empty() {
+      let hd = cursor.head_unchecked(heap);
+      new_list.push(heap, hd);
+      cursor = cursor.rest_unchecked(heap);
+    }
 
+    new_list
+  }
+
+  /// Returns `true` if the given value is one of the elements of the cons list, `false` otherwise.
+  pub fn contains(&self, heap: &Heap, item: T) -> bool {
+    let mut cursor: Self = (*self).clone();
+    while !cursor.is_empty() {
+      let next = cursor.pop_unchecked(heap);
+      if next == item {
+        return true;
+      }
+    }
+    false
+  }
 }
 
 impl<T> ConsList<T>

@@ -22,6 +22,7 @@ use std::time::Duration;
 
 
 use console::{Alignment, pad_str, style, Term};
+use num_traits::FromPrimitive;
 
 use crate::{
   compiler::Token,
@@ -65,7 +66,10 @@ use crate::{
   },
   algorithms::get_machine_word
 };
-use crate::bytecode_parser::get_machine_word;
+use crate::bytecode_parser::{get_machine_word, parse_filename_modified_time, parse_string, get_number, get_number_16bit, parse_line_number};
+use crate::compiler::bytecode::Bytecode;
+use crate::data::api::IdentifierDefinitionData;
+use crate::data::HeapCell;
 
 
 const NIL: Value = Value::Combinator(Combinator::Nil);
@@ -107,10 +111,13 @@ pub struct VM {
   activity                : ActivityReset,
   command_mode            : bool,
 
-  sorted                   : bool,        // Are the file definitions sorted?
+  sorted                   : bool, // Are the file definitions sorted?
   in_export_list           : bool,
   in_semantic_redeclaration: bool,
-  rv_script                : bool,        // flags readvals in use (for garbage collector)
+  rv_script                : bool, // Flags readvals in use (for garbage collector)
+  unused_types             : bool, // There are orphaned types (Miranda's TORPHANS)
+
+
   in_file                  : Option<Box<dyn BufRead>>,
 
   /// Tells editor where to find error: `errline` contains location of 1st error in main script, `errs` is `hereinfo`
@@ -119,7 +126,6 @@ pub struct VM {
   errs      : Vec<ValueRepresentationType>, // Todo: What is this holding? It is `char[24]` in Miranda.
 
   last_expression          : Value,       // A reference to the last expression evaluated.
-  last_mame                : Option<&'static str>,
 
   // endregion
 
@@ -138,6 +144,7 @@ pub struct VM {
   exportfiles : Value,
   exports     : Value,
   fnts        : Value, // `fnts` is flag indicating %bnf in use. Treated as Value?
+  aliases     : ConsList, // Not `IdentifierRecord`, because `hold` is not an `Identifier`.
   free_ids    : ConsList<IdentifierRecord>,
   internals   : ConsList<IdentifierRecord>, // list of names not exported, used by fix/unfixexports
   idsused     : ConsList<IdentifierRecord>,
@@ -147,7 +154,7 @@ pub struct VM {
   ihlist      : Value,
   includees   : ConsList,
   lasth       : Value,
-  lastname    : Value,
+  last_name    : Value,
   lexdefs     : Value,
   nonterminals: Value,
   ntmap       : Value,
@@ -247,10 +254,10 @@ impl Default for VM {
 
       terminal                : None,
 
-      compiling               : true,
-      initializing            : true,                      // Checked in `undump(..)`
-      making                  : false,
-      loading                 : false,
+      compiling   : true,
+      initializing: true,  // Checked in `undump(..)`
+      making      : false,
+      loading     : false,
 
       activity                : ActivityReset::Collecting, // Arbitrary value.
       command_mode            : false,
@@ -258,12 +265,13 @@ impl Default for VM {
       // type check
       in_export_list           : false,
       in_semantic_redeclaration: false,
-      rv_script                : false,       // Flags readvals in use (for garbage collector)
+      rv_script                : false, // Flags readvals in use (for garbage collector)
+      unused_types             : false, // There are orphaned types
+
       in_file                  : None,
       error_line               : 0,
       errs                     : vec![],
       last_expression          : Value::None, // A reference to the last expression evaluated.
-      last_mame                : None,
       // endregion
 
       heap: Heap::default(),
@@ -298,6 +306,7 @@ impl Default for VM {
       exportfiles : NIL,
       exports     : NIL,
       fnts        : NIL,
+      aliases     : ConsList::EMPTY,
       free_ids    : ConsList::EMPTY,
       internals   : ConsList::EMPTY,
       idsused     : ConsList::EMPTY,
@@ -307,7 +316,7 @@ impl Default for VM {
       ihlist      : Value::None,
       includees   : ConsList::EMPTY,
       lasth       : Value::None,
-      lastname    : Value::None,
+      last_name    : Value::None,
       lexdefs     : NIL,
       nonterminals: NIL,
       ntmap       : NIL,
@@ -553,8 +562,8 @@ impl VM {
 
       // ToDo: The uppercase `ALIASES` is a global in Miranda. We aren't mutating `aliases`, so the value of
       //       `ALIASES` *should* just be the value we passed into `load_script`. Is that enough, or do we need to
-      //       make a new member `VM::aliases`?
-      // let mut original_aliases = aliases;
+      //       make a new member `VM::aliases`? Unfortunately, I think we need a new member.
+      self.aliases = aliases;
       let mut alias_iterator   = aliases; // Not technically an iterator.
 
       while !alias_iterator.is_empty() {
@@ -579,7 +588,7 @@ impl VM {
           self.heap.cons( old_who.into(), tl);
         };
 
-        old.set_type(&mut self.heap, Type::Alias);
+        old.set_type(&mut self.heap, Type::Alias.into());
         // We make old an alias of new.
         old.set_val(&mut self.heap, new_ref);
 
@@ -607,8 +616,8 @@ impl VM {
 
       if !self.clashes.is_empty() {
 
-        // Todo: I don't think `unscramble` is necessary here.
-        // unscramble(aliases);
+        // Todo: I don't think `unalias` is necessary here.
+        self.unalias(aliases);
         // return (NIL);
         return Err(BytecodeError::NameClash); // BAD_DUMP = -2;
       }
@@ -623,7 +632,7 @@ impl VM {
         if self.heap[ch].tag == Tag::Id {
           let ch = IdentifierRecord::from_ref(ch);
           if ch.get_datatype(&self.heap) != Type::Alias {
-            ch.set_type(&mut self.heap, Type::New);
+            ch.set_type(&mut self.heap, Type::New.into());
           }
         }
       } // FIX1
@@ -633,14 +642,24 @@ impl VM {
 
   }
 
+  /// Gets the file name for the topmost file in the `vm.files` cons list, which _should_ be the current file. This
+  fn current_file(&self) -> String {
+    assert!(!self.files.is_empty());
+    let f = self.files.head(&self.heap).unwrap();
+
+    f.get_file_name(&self.heap)
+  }
+
+
+
   /// Loads a compiled script from `in_file` for the `source_file`.
   fn load_script(
     &mut self,
     in_file        : &File,
     mut source_file: String,
     mut aliases    : ConsList, // List of cons(new_id, old_id)
-    parameters     : Value,
-    is_main_script: bool
+    parameters     : Value,    // Todo: `parameters` never used?
+    is_main_script : bool
   ) -> Result<ConsList<FileRecord>, BytecodeError>
   {
     /*
@@ -686,8 +705,10 @@ impl VM {
     self.obey_aliases(aliases)?;
 
     // PNBASE = nextpn; // base for relocation of internal names in dump
-    // let mut private_name_base = self.heap.private_symbols.len();
-    // I think the idea is that the indices of the names in the serialized binary bytecode are actually offsets, and
+    let private_symbol_base_index = self.heap.private_symbols.len();
+    // I think the idea is that the indices of the names in the serialized binary bytecode assume an empty private
+    // symbol table, and that may not be the case if the current file is, say, included in another file. So indices
+    // in the bytecode are actually _relative_ to the index of the first private symbol of the current file, and
     // adding private_name_base gives the absolute index in the vector of private names.
 
     // ToDo: Is this RE-setting the values of `suppressed*`? Might they be non-empty? Neither appear to be added to
@@ -715,7 +736,7 @@ impl VM {
           return Err(BytecodeError::UnexpectedEOF)
         }
         if !aliases.is_empty() {
-          unscramble(aliases);
+          self.unalias(aliases);
         }
         return Ok(files);
       }
@@ -725,7 +746,7 @@ impl VM {
       // Todo: It is awkward to have this inside the loop.
       if ch == 1 && files.is_empty() {
         // The next w bytes (8 bytes) give the line number of the error.
-        let error_line_prefetch: usize = get_machine_word(&mut byte_iter);
+        let error_line_prefetch: usize = get_machine_word(&mut byte_iter)?;
         if is_main_script {
           // But only save it if this is the main script.
           self.error_line = error_line_prefetch;
@@ -733,25 +754,12 @@ impl VM {
         // Todo: What if there are multiple type errors?
       }
 
-      // Parse the file name
-      let mut filename: String;
+      // Parse the file name and modified time
 
-      { // scope of char_vec
-        let mut char_vec: Vec<u8> = vec![*ch];
-        char_vec.extend(
-          byte_iter.by_ref()
-                   .take_while(|c| *c != 0)
-                   .cloned()
-        );
-        filename = String::from_utf8_lossy(&*char_vec).into();
-      }
+      let (mut filename, modified_time) = parse_filename_modified_time(&mut byte_iter)?;
       if let Ok(prefix) = self.prefix() {
         make_absolute_path(&mut filename, &prefix);
       }
-
-      // Parse file modified time
-      // Todo: Is this the right way to deserialize an mtime? How is it serialized?
-      let modified_time = SystemTime::UNIX_EPOCH + Duration::from_secs(get_machine_word(&mut byte_iter)? as u64);
 
       // Parse sharable bit
       let sharable: bool = byte_iter.next().unwrap_or(&0u8) == 1;
@@ -762,10 +770,10 @@ impl VM {
       if files.is_empty() {
         // Is this the right dump file?
         if filename != source_file {
-          // I don't think unscramble is needed here.
-          // if aliases != NIL {
-          //   unscramble(aliases);
-          // }
+          // I don't think unalias is needed here.
+          if aliases != NIL {
+            self.unalias(aliases);
+          }
           return Err(BytecodeError::WrongSourceFile);
         }
       }
@@ -777,30 +785,13 @@ impl VM {
         //          `unload`  until  attached  to  global `files', so interrupts are disabled during
         //          `load_script` - see steer.c
         // For big dumps this may be too coarse - FIX
-        let new_defs = self.load_defs(f);
+        let new_defs = self.load_defs(&mut byte_iter);
         let file_record = FileRecord::new(&mut self.heap, filename, modified_time, sharable, new_defs);
         files.push(&mut self.heap, file_record);
       }
 
-      // Warning: `load_defs` side effects id's in namebuckets, cannot  be  undone  by
-      //          `unload`  until  attached  to  global `files', so interrupts are disabled during
-      //          `load_script` - see steer.c
-      // For big dumps this may be too coarse - FIX
     }
 
-
-    /*
-    // Note: This mirrors the block inside the while-loop, except it adds to `old_files`, sets `sharable` to false,
-    // and has empty `defienda`.
-    { // Scope of `file_record`
-      // Add a new `FileRecord` to `old_files`
-      // Todo: WTF is `old_files`? Why are we using it instead of `files`? Why are we setting its `sharable` to
-      //       `false`, `defienda` to `NIL`? It is the most recent set of sources, in case of interrupted or failed
-      //       compilation. Why its definitions and sharable flag are not saved is a mystery.
-      let file_record = FileRecord::new(&mut self.heap, filename, modified_time, false, ConsList::EMPTY);
-      self.old_files.push(&mut self.heap, file_record);
-    }
-    */
 
     // Dump of syntax error state
     // If we got here, we broke out of the while because we encountered `ch==0`. If we did so before we ever found a
@@ -815,11 +806,186 @@ impl VM {
         }
       }
       // Todo: What if there are multiple type errors?
+
+      while let Some(_ch) = byte_iter.next(){
+
+
+        // Parse filename and modified time.
+        let (filename, modified_time) = parse_filename_modified_time(&mut byte_iter);
+        if let Ok(prefix) = self.prefix() {
+          make_absolute_path(&mut filename, &prefix);
+        }
+
+        if old_files.is_empty() {
+          // Is this the right dump file?
+          if filename != source_file {
+            // I don't think unalias is needed here.
+            if !aliases.is_empty() {
+              self.unalias(aliases);
+            }
+            return Err(BytecodeError::WrongSourceFile);
+          }
+        }
+
+        // Note: This mirrors the block inside the while-loop, except it adds to `old_files`, sets `sharable` to false,
+        // and has empty `defienda`.
+        { // Scope of `file_record`
+          // Add a new `FileRecord` to `old_files`
+          // Todo: WTF is `old_files`? Why are we using it instead of `files`? Why are we setting its `sharable` to
+          //       `false`, `defienda` to `NIL`? It is the most recent set of sources, in case of interrupted or failed
+          //       compilation. Why its definitions and sharable flag are not saved is a mystery.
+          let file_record = FileRecord::new(&mut self.heap, filename, modified_time, false, ConsList::EMPTY);
+          self.old_files.push(&mut self.heap, file_record);
+        }
+      }
+
+      if !aliases.is_empty() {
+        self.unalias(aliases)
+      }
+
+      return Ok(files); // Equivalent to `return Ok(Nil);`
     }
 
+    // Parse algebraic show functions
+    { // scope of new_defs
+      let new_defs = self.load_defs(&mut byte_iter);
+      self.algebraic_show_functions.append(&mut self.heap, new_defs);
+    }
 
-    Err(BytecodeError::ArchitectureMismatch)
+    // Parse [ND] or [True] (Are there type orphans?)
+    if self.load_defs(&mut byte_iter)? == Combinator::True {
+      self.undefined_names = ConsList::EMPTY;
+      self.unused_types = true;
+    }
+
+    // Parse DEF_X
+    // Parse sui generis constructors
+    // Todo: This does not appear in the binary description
+    self.sui_generis_constructors.append(&mut self.heap, self.load_defs(&mut byte_iter ) );
+
+    // Parse DEF_X
+    // Parse free_ids
+    if is_main_script || self.includees.is_empty() {
+      self.free_ids = self.load_defs(&mut byte_iter );
+    }
+    else {
+      // Todo: Implement bindparams, hdsort
+      bindparams(self.load_defs(f), hdsort(params)); // the only use of params
+    }
+
+    // Housekeeping
+    // Todo: Do we unalias unconditionally?
+    if !aliases.is_empty() {
+      self.unalias(aliases)
+    }
+
+    // Parse DEF_X
+    // Parse internals
+    if is_main_script {
+      self.internals = self.load_defs(&mut byte_iter )
+    }
+
+    Ok(files.reversed(&mut self.heap))
   }
+
+  /// Remove old to new diversions installed in `obey_aliases`. (Miranda's `unscramble()`.)
+  fn unalias(&mut self, aliases: ConsList) {
+    let mut cursor = aliases;
+
+    while !cursor.is_empty() {
+      let old = IdentifierRecord::from_ref(self.heap.tl_hd(aliases.get_ref()));
+      let mut hold = IdentifierRecord::from_ref(self.heap.hd_hd(old));
+      let new_value: IdentifierValue = match old.get_value(&self.heap) {
+        Ok(Some(v)) => {
+          v
+        },
+        _ => {
+          panic!{"Impossible value found in aliases."}
+        }
+      };
+
+      // Put `new_value` (which is the _value_ of `old`) where `hold` used to be. For missing check, see below.
+      *self.heap.hd_hd_mut(aliases.get_ref()) = new_value.get_ref();
+
+      let hold_data = hold.get_data(&self.heap).expect("Impossible value found in aliases.");
+      // id_who(old)=hd[hold]; hold=tl[hold];
+      old.set_definiton(&mut self.heap, hold_data.definition);
+      // id_type(old)=hd[hold];
+      old.set_type(&mut self.heap, hold_data.datatype);
+      { // id_val(old)=tl[hold];
+        let v: IdentifierValue = hold_data.value.expect("Impossible value found in aliases.");
+        old.set_value(&mut self.heap, v);
+      }
+
+      cursor = cursor.rest_unchecked(&self.heap);
+    } // end iter over `aliases`
+
+    // Now adjust self.aliases
+
+    // This accumulates missing aliases. We will replace `self.aliases` with `missing_aliases` at the end.
+    let mut missing_aliases: ConsList = ConsList::EMPTY;
+
+    cursor = self.aliases;
+    while !cursor.is_empty() {
+      let alias: RawValue = cursor.pop_unchecked(&mut self.heap);
+      let new_ref = self.heap[alias].head;
+      let old_ref = self.heap[alias].tail;
+
+      if self.heap[new_ref].tag != Tag::Id {
+        // aka stuff irrelevant to pnames
+        // Todo: This is wrong by definition, because we only get here if tag != Tag:Id.
+        let new_id = IdentifierRecord.from_ref(new_ref);
+        if !self.suppressed.contains(&self.heap, new_id) {
+          missing_aliases.push(&mut self.heap, new_id)
+        }
+        continue;
+      }
+
+      // We know `new_ref` points to an `IdentifierRecord` at this point.
+      let new_id: IdentifierRecord = IdentifierRecord::from_ref(new_ref);
+
+      // FIX1
+      if  new_id.get_type(&self.heap) == Type::New.into() {
+        new_id.set_type(&mut self.heap, Type::Undefined.into());
+      }
+
+      if new_id.get_type(&self.heap) == Type::Undefined.into() {
+        // Todo: Do we know old_ref is an `IdentifierRecord`?
+        let old_id = IdentifierRecord::from_ref(old_ref);
+        missing_aliases.push(&mut self.heap, old_id.get_ref());
+      }
+      else if !self.clashes.contains(&self.heap, new_id) {
+        let new_def     : IdentifierDefinition     = new_id.get_definition(&self.heap).unwrap();
+        let new_def_data: IdentifierDefinitionData = new_def.get_data(&self.heap).unwrap();
+
+        // Install aka info in new
+        match new_def_data {
+
+          IdentifierDefinitionData::Alias {..} => {/* pass */}
+
+          // If it's not an alias
+          _ => {
+            // Todo: This is a complete mess.
+            let old_tmp = self.heap.hd_hd(old_ref);
+            let old_id = self.heap[old_tmp].head;
+            // Todo: This does not look like the correct format for the who field.
+            // id_who(new) = cons(datapair(get_id(old), 0), id_who(new));
+            let datapair = self.heap.data_pair(old_id.into(), Value::None);
+            let new_who = self.heap.cons(datapair, new_def.get_ref().into());
+            new_id.set_definiton(
+              &mut self.heap,
+              IdentifierDefinition::from_ref(new_who.into())
+            );
+          }
+
+        }
+      }
+    }
+
+    // Transmits info about missing aliasees
+    self.aliases = missing_aliases;
+  }
+
 
   fn println_centered(&self, text: &str) {
     if let Some(term) = &self.terminal {
@@ -923,7 +1089,7 @@ impl VM {
     // *self.heap.id_type(self.void_) = RawValue(Type::Void as isize);
     // *self.heap.id_val(self.void_)  = self.heap.constructor(RawValue(0).into(), self.void_).into();
     let value = self.heap.constructor(RawValue(0).into(), self.void_.into()).into();
-    self.void_.set_value(&mut self.heap, IdentifierValueData::Arbitrary(value));
+    self.void_.set_value(&mut self.heap, IdentifierValue::from_ref(value.into()));
 
     self.common_stdin  = self.heap.apply(Combinator::Read.into()   , RawValue(0).into());
     self.common_stdinb = self.heap.apply(Combinator::ReadBin.into(), RawValue(0).into());
@@ -1243,6 +1409,237 @@ impl VM {
     }
   }
 
+
+
+
+
+  /// load a sequence of definitions terminated by `DEF_X`, or a single object terminated
+  /// by `DEF_X`, from the byte stream `byte_iter`. The `private_mame_base` parameter is the base index in the
+  /// `heap.private_symbols` vector to be used for translating relative indices to absolute indices. It is ignored if
+  /// there are no private name definitions to read in byte_iter.
+  fn load_defs(
+    &mut self,
+    byte_iter: &mut dyn Iterator<Item=u8>,
+    private_symbol_base_index: usize
+  ) -> Result<ConsList, BytecodeError>
+  {
+    let mut defs: ConsList = ConsList::EMPTY;
+
+    while let Some(ch) = byte_iter.next() {
+      // Decode the byte
+      let code = if let Some(code) = Bytecode::from_u8(ch)  {
+        code
+      } else {
+        // It is a RawValue.
+        let v = if  ch > 127 {
+          ch as ValueRepresentationType + 256
+        } else {
+          ch as ValueRepresentationType
+        };
+        defs.push(&mut self.heap, v.into());
+        continue;
+      };
+
+
+      match code {
+
+        Bytecode::Char => {
+          let v = next(byte_iter)?;
+          defs.push(&mut self.heap, (v as ValueRepresentationType + 128).into());
+        }
+
+        Bytecode::TypeVariable => {
+          let v = next(byte_iter)?;
+          let type_var = self.heap.type_var(Value::None, (v as ValueRepresentationType).into());
+          defs.push(&mut self.heap, type_var.into());
+        }
+
+        Bytecode::Short => {
+          let mut v = next(byte_iter)?;
+          if v & 128 {
+            v = v | (!127);
+          }
+          defs.push(&mut self.heap, self.heap.small_int((v as ValueRepresentationType)).into());
+        }
+
+        Bytecode::Integer => {
+          let mut int_list: ConsList<RawValue> = ConsList::EMPTY;
+
+          loop{
+            let v: ValueRepresentationType = get_number::<ValueRepresentationType>(byte_iter)?;
+
+            // Todo: Is this semantics compatible with Miranda's?
+            // Slightly different semantics from Miranda. In Miranda, the very first value is always pushed to the cons
+            // list and the loop continued even if it is -1. This code breaks without pushing if the first value is -1.
+            if v == -1 {
+              break;
+            }
+
+            let integer = self.heap.integer(v.into());
+            int_list.push(&mut self.heap, integer.into());
+          }
+
+          // Check semantics -- see above.
+          assert!(!int_list.is_empty());
+          defs.push(&mut self.heap, int_list.get_ref());
+        }
+
+        Bytecode::Double => {
+          let real_number = get_number::<f64>(byte_iter)?;
+
+          // Todo: We convert isize-->f64 and then f64-->isize. This is stupid.
+          defs.push(&mut self.heap, self.heap.real(real_number).into());
+        }
+
+        Bytecode::Unicode => {
+          let v = get_number::<ValueRepresentationType>(byte_iter)?;
+
+          defs.push(&mut self.heap, self.heap.unicode(v).into());
+        }
+
+        // Reads in the index of a private symbol. Differs from `Bytecode::PrtivateName1` in that it only reads two
+        // bytes.
+        Bytecode::PrivateName => {
+          let mut v: usize = get_number_16bit::<u16>(byte_iter)? as usize;
+
+          // See the notes for `private_symbol_base_index` in `vm.load_script()`.
+          v += private_symbol_base_index;
+
+          let ps = self.heap.get_nth_private_symbol(v);
+          defs.push(&mut self.heap, ps.into());
+
+          // Todo: This is an index into `vm.private_names`?
+          /* Miranda source code is:
+          ch = getc(f);
+          ch = PNBASE + (ch | (getc(f) << 8));
+          *stackp++ = ch < nextpn ? pnvec[ch] : sto_pn(ch);
+          // efficiency hack for *stackp++ = sto_pn(ch);
+          */
+        }
+
+        // This differs from Bytecode::PrivateName in that is reads `MACHINE_WORD_SIZE` bytes.
+        Bytecode::PrivateName1 => {
+          let mut v = get_number::<usize>(byte_iter)?;
+          // See the notes  for `private_symbol_base_index` in `vm.load_script()`.
+          v += private_symbol_base_index;
+
+          let ps = self.heap.get_nth_private_symbol(v);
+          defs.push(&mut self.heap, ps.into());
+        }
+
+        Bytecode::Construct => {
+          let v = get_number_16bit::<i16>(byte_iter)?;
+          let last_value = defs.head_unchecked(&mut self.heap);
+          let new_value = self.heap.constructor(v, last_value);
+          defs.push(&mut self.heap, new_value.into());
+        }
+
+        Bytecode::ReadVals => {
+          let previous_value = defs.pop_unchecked(&mut self.heap);
+          let new_value = self.heap.start_read_vals(Value::None, previous_value.into());
+          defs.push(&mut self.heap, new_value.into());
+
+          self.rv_script = true;
+        }
+
+        Bytecode::ID => {
+          let name: String = parse_string(byte_iter)?;
+
+          match self.heap.symbol_table.get(name.as_str()) {
+            Some(id_ref) => {
+              let id = IdentifierRecord::from_ref(id_ref.into());
+              let id_type = id.get_type(&mut self.heap);
+
+              if id_type == Type::New.into()  {
+                // A name collision
+                self.clashes.insert_ordered(&mut self.heap, id);
+              }  else if id_type == Type::Alias.into() {
+                // Follow the alias.
+                match id.get_value(&self.heap)? {
+                  None => { return Err(BytecodeError::MalformedDef) }
+                  Some(id_value) => {
+                    defs.push(&mut self.heap, id_value.get_ref());
+                  }
+                }
+              } else {
+                // Can this happen?
+                defs.push(&mut self.heap, id_ref.into());
+              }
+            }
+
+            None => {
+              // Create the ID
+              let id = self.heap.make_empty_identifier(name.as_str());
+              defs.push(&mut self.heap, id.get_ref())
+            }
+          }
+        }
+
+        Bytecode::AKA => {
+          let name = parse_string(byte_iter)?;
+          let id = self.heap.symbol_table.get(name.as_str()).ok_or(BytecodeError::SymbolNotFound)?;
+          let pair = self.heap.data_pair(*id, Value::None);
+
+          defs.push(&mut self.heap, pair.into());
+        }
+
+        Bytecode::Here => {
+          let ch = byte_iter.peek();
+          let file_path: String = // the value of the following if block
+              if ch == 0 {
+                // ch==0 is shorthand for "current file"
+                byte_iter.next(); // Consumed peeked value.
+                self.current_file()
+              }
+              else if ch != b'/' {
+                // Transform path into absolute path.
+                let prefix_ref = self.prefix_stack.head(&self.heap);
+                let mut prefix = self.heap.resolve_string(prefix_ref.into()).unwrap();
+
+                format!("{}{}", prefix, parse_string(byte_iter)?)
+              }
+              else {
+                parse_string(byte_iter)?
+              };
+          let file_id = match self.heap.symbol_table.get(file_path.as_str()) {
+            Some(value) => value.clone(),
+            None => {
+              // Todo: What is the right thing to do here?
+              self.heap.make_empty_identifier(file_path.as_str()).get_ref().into()
+            }
+          };
+          let line_number = parse_line_number(byte_iter)?;
+          let file_info = self.heap.file_info(file_id, line_number.into());
+
+          defs.push(&mut  self.heap, file_info.into());
+        }
+
+        // Bytecode::Definitions => {}
+
+      }
+    }
+
+
+    ConsList::default()
+  }
+
+
+
+
+
+
 }
 
 
+
+
+/// Convenience function that returns the next byte or `BytecodeError::UnexpectedEOF`.
+fn next(byte_iter: &mut dyn Iterator<Item=u8>) -> Result<u8, BytecodeError> {
+  match byte_iter.next() {
+    Some(ch) => Ok(ch),
+
+    None => {
+      Err(BytecodeError::UnexpectedEOF)
+    }
+  }
+}

@@ -59,6 +59,14 @@ impl FileRecord {
     }
   }
 
+  pub fn get_file_name(&self, heap: &Heap) -> String {
+    let inner_cons_ref = heap[self.reference].head;
+    let file_info = heap[inner_cons_ref].head;
+    let file_name_ref = heap[file_info].head;
+
+    heap.resolve_string(file_name_ref).expect("FileRecord has no file name. This is a bug.")
+  }
+
 
   pub fn get_definienda(&self, heap: &Heap) -> ConsList {
     // cons(  cons(  fileinfo(filename,mtime),  share),    definienda)

@@ -32,7 +32,7 @@ use crate::{
     INIT_SPACE,
   }
 };
-use crate::data::api::{HeapObjectProxy, IdentifierDefinition, IdentifierDefinitionData, IdentifierRecord};
+use crate::data::api::{ConsList, HeapObjectProxy, IdentifierDefinition, IdentifierDefinitionData, IdentifierRecord};
 
 type ValueResult = Result<Value, ()>;
 
@@ -224,12 +224,12 @@ impl Heap {
     );
 
     let id_value = if is_capitalized(name) {
-      self.constructor(value, id_ref.into())
+      self.constructor(value, id_ref.get_ref().into())
     } else {
       value
     };
 
-    self[id_ref].tail = id_value.into();
+    self[id_ref.get_ref()].tail = id_value.into();
 
     id_ref
   }
@@ -498,6 +498,25 @@ impl Heap {
     string_ref
   }
 
+  pub fn small_int(&mut  self, value: ValueRepresentationType)  -> Value {
+    let v = match  value < 0 {
+      true => {
+        SIGNBIT | (-(X))
+      },
+      false =>  {
+        x
+      }
+    };
+
+    self.put(Tag::Int, v, (0 as ValueRepresentationType).into())
+  }
+
+  /// Creates a `HeapCell` with tag `Tag::Int`, head `value`, and tail `NIL`.
+  /// This does _not_ create a cons list of ints.
+  pub fn integer(&mut self, value: ValueRepresentationType) -> Value {
+    self.put(Tag::Int, value.into(), Value::None)
+  }
+
   pub fn identifier(&mut self, head: Value, tail: Value) -> Value {
     self.put(Tag::Id, head, tail)
   }
@@ -542,12 +561,20 @@ impl Heap {
     self.put(Tag::Pair, head, tail)
   }
 
+  pub fn start_read_vals(&mut self, head: Value, tail: Value) -> Value {
+    self.put(Tag::StartReadVals, head, tail)
+  }
+
   pub fn tcons(&mut self, head: Value, tail: Value) -> Value {
     self.put(Tag::TCons, head, tail)
   }
 
   pub fn tries(&mut self, head: Value, tail: Value) -> Value {
     self.put(Tag::Tries, head, tail)
+  }
+
+  pub fn type_var(&mut self, head: Value, tail: Value) -> Value {
+    self.put(Tag::TypeVar, head, tail)
   }
 
   pub fn label(&mut self, head: Value, tail: Value) -> Value {
@@ -582,6 +609,11 @@ impl Heap {
       std::mem::transmute::<f64, ValueRepresentationType>(number)
     };
     self.put(Tag::Double, Value::Data(bits), Value::None)
+  }
+
+  /// Creates a (boxed) Unicode character.
+  pub fn unicode(&mut self, code_point: ValueRepresentationType) -> Value {
+    self.put(Tag::Unicode, code_point.into(), Value::None)
   }
 
   // endregion

@@ -18,6 +18,7 @@ pub enum BytecodeError {
   UnexpectedEOF,        // BAD_DUMP = 2
   MalformedDef,         // BAD_DUMP = 3 "badly formed def in dump\n"
                         // BAD_DUMP = 4  should unsetids, possibly not an error?
+  SymbolNotFound,       // References a symbol that doesn't exist.
 }
 
 impl Display for BytecodeError {
@@ -40,6 +41,9 @@ impl Display for BytecodeError {
       }
       BytecodeError::MalformedDef => {
         write!(f, "Malformed definition encountered.")
+      }
+      BytecodeError::SymbolNotFound => {
+        write!(f, "A nonexistent symbol was referenced.")
       }
     }
   }

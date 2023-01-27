@@ -13,7 +13,7 @@ AST nodes.
 pub mod token;
 pub mod errors;
 mod lexer;
-mod bytecode;
+pub(crate) mod bytecode;
 // mod parser;
 
 

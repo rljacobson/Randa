@@ -131,9 +131,14 @@ impl IdentifierRecord {
     Ok(value)
   }
 
-  pub fn set_value(&self, heap: &mut Heap, value: IdentifierValueData) {
+
+  pub fn set_value_from_data(&self, heap: &mut Heap, value: IdentifierValueData) {
     let id_value = IdentifierValue::new(heap, value);
     heap[self.reference].tail = id_value.reference;
+  }
+
+  pub fn set_value(&self, heap: &mut Heap, value: IdentifierValue) {
+    heap[self.reference].tail = value.reference;
   }
 
   /// Sets the identifier's "who" field.
@@ -144,8 +149,16 @@ impl IdentifierRecord {
     heap.tl_hd_mut(id_head) = definition.into();
   }
 
+
   /// Sets the identifier's type (not the value type)
-  pub fn set_type(&self, heap: &mut Heap, new_type: Type) {
+  pub fn get_type(&self, heap: &Heap) -> RawValue {
+    let id_head = heap[self.reference].head;
+    heap[id_head].tail
+  }
+
+
+  /// Sets the identifier's type (not the value type)
+  pub fn set_type(&self, heap: &mut Heap, new_type: Value) {
     let id_head = heap[self.reference].head;
     heap[id_head].tail = new_type.into()
   }
