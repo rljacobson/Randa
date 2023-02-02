@@ -713,8 +713,8 @@ impl VM {
 
     // ToDo: Is this RE-setting the values of `suppressed*`? Might they be non-empty? Neither appear to be added to
     //       in this function.
-    self.suppressed:   ConsList = ConsList::EMPTY; // SUPPRESSED  // list of `-id' aliases successfully obeyed
-    self.suppressed_t: ConsList = ConsList::EMPTY; // TSUPPRESSED // list of -typename aliases (illegal just now)
+    self.suppressed   = ConsList::EMPTY; // SUPPRESSED  // list of `-id' aliases successfully obeyed
+    self.suppressed_t = ConsList::EMPTY; // TSUPPRESSED // list of -typename aliases (illegal just now)
 
     let mut bad_dump: bool = false; // Flags an error condition
 
@@ -1417,12 +1417,7 @@ impl VM {
   /// by `DEF_X`, from the byte stream `byte_iter`. The `private_mame_base` parameter is the base index in the
   /// `heap.private_symbols` vector to be used for translating relative indices to absolute indices. It is ignored if
   /// there are no private name definitions to read in byte_iter.
-  fn load_defs(
-    &mut self,
-    byte_iter: &mut dyn Iterator<Item=u8>,
-    private_symbol_base_index: usize
-  ) -> Result<ConsList, BytecodeError>
-  {
+  fn load_defs(&mut self, byte_iter: &mut dyn Iterator<Item=u8>) -> Result<ConsList, BytecodeError> {
     let mut defs: ConsList = ConsList::EMPTY;
 
     while let Some(ch) = byte_iter.next() {
@@ -1474,7 +1469,7 @@ impl VM {
             if v == -1 {
               break;
             }
-
+            
             let integer = self.heap.integer(v.into());
             int_list.push(&mut self.heap, integer.into());
           }
@@ -1537,7 +1532,7 @@ impl VM {
         Bytecode::ReadVals => {
           let previous_value = defs.pop_unchecked(&mut self.heap);
           let new_value = self.heap.start_read_vals(Value::None, previous_value.into());
-          defs.push(&mut self.heap, new_value.into());
+          defs.push(&mut self.heap, new_value);
 
           self.rv_script = true;
         }
