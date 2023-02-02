@@ -711,8 +711,8 @@ impl VM {
 
     // ToDo: Is this RE-setting the values of `suppressed*`? Might they be non-empty? Neither appear to be added to
     //       in this function.
-    self.suppressed:   ConsList = ConsList::EMPTY; // SUPPRESSED  // list of `-id' aliases successfully obeyed
-    self.suppressed_t: ConsList = ConsList::EMPTY; // TSUPPRESSED // list of -typename aliases (illegal just now)
+    self.suppressed   = ConsList::EMPTY; // SUPPRESSED  // list of `-id' aliases successfully obeyed
+    self.suppressed_t = ConsList::EMPTY; // TSUPPRESSED // list of -typename aliases (illegal just now)
 
     let mut bad_dump: bool = false; // Flags an error condition
 
@@ -1539,7 +1539,7 @@ impl VM {
           }
           let last_value = item_stack.last().unwrap();
           *last_value = self.heap.constructor(v, (*last_value));
-          
+
           let new_value = self.heap.constructor(v, last_value);
           item_stack.push(new_value.into());
         }
