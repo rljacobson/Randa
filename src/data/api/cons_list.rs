@@ -47,6 +47,15 @@ impl<T> ConsList<T>
     self.reference == Combinator::Nil.into()
   }
 
+  /// Returns the number of elements in the list. This runs in O(n) time.
+  pub fn len(&self, heap: &Heap) -> usize {
+    if self.is_empty() {
+      return 0;
+    } else {
+      return 1 + self.rest_unchecked(heap).len(heap);
+    }
+  }
+
   #[inline(always)]
   pub fn push(&mut self, heap: &mut Heap, item: T) {
     let new_list = heap.cons(item.into(), self.reference.into());

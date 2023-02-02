@@ -152,7 +152,7 @@ pub struct VM {
   suppressed  : ConsList<IdentifierRecord>, // list of `-id' aliases successfully obeyed, used for error reporting
   suppressed_t: ConsList<IdentifierRecord>, // list of -typename aliases (illegal just now)
   ihlist      : Value,
-  includees   : ConsList,
+  includees   : ConsList<FileRecord>,
   lasth       : Value,
   last_name    : Value,
   lexdefs     : Value,
@@ -316,7 +316,7 @@ impl Default for VM {
       ihlist      : Value::None,
       includees   : ConsList::EMPTY,
       lasth       : Value::None,
-      last_name    : Value::None,
+      last_name   : Value::None,
       lexdefs     : NIL,
       nonterminals: NIL,
       ntmap       : NIL,
@@ -650,8 +650,6 @@ impl VM {
     f.get_file_name(&self.heap)
   }
 
-
-
   /// Loads a compiled script from `in_file` for the `source_file`.
   fn load_script(
     &mut self,
@@ -785,7 +783,7 @@ impl VM {
         //          `unload`  until  attached  to  global `files', so interrupts are disabled during
         //          `load_script` - see steer.c
         // For big dumps this may be too coarse - FIX
-        let new_defs = self.load_defs(&mut byte_iter);
+        let new_defs = self.load_defs(&mut byte_iter)?;
         let file_record = FileRecord::new(&mut self.heap, filename, modified_time, sharable, new_defs);
         files.push(&mut self.heap, file_record);
       }
@@ -848,8 +846,8 @@ impl VM {
 
     // Parse algebraic show functions
     { // scope of new_defs
-      let new_defs = self.load_defs(&mut byte_iter);
-      self.algebraic_show_functions.append(&mut self.heap, new_defs);
+      let new_defs = self.load_defs(&mut byte_iter)?;
+      self.algebraic_show_functions.append(&mut self.heap, new_defs.get_ref());
     }
 
     // Parse [ND] or [True] (Are there type orphans?)
@@ -861,12 +859,15 @@ impl VM {
     // Parse DEF_X
     // Parse sui generis constructors
     // Todo: This does not appear in the binary description
-    self.sui_generis_constructors.append(&mut self.heap, self.load_defs(&mut byte_iter ) );
+    {
+      let new_defs = self.load_defs(&mut byte_iter)?;
+      self.sui_generis_constructors.append(&mut self.heap, new_defs.get_ref());
+    }
 
     // Parse DEF_X
     // Parse free_ids
     if is_main_script || self.includees.is_empty() {
-      self.free_ids = self.load_defs(&mut byte_iter );
+      self.free_ids = self.load_defs(&mut byte_iter )?;
     }
     else {
       // Todo: Implement bindparams, hdsort
@@ -882,7 +883,8 @@ impl VM {
     // Parse DEF_X
     // Parse internals
     if is_main_script {
-      self.internals = self.load_defs(&mut byte_iter )
+      let new_defs = self.load_defs(&mut byte_iter)?;
+      self.internals = new_defs;
     }
 
     Ok(files.reversed(&mut self.heap))
@@ -1410,20 +1412,22 @@ impl VM {
   }
 
 
-
-
-
   /// load a sequence of definitions terminated by `DEF_X`, or a single object terminated
-  /// by `DEF_X`, from the byte stream `byte_iter`. The `private_mame_base` parameter is the base index in the
-  /// `heap.private_symbols` vector to be used for translating relative indices to absolute indices. It is ignored if
-  /// there are no private name definitions to read in byte_iter.
+  /// by `DEF_X`, from the byte stream `byte_iter`.
+  ///
+  /// The type of the returned value has to be an opaque type, because any serializable object can be returned.
+  // Todo: Some calls to `load_defs()` assume that a cons list, or even a `ConsList<IdentifierRecord>`, is returned,
+  //       but it's clear that there are times when the return value is not a cons list.
   fn load_defs(
     &mut self,
-    byte_iter: &mut dyn Iterator<Item=u8>,
-    private_symbol_base_index: usize
-  ) -> Result<ConsList, BytecodeError>
+    byte_iter: &mut dyn Iterator<Item=u8>
+  ) -> Result<ConsList<IdentifierRecord>, BytecodeError>
   {
+    // Holds a list of definitions in cases where multiple definitions are read.
     let mut defs: ConsList = ConsList::EMPTY;
+    // Holds the components of an item that have been read so far. When all of the components have been read, the
+    // item will be created using `item_stack`.
+    let mut item_stack: Vec<RawValue> = Vec::new();
 
     while let Some(ch) = byte_iter.next() {
       // Decode the byte
@@ -1436,65 +1440,65 @@ impl VM {
         } else {
           ch as ValueRepresentationType
         };
-        defs.push(&mut self.heap, v.into());
+        item_stack.push(v.into());
         continue;
       };
-
 
       match code {
 
         Bytecode::Char => {
           let v = next(byte_iter)?;
-          defs.push(&mut self.heap, (v as ValueRepresentationType + 128).into());
+          item_stack.push((v as ValueRepresentationType + 128).into());
         }
 
         Bytecode::TypeVariable => {
           let v = next(byte_iter)?;
           let type_var = self.heap.type_var(Value::None, (v as ValueRepresentationType).into());
-          defs.push(&mut self.heap, type_var.into());
+          item_stack.push(type_var.into());
         }
 
+        // Todo: Do we want to support "small" integers? Yes for now, for Miranda compatibility.
         Bytecode::Short => {
           let mut v = next(byte_iter)?;
           if v & 128 {
             v = v | (!127);
           }
-          defs.push(&mut self.heap, self.heap.small_int((v as ValueRepresentationType)).into());
+          item_stack.push(self.heap.small_int((v as ValueRepresentationType)).into());
         }
 
         Bytecode::Integer => {
-          let mut int_list: ConsList<RawValue> = ConsList::EMPTY;
+          // Allow the very first value to be -1.
+          let mut v: ValueRepresentationType = get_number::<ValueRepresentationType>(byte_iter)?;
+          let mut int_list: RawValue = self.heap.integer(v).into();
 
-          loop{
-            let v: ValueRepresentationType = get_number::<ValueRepresentationType>(byte_iter)?;
+          item_stack.push(int_list);
 
-            // Todo: Is this semantics compatible with Miranda's?
-            // Slightly different semantics from Miranda. In Miranda, the very first value is always pushed to the cons
-            // list and the loop continued even if it is -1. This code breaks without pushing if the first value is -1.
-            if v == -1 {
-              break;
-            }
+          // The list of ints is constructed from the head to the tail, the opposite from if we used `push`.
+          // The `cursor` always points to the "tail", the next empty slot the next boxed integer will go.
+          let mut cursor: &mut RawValue = &mut self.heap[int_list].tail;
+          v = get_number::<ValueRepresentationType>(byte_iter)?;
 
-            let integer = self.heap.integer(v.into());
-            int_list.push(&mut self.heap, integer.into());
+          while v != -1 {
+            // Construct a boxed integer and store it in the tail of the previous boxed integer
+            *cursor = self.heap.integer(v);
+            // Read the next integer from the byte iterator
+            v = get_number::<ValueRepresentationType>(byte_iter)?;
+            // Update the cursor to point to the tail of the newly constructed boxed integer
+            cursor = &mut self.heap[*cursor].tail;
           }
-
-          // Check semantics -- see above.
-          assert!(!int_list.is_empty());
-          defs.push(&mut self.heap, int_list.get_ref());
         }
 
         Bytecode::Double => {
           let real_number = get_number::<f64>(byte_iter)?;
 
           // Todo: We convert isize-->f64 and then f64-->isize. This is stupid.
-          defs.push(&mut self.heap, self.heap.real(real_number).into());
+          item_stack.push(self.heap.real(real_number).into());
         }
 
         Bytecode::Unicode => {
           let v = get_number::<ValueRepresentationType>(byte_iter)?;
 
-          defs.push(&mut self.heap, self.heap.unicode(v).into());
+          item_stack.push(self.heap.unicode(v).into());
         }
 
         // Reads in the index of a private symbol. Differs from `Bytecode::PrtivateName1` in that it only reads two
@@ -1506,7 +1510,7 @@ impl VM {
           v += private_symbol_base_index;
 
           let ps = self.heap.get_nth_private_symbol(v);
-          defs.push(&mut self.heap, ps.into());
+          item_stack.push(ps.into());
 
           // Todo: This is an index into `vm.private_names`?
           /* Miranda source code is:
@@ -1524,20 +1528,26 @@ impl VM {
           v += private_symbol_base_index;
 
           let ps = self.heap.get_nth_private_symbol(v);
-          defs.push(&mut self.heap, ps.into());
+          item_stack.push(ps.into());
         }
 
         Bytecode::Construct => {
-          let v = get_number_16bit::<i16>(byte_iter)?;
-          let last_value = defs.head_unchecked(&mut self.heap);
+          let v: i16 = get_number_16bit::<i16>(byte_iter)?;
+          // Wrap the top value on the stack with the constructor.
+          if item_stack.is_empty() {
+            item_stack.push(Combinator::Nil.into());
+          }
+          let last_value = item_stack.last().unwrap();
+          *last_value = self.heap.constructor(v, (*last_value));
+          
           let new_value = self.heap.constructor(v, last_value);
-          defs.push(&mut self.heap, new_value.into());
+          item_stack.push(new_value.into());
         }
 
         Bytecode::ReadVals => {
-          let previous_value = defs.pop_unchecked(&mut self.heap);
+          let previous_value = item_stack.pop_unchecked(&mut self.heap);
           let new_value = self.heap.start_read_vals(Value::None, previous_value.into());
-          defs.push(&mut self.heap, new_value.into());
+          item_stack.push(new_value.into());
 
           self.rv_script = true;
         }
@@ -1558,19 +1568,19 @@ impl VM {
                 match id.get_value(&self.heap)? {
                   None => { return Err(BytecodeError::MalformedDef) }
                   Some(id_value) => {
-                    defs.push(&mut self.heap, id_value.get_ref());
+                    item_stack.push(id_value.get_ref());
                   }
                 }
               } else {
                 // Can this happen?
-                defs.push(&mut self.heap, id_ref.into());
+                item_stack.push(id_ref.into());
               }
             }
 
             None => {
               // Create the ID
               let id = self.heap.make_empty_identifier(name.as_str());
-              defs.push(&mut self.heap, id.get_ref())
+              item_stack.push(id.get_ref())
             }
           }
         }
@@ -1580,7 +1590,7 @@ impl VM {
           let id = self.heap.symbol_table.get(name.as_str()).ok_or(BytecodeError::SymbolNotFound)?;
           let pair = self.heap.data_pair(*id, Value::None);
 
-          defs.push(&mut self.heap, pair.into());
+          item_stack.push(pair.into());
         }
 
         Bytecode::Here => {
@@ -1611,10 +1621,152 @@ impl VM {
           let line_number = parse_line_number(byte_iter)?;
           let file_info = self.heap.file_info(file_id, line_number.into());
 
-          defs.push(&mut  self.heap, file_info.into());
+          item_stack.push(file_info.into());
         }
 
-        // Bytecode::Definitions => {}
+        Bytecode::Definitions => {
+          // This function (`load_defs`) loads a sequence of definitions terminated by DEF_X, or a single object
+          // terminated by DEF_X. When we encounter `DEF_X`, we need to construct the item whose components have
+          // accumulated in `item_stack`. Also, in some cases `DEF_X` does not signal to stop loading definitions. A
+          // summary of the uses of `DEF_X`:
+          //
+          // | Case | Use                                   | Form                            |
+          // |------|:--------------------------------------|:--------------------------------|
+          // | 1    | Terminate a list of definitions       | `[definition*] DEF_X`           |
+          // | 2    | Terminate a single identifier record  | `[val] [type] [who] [id] DEF_X` |
+          // | 3    | Terminate a private name              | `[val] [pname] DEF_X`           |
+          // | 4    | Precedes list of free IDs             | `DEF_X [freeids]`               |
+          // | 5    | Precedes definition list of internals | `DEF_X [definition-list]`       |
+
+          // The different cases can be partially distinguished by the number of items already read into `defs`.
+          match item_stack.len() {
+            0 => {
+              // Case 1: Definition list delimiter, signals the end of a definition list.
+              return  Ok(defs.reversed(heap));
+            }
+
+            1 => {
+              // Case 2: Object delimiter, signals the end of an identifier record.
+              let item: RawValue = item_stack.pop().unwrap();
+              return Ok(item);
+            }
+
+            2 => {
+              // Case 3: Private name delimiter, signals end of a private name.
+              let item = item_stack.pop().unwrap();
+              self.heap[item].tail = item_stack.pop().unwrap();
+              defs.push(&mut self.heap, item);
+            }
+
+            4 => {
+              let top_item = *item_stack.last().unwrap();
+
+              if self.heap[top_item].tag != Tag::Id {
+                if top_item == NIL.into() { // FIX1
+                  item_stack.clear();
+                  continue;
+                }
+
+                // An ID aliased to a pname.
+                // A pname has the form `strcons(index_in_private_names_vector, value)`,
+                // where value (I think) is an Identifier Record.
+
+                item_stack.pop(); // Value already in top_item
+                // let top_item = item_stack.pop().unwrap();
+
+                // Todo: Check that `top_item` is a reference to an `IdentifierRecord`.
+                //       But it is gauranteed not to be an `IdentifierRecord`
+                let new_id = IdentifierRecord::from_ref(top_item);
+                self.suppressed.push(&mut self.heap, new_id);
+
+                // Todo: Why are we throwing away the who field?
+                item_stack.pop(); // who field
+
+                let private_aka = { // Scope of temporary
+                  let top_item = item_stack.last().unwrap();
+                  if self.heap[top_item].tag == Tag::Cons {
+                    self.heap[top_item].head
+                  } else {
+                    NIL
+                  }
+                };
+
+                // Todo: Why are we throwing away the type field?
+                item_stack.pop(); // lose type
+
+                // The value of the private name
+                let new_id_value = IdentifierValue::from_ref(item_stack.pop().unwrap());
+                new_id.set_value(&mut self.heap, new_id_value);
+
+                // let new_id_value_data = new_id_value.get_data(&self.heap);
+                if let IdentifierValueData::Typed { value_type, .. } = new_id_value.get_data(&self.heap) {
+                  if item_stack[1] == Type::Type.into() &&
+                    value_type.get_numeric_type_specifier(&self.heap) != Ok(IdentifierValueTypeDataSpecifier::Synonym) {
+                      // Suppressed typename
+                      // Reverse assoc in ALIASES
+                      let mut aliases = self.aliases;
+                      let mut alias: RawValue = NIL.into();
+                      let mut id: Option<IdentifierRecord> = None;
+                      while !aliases.is_empty() {
+                        alias = aliases.pop_unchecked(&self.heap);
+                        id = Some(IdentifierRecord::from_ref(self.heap[alias].tail ));
+                        // It's not clear if "get_value" is meant to be a get_value or if it is just a `tl[ref]` operation.
+                        if id.get_value(&self.heap) == Ok(Some(top_item)) {
+                          break;
+                        }
+                        id = None;
+                      }
+                      if let Some(found_id) = id {
+                        // Surely must hold ??
+                        self.suppressed_t.push(&mut self.heap, found_id);
+                      }
+                    }
+                    else if new_id.get_value(&self.heap) == IdentifierValueData::Undefined {
+                      // Special kludge for undefined names, necessary only if we allow names specified
+				              // but not defined to be %included.
+                      if private_aka == Combinator::NIL.into() {
+                        // Reverse assoc in ALIASES
+                        let mut aliases = self.aliases;
+                        let mut alias: RawValue = NIL.into();
+                        let mut id: Option<IdentifierRecord> = None;
+                        while !aliases.is_empty() {
+                          alias = aliases.pop_unchecked(&self.heap);
+                          id = Some(IdentifierRecord::from_ref(self.heap[alias].tail ));
+                          // It's not clear if "get_value" is meant to be a get_value or if it is just a `tl[ref]` operation.
+                          if id.get_value(&self.heap) == Ok(Some(top_item)) {
+                            break;
+                          }
+                          id = None;
+                        }
+                        if let Some(found_id) = id {
+                          // Todo: Untangle what Miranda is doing here. What's the difference between `id_val` and `get_id`?
+                          private_aka = self.heap.data_pair(found_id, 0);
+                        }
+                      }
+                      // this will generate sensible error message
+				              // see reduction rule for DATAPAIR
+                      new_id.set_value(&mut self.heap, self.heap.apply(private_aka, self.heap.file_info(self.current_file(), 0)));
+                    }
+                    defs.push(&mut self.heap, top_item);
+                    continue;
+                }
+              }
+
+              if id_type(item_stack.last().unwrap()) != Type::New.into() &&
+                  (id_type(item_stack.last().unwrap()) != Type::Undefined
+                  || id_val(item_stack.last().unwrap()) != Combinator::Undef)
+              {
+                //stuff
+
+              }
+            }
+          }
+
+        }
+
+        Bytecode::Apply => {}
+
+        Bytecode::Cons => {}
 
       }
     }

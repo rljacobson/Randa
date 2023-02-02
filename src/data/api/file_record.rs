@@ -18,7 +18,7 @@ The "definienda" is itself a cons list of items (types, identifiers, etc.) that 
 use std::time::SystemTime;
 use super::{HeapObjectProxy, HeapString};
 use crate::data::{Heap, ValueRepresentationType, RawValue, Value, Combinator, Tag, HeapCell};
-use crate::data::api::ConsList;
+use crate::data::api::{ConsList, IdentifierRecord};
 
 
 // Todo: What should this be called? Heap file record? ScriptFile? FileWrapper?
@@ -36,7 +36,7 @@ impl FileRecord {
     file_name    : HeapString,
     last_modified: SystemTime,
     share        : bool,
-    definienda   : ConsList
+    definienda   : ConsList<IdentifierRecord>
   ) -> Self
   {
     // Todo: How is mtime stored on the heap?

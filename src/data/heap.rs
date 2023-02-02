@@ -512,7 +512,7 @@ impl Heap {
   }
 
   /// Creates a `HeapCell` with tag `Tag::Int`, head `value`, and tail `NIL`.
-  /// This does _not_ create a cons list of ints.
+  /// This does _not_ create a cons list of ints, but the general idea is the same.
   pub fn integer(&mut self, value: ValueRepresentationType) -> Value {
     self.put(Tag::Int, value.into(), Value::None)
   }
@@ -529,7 +529,7 @@ impl Heap {
     self.put(Tag::FileInfo, head, tail)
   }
 
-  pub fn constructor(&mut self, n: Value, x: Value) -> Value {
+  pub fn constructor(&mut self, n: i16, x: Value) -> Value {
     self.put(Tag::Constructor, n, x)
   }
 

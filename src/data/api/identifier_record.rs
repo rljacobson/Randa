@@ -157,7 +157,8 @@ impl IdentifierRecord {
   }
 
 
-  /// Sets the identifier's type (not the value type)
+  /// Sets the identifier's type (not the value type). Note that `new_type` is of type `Value`, because user defined
+  /// types do not have type `Type`.
   pub fn set_type(&self, heap: &mut Heap, new_type: Value) {
     let id_head = heap[self.reference].head;
     heap[id_head].tail = new_type.into()
@@ -198,7 +199,7 @@ impl IdentifierRecord {
 
     self.set_value(heap, Combinator::Undef.into());
     self.set_definition(heap, IdentifierDefinition::undefined());
-    self.set_type(heap, Type::Undefined);
+    self.set_type(heap, Type::Undefined.into());
   }
 }
 
@@ -399,10 +400,10 @@ pub enum IdentifierValueData {
   Undefined,
   Typed {
     arity        : ValueRepresentationType,
-    show_function: Value,
+    show_function: RawValue,
     value_type   : IdentifierValueType // What is a show function?
   },
-  Arbitrary(Value)
+  Arbitrary(RawValue)
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
@@ -418,7 +419,7 @@ impl IdentifierValue {
         Combinator::Nil.into()
       }
       IdentifierValueData::Typed { arity, show_function, value_type } => {
-        let inner = heap.cons(arity.into(), show_function);
+        let inner = heap.cons(arity.into(), show_function.into());
         let outer = heap.cons(inner, value_type.get_ref().into());
         outer.into()
       }
@@ -430,6 +431,32 @@ impl IdentifierValue {
 
     IdentifierValue::from_ref(reference)
   }
+
+
+  pub fn get_data(&self, heap: &Heap) -> IdentifierValueData {
+    if self.reference == Combinator::Nil.into() || self.reference == Combinator::Undef {
+      return IdentifierValueData::Undefined
+    }
+
+    let value_cell = heap[self.reference];
+
+    if value_cell.tag == Tag::Cons {
+      // Assume it's a typed value?
+      // `cons(cons(arity, showfn), cons(algebraic_t,  constructors))`
+      let arity: ValueRepresentationType = heap[value_cell.head].head.into();
+      let show_function = heap[value_cell.head].tail;
+      let value_type = IdentifierValueType::from_ref(value_cell.tail);
+
+      IdentifierValueData::Typed {
+        arity,
+        show_function,
+        value_type,
+      }
+    }
+    else {
+      IdentifierValueData::Arbitrary(self.reference)
+    }
+  }
 }
 
 impl HeapObjectProxy for IdentifierValue {
@@ -440,6 +467,7 @@ impl HeapObjectProxy for IdentifierValue {
   fn get_ref(&self) -> RawValue {
     self.reference
   }
+
 }
 
 
@@ -449,12 +477,24 @@ impl HeapObjectProxy for IdentifierValue {
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 pub enum IdentifierValueTypeData {
   Algebraic{                     //  "type"       = numerical representation within Miranda
-  constructors: Value
+    constructors: Value
   },                             // algebraic_t   = 0
   Synonym{ source_type: Type },  // synonym_t     = 1
   Abstract{ basis: Value },      // abstract_t    = 2
   PlaceHolder,                   // placeholder_t = 3
   Free                           // free_t        = 4
+}
+
+impl IdentifierValueTypeData {
+  pub fn get_numeric_type_specifier(&self) -> IdentifierValueTypeDataSpecifier {
+    match self {
+      Self::Algebraic {..} => IdentifierValueTypeDataSpecifier::Algebraic,
+      Self::Synonym {..}   => IdentifierValueTypeDataSpecifier::Synonym,
+      Self::Abstract {..}  => IdentifierValueTypeDataSpecifier::Abstract,
+      Self::PlaceHolder    => IdentifierValueTypeDataSpecifier::PlaceHolder,
+      Self::Free           => IdentifierValueTypeDataSpecifier::Free
+    }
+  }
 }
 
 /// Oh for crying out loud!

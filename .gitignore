@@ -5,6 +5,7 @@
 allexterns
 # The parser.rs file is generated.
 src/compiler/parser.rs
+DataRepresentation.png
 
 *.pdf
 
@@ -15,8 +16,9 @@ doc
 tools
 .ipynb*
 .virtual_documents
+.sync
 
-
+Icon*
 
 # Compiled miranda files.
 *.x

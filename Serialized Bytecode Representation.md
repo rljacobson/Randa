@@ -63,3 +63,16 @@ Things with X in their name are related to bytecode encoding.
 >  (**) empty string is abbreviation for current filename in `hereinfo`.
 >    `True` in `ND` position indicates an otherwise correct dump whose exports
 >    include type orphans.
+
+
+## `DEF_X`
+
+Uses of `DEF_X`:
+
+| Case | Use                                   | Form                            | 
+|------|:--------------------------------------|:--------------------------------|
+| 1    | Terminate a single identifier record  | `[val] [type] [who] [id] DEF_X` |
+| 2    | Terminate a private name              | `[val] [pname] DEF_X`           |
+| 3    | Terminate a list of definitions       | `[definition*] DEF_X`           |
+| 4    | Precedes list of free IDs             | `DEF_X [freeids]`               |
+| 5    | Precedes definition list of internals | `DEF_X [definition-list]`       |

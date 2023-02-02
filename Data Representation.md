@@ -32,11 +32,11 @@ could probably be a `u32`, but this is not what Miranda does on 64-bit systems, 
      is of the form `datapair(oldn,0)`, `oldn` being a string.
 
 The value field (tail) of type identifier takes one of the following forms:
- * `cons(cons(arity,showfn),cons(algebraic_t,constructors)`
- * `cons(cons(arity,showfn),cons(synonym_t,rhs))`
- * `cons(cons(arity,showfn),cons(abstract_t,basis))`
- * `cons(cons(arity,showfn),cons(placeholder_t,NIL))`
- * `cons(cons(arity,showfn),cons(free_t,NIL))`
+ * `cons(cons(arity, showfn), cons(algebraic_t,  constructors)`
+ * `cons(cons(arity, showfn), cons(synonym_t,    rhs))`
+ * `cons(cons(arity, showfn), cons(abstract_t,   basis))`
+ * `cons(cons(arity, showfn), cons(placeholder_t,NIL))`
+ * `cons(cons(arity, showfn), cons(free_t,       NIL))`
  * `UNDEF` (combinator literal)
  * _Some other value_
 
