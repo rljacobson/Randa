@@ -17,6 +17,8 @@ tools
 .ipynb*
 .virtual_documents
 .sync
+.VSCodeCounter
+.vscode
 
 Icon*
 

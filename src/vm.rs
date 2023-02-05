@@ -1418,6 +1418,7 @@ impl VM {
   /// The type of the returned value has to be an opaque type, because any serializable object can be returned.
   // Todo: Some calls to `load_defs()` assume that a cons list, or even a `ConsList<IdentifierRecord>`, is returned,
   //       but it's clear that there are times when the return value is not a cons list.
+  //       The code in Miranda for this is a complete and total mess.
   fn load_defs(
     &mut self,
     byte_iter: &mut dyn Iterator<Item=u8>
@@ -1659,7 +1660,7 @@ impl VM {
             }
 
             4 => {
-              let top_item = *item_stack.last().unwrap();
+              let mut top_item = *item_stack.last().unwrap();
 
               if self.heap[top_item].tag != Tag::Id {
                 if top_item == NIL.into() { // FIX1
@@ -1675,7 +1676,7 @@ impl VM {
                 // let top_item = item_stack.pop().unwrap();
 
                 // Todo: Check that `top_item` is a reference to an `IdentifierRecord`.
-                //       But it is gauranteed not to be an `IdentifierRecord`
+                //       But it is gauranteed not to be an `IdentifierRecord`...
                 let new_id = IdentifierRecord::from_ref(top_item);
                 self.suppressed.push(&mut self.heap, new_id);
 
@@ -1692,7 +1693,7 @@ impl VM {
                 };
 
                 // Todo: Why are we throwing away the type field?
-                item_stack.pop(); // lose type
+                let new_id_type = item_stack.pop().unwrap(); // type
 
                 // The value of the private name
                 let new_id_value = IdentifierValue::from_ref(item_stack.pop().unwrap());
@@ -1700,79 +1701,189 @@ impl VM {
 
                 // let new_id_value_data = new_id_value.get_data(&self.heap);
                 if let IdentifierValueData::Typed { value_type, .. } = new_id_value.get_data(&self.heap) {
-                  if item_stack[1] == Type::Type.into() &&
+
+                  if new_id_type == Type::Type.into() &&
                     value_type.get_numeric_type_specifier(&self.heap) != Ok(IdentifierValueTypeDataSpecifier::Synonym) {
-                      // Suppressed typename
+                    // Suppressed typename
+                    // Reverse assoc in ALIASES
+                    let mut aliases = self.aliases;
+                    let mut alias: RawValue = NIL.into();
+                    let mut id: Option<IdentifierRecord> = None;
+                    while !aliases.is_empty() {
+                      alias = aliases.pop_unchecked(&self.heap);
+                      let inner = IdentifierRecord::from_ref(self.heap[alias].tail ); // a temporary
+                      id = Some(inner);
+                      // It's not clear if "get_value" is meant to be a get_value or if it is just a `tl[ref]`
+                      // operation.
+                      if let Ok(Some(found_val)) = inner.get_value(&self.heap){
+                        if found_val.get_data(heap) == IdentifierValueData::Arbitrary(top_item) {
+                          break;
+                        }
+                      }
+                      id = None;
+                    }
+                    if let Some(found_id) = id {
+                      // Surely must hold ??
+                      self.suppressed_t.push(&mut self.heap, found_id);
+                    }
+                  }
+                  else if new_id.get_value(&self.heap) == Ok(Some(IdentifierValueData::Undefined)) {
+                    // Special kludge for undefined names, necessary only if we allow names specified
+                    // but not defined to be %included.
+                    if private_aka == Combinator::NIL.into() {
                       // Reverse assoc in ALIASES
                       let mut aliases = self.aliases;
                       let mut alias: RawValue = NIL.into();
                       let mut id: Option<IdentifierRecord> = None;
                       while !aliases.is_empty() {
                         alias = aliases.pop_unchecked(&self.heap);
-                        id = Some(IdentifierRecord::from_ref(self.heap[alias].tail ));
-                        // It's not clear if "get_value" is meant to be a get_value or if it is just a `tl[ref]` operation.
-                        if id.get_value(&self.heap) == Ok(Some(top_item)) {
-                          break;
+                        let inner = IdentifierRecord::from_ref(self.heap[alias].tail ); // a temporary
+                        id = Some(inner);
+                        // It's not clear if "get_value" is meant to be a get_value or if it is just a `tl[ref]`
+                        // operation.
+                        if let Ok(Some(found_val)) = inner.get_value(&self.heap){
+                          if found_val.get_data(heap) == IdentifierValueData::Arbitrary(top_item) {
+                            break;
+                          }
                         }
                         id = None;
                       }
                       if let Some(found_id) = id {
-                        // Surely must hold ??
-                        self.suppressed_t.push(&mut self.heap, found_id);
+                        // Todo: Untangle what Miranda is doing here. What's the difference between `id_val` and `get_id`?
+                        private_aka = self.heap.data_pair(found_id, 0);
                       }
                     }
-                    else if new_id.get_value(&self.heap) == IdentifierValueData::Undefined {
-                      // Special kludge for undefined names, necessary only if we allow names specified
-				              // but not defined to be %included.
-                      if private_aka == Combinator::NIL.into() {
-                        // Reverse assoc in ALIASES
-                        let mut aliases = self.aliases;
-                        let mut alias: RawValue = NIL.into();
-                        let mut id: Option<IdentifierRecord> = None;
-                        while !aliases.is_empty() {
-                          alias = aliases.pop_unchecked(&self.heap);
-                          id = Some(IdentifierRecord::from_ref(self.heap[alias].tail ));
-                          // It's not clear if "get_value" is meant to be a get_value or if it is just a `tl[ref]` operation.
-                          if id.get_value(&self.heap) == Ok(Some(top_item)) {
-                            break;
-                          }
-                          id = None;
-                        }
-                        if let Some(found_id) = id {
-                          // Todo: Untangle what Miranda is doing here. What's the difference between `id_val` and `get_id`?
-                          private_aka = self.heap.data_pair(found_id, 0);
-                        }
-                      }
-                      // this will generate sensible error message
-				              // see reduction rule for DATAPAIR
-                      new_id.set_value(&mut self.heap, self.heap.apply(private_aka, self.heap.file_info(self.current_file(), 0)));
-                    }
-                    defs.push(&mut self.heap, top_item);
-                    continue;
+                    // this will generate sensible error message
+                    // see reduction rule for DATAPAIR
+                    new_id.set_value(
+                      &mut self.heap,
+                      self.heap.apply(
+                        private_aka,
+                        IdentifierValue::from_ref(
+                          self.heap.file_info(
+                            self.current_file(),
+                            0
+                          )
+                        )
+                      )
+                    );
+                  }
+                  defs.push(&mut self.heap, top_item);
+                  continue;
                 }
               }
 
-              if id_type(item_stack.last().unwrap()) != Type::New.into() &&
-                  (id_type(item_stack.last().unwrap()) != Type::Undefined
-                  || id_val(item_stack.last().unwrap()) != Combinator::Undef)
+              // Previous if gaurantees top_item is an identifier.
+              // Todo: does it?
+              top_item = *item_stack.last().unwrap();
+              let new_id = IdentifierRecord::from_ref(top
+              );
+              let new_id_type = new_id.get_type(heap);
+              // The id's type will be an immediate value (not a reference) in the cases in the if condition below.
+              // Likewise for the id's value.
+              if new_id_type != Type::New.into() &&
+                  (new_id_type != Type::Undefined.into()
+                  || new_id.get_raw_value(heap)!= Combinator::Undef.into())
               {
-                //stuff
+                if new_id_type == Type::Alias.into() {
+                  // cyclic aliasing
+                  let mut aliases = self.aliases;
+                  let mut alias: RawValue = NIL.into();
+                  let mut id: Option<IdentifierRecord> = None;
+                  while !aliases.is_empty() {
+                    alias = aliases.pop_unchecked(&self.heap);
+                    id = Some(alias);
 
+                    if self.heap[alias].tail == top_item {
+                      break;
+                    }
+
+                    id = None;
+                  }
+                  if id.is_none() {
+                    // Todo: Make infrastructure for nonfatal errors.
+                    eprintln!("impossible event in cyclic alias ({})", new_id.get_name(&self.heap));
+                    item_stack.clear();
+                    continue;
+                  }
+                  defs.push(&mut self.heap, top_item);
+
+                  // Manipulating the alias, not an id.
+                  self.hd_hd(alias) = item_stack.pop().unwrap(); // who
+                  self.heap[self.tl_hd(alias)].head = item_stack.pop().unwrap(); // type
+                  self.heap[self.tl_hd(alias)].tail = item_stack.pop().unwrap(); // value
+                  continue;
+                }
+
+                self.clashes.insert_ordered(&mut self.heap, new_id);
+                item_stack.clear();
+              }
+              else {
+                defs.push(&mut self.heap, top_item);
+
+                #[cfg(feature = "DEBUG")]
+                println!("{} undumped", new_id.get_name(&self.heap));
+
+                item_stack.pop(); // top_item
+                // who
+                new_id.set_definiton(
+                  &mut self.heap,
+                  IdentifierDefinition::from_ref(item_stack.pop().unwrap())
+                );
+                // type
+                new_id.set_type(
+                  &mut self.heap,
+                  item_stack.pop().unwrap().into()
+                );
+                // value
+                new_id.set_value(
+                  &mut self.heap,
+                  IdentifierValue::from_ref(item_stack.pop().unwrap())
+                );
               }
             }
-          }
 
+            _ => {
+              // Todo: Miranda also returns the defs
+              return Err(BytecodeError::MalformedDef);
+            }
+
+
+          } // end math on item_stack.len()
+
+        } // end Bytecode::Definitions match branch
+
+        Bytecode::Apply => {
+          // Miranda does not check length of item_stack
+          let top_item = item_stack.pop().unwrap();
+          let next_item = item_stack.pop().unwrap();
+          if next_item == Combinator::Read.into() && top_item == 0 {
+            item_stack.push(self.common_stdin);
+          } else if next_item == Combinator::ReadBin.into() && top_item == 0 {
+            item_stack.push(self.common_stdinb);
+          } else {
+            item_stack.push(
+              self.heap.apply(next_item, top_item)
+            );
+          }
+        } // end Bytecode::Apply branch
+
+        Bytecode::Cons => {
+          let head = item_stack.pop().unwrap();
+          let tail = item_stack.pop().unwrap();
+          item_stack.push(self.heap.cons(head, tail));
         }
 
-        Bytecode::Apply => {}
+        _ => {
+          // This is the case that it's not a Bytecode. We handle it when we try to decode the Bytecode at the top of
+          // this match, not here.
+        }
 
-        Bytecode::Cons => {}
-
-      }
+      } // end match on bytecode value
     }
-
-
-    ConsList::default()
+    
+    // Miranda returns `defs`, too.
+    return Err(BytecodeError::MalformedDef); // Miranda: "should unsetids"
   }
 
 

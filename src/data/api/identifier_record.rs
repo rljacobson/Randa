@@ -101,6 +101,14 @@ impl IdentifierRecord {
     IdentifierRecord{ reference: reference.into() }
   }
 
+  /// Returns the name of the identifier
+  pub fn get_name(&self, heap: &Heap) -> Result<String, ()> {
+    let cons_ref = heap[self.reference].head;
+    let str_cons_ref = heap[cons_ref].head;
+    let name_ref = heap[str_cons_ref].head;
+    heap.resolve_string(name_ref)
+  }
+
   /// Fetches the `IdentifierDefinition` (a HeapProxyObject) from the heap resident data structure.
   pub fn get_definition(&self, heap: &Heap) -> Result<IdentifierDefinition, ()> {
     let id_cell     : HeapCell = heap.expect(Tag::Id     , self.reference.into())?;
@@ -129,6 +137,11 @@ impl IdentifierRecord {
     };
 
     Ok(value)
+  }
+
+  /// Returns the RawValue in the `IdentifierRecord`'s value field.
+  pub fn get_raw_value(&self, heap: &Heap) -> RawValue {
+
   }
 
 
