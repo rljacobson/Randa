@@ -9,62 +9,119 @@ Copy+Pasted from the Miranda manual.
 ```EBNF
 Syntax of Miranda scripts and expressions
 
-script:= decl*                          rhs:= simple_rhs(;)
-                                              cases
-decl:= def
-       tdef                             simple_rhs:= exp whdefs?
+script = decl*
+
+decl = def
+       tdef
        spec
-       libdir                           cases:= alt(;) = cases
-                                                lastcase(;)
-def:= fnform = rhs
-      pat = rhs                         alt:= exp , if? exp
+       libdir
 
-tdef:= tform == type(;)                 lastcase:= lastalt whdefs?
-       tform ::= constructs(;)
-       abstype tform-list with sig(;)   lastalt:= exp , if? exp
-                                                  exp , otherwise
-spec:= var-list :: type(;)
-       tform-list :: type(;)            whdefs:= where def def*
+def = fnform = rhs
+      pat = rhs
 
-sig:= spec spec*                        exp:= e1
-                                              prefix1
-constructs:= construct | constructs           infix
+tdef = tform '==' type(;)
+       tform '::=' constructs(;)
+       'abstype' tform-list 'with' sig(;)
+
+spec = var-list '::' type(;)
+       tform-list '::' 'type'(;)
+
+sig = spec spec*
+
+constructs = construct | constructs
              construct
-                                        e1:= simple simple*
-construct:= constructor argtype*             prefix e1
-            type $constructor type           e1 infix e1
-            ( construct ) argtype*
-                                        simple:= var
-type:= argtype                                   constructor
-       typename argtype*                         literal
-       type -> type                              readvals
-       type $typename type                       show
-                                                 ( infix1 e1 )
-argtype:= typename                               ( e1 infix )
-          typevar                                ( exp-list? )
-          ( type-list? )                         [ exp-list? ]
-          [ type-list ]                          [ exp .. exp? ]
-                                                 [ exp , exp .. exp? ]
-tform:= typename typevar*                        [ exp | qualifs ]
-        typevar $typename typevar                [ exp // qualifs ]
 
-fnform:= var formal*                    qualifs:= qualifier ; qualifs
-         pat $var pat                             qualifier
-         ( fnform ) formal*
-                                        qualifier:= exp
-pat:= formal                                        generator
-      -numeral
-      constructor formal*               generator:= pat-list <- exp
-      pat : pat                                     pat <- exp , exp ..
-      pat + nat
-      pat $constructor pat              var:= identifier
-      ( pat ) formal*
-                                        constructor:= IDENTIFIER
-formal:= var
-         constructor                    typename:= identifier
+construct = constructor argtype*
+            type $constructor type
+            '(' construct ')' argtype*
+
+type = argtype
+       typename argtype*
+       type '->' type
+       type $typename type
+
+argtype = typename
+          typevar
+          '(' type-list? ')'
+          '[' type-list ']'
+
+tform = typename typevar*
+        typevar $typename typevar
+
+fnform = var formal*
+         pat $var pat
+         '(' fnform ')' formal*
+
+pat = formal
+      '-'numeral
+      constructor formal*
+      pat ':' pat
+      pat '+' nat
+      pat $constructor pat
+      '(' pat ')' formal*
+
+formal = var
+         constructor
          literal1
-         ( pat-list? )
-         [ pat-list? ]
+         '(' pat-list? ')'
+         '[' pat-list? ']'
+
+rhs = simple_rhs(;)
+      cases
+
+simple_rhs = exp whdefs?
+
+cases = alt(;) = cases
+        lastcase(;)
+
+alt = exp ',' 'if'? exp
+
+lastcase = lastalt whdefs?
+
+lastalt = exp ',' 'if'? exp
+          exp ',' 'otherwise'
+
+whdefs = 'where' def def*
+
+exp = e1
+      prefix1
+      infix
+
+e1 = simple simple*
+     prefix e1
+     e1 infix e1
+
+simple = var
+         constructor
+         literal
+         'readvals'
+         'show'
+         '(' infix1 e1 ')'
+         '(' e1 infix ')'
+         '(' exp-list? ')'
+         '[' exp-list? ']'
+         '[' exp '..' exp? ']'
+         '[' exp ',' exp '..' exp? ']'
+         '[' exp '|' qualifs ']'
+         '[' exp '//' qualifs ']'
+
+qualifs = qualifier ';' qualifs
+          qualifier
+
+qualifier = exp
+           generator
+
+generator = pat-list '<-' exp
+            pat '<-' exp ',' exp '..'
+
+var = identifier
+
+constructor = IDENTIFIER
+
+typename = identifier
+
+
+
 ```
 
 ###  Miranda lexical syntax
@@ -78,55 +135,55 @@ set  difference.   We  also  revert to using `|` for alternatives, as in
 standard BNF.
 
 ```
-script:= (token | layout)*
+script = (token | layout)* ;
 
-layout:= nl | tab | formfeed | space | comment
+layout = nl | tab | formfeed | space | comment ;
 
-comment:= vertical_bar vertical_bar (any - nl)* nl
+comment = vertical_bar vertical_bar (any - nl)* nl ;
 
-token:= identifier | IDENTIFIER | literal | typevar | delimiter
+token = identifier | IDENTIFIER | literal | typevar | delimiter ;
 
-identifier:= ([a-z] [a-zA-Z0-9_']* ) -  delimiter
+identifier = ([a-z] [a-zA-Z0-9_']* ) -  delimiter ;
 
-IDENTIFIER:= [A-Z] [a-zA-Z0-9_']*
+IDENTIFIER = [A-Z] [a-zA-Z0-9_']* ;
 
-literal:= numeral | charconst | stringconst
+literal = numeral | charconst | stringconst ;
 
-literal1:= literal - float
+literal1 = literal - float ;
 
-numeral:= nat | float
+numeral = nat | float ;
 
-nat:= [0-9] [0-9]*
+nat = [0-9] [0-9]* ;
 
-float:=  [0-9]* [.] nat epart? | nat epart
+float =  [0-9]* [.] nat epart? | nat epart ;
 
-epart:= [e] [+|-]? nat
+epart = [e] [+|-]? nat ;
 
-charconst:= ['] (visible-[\]|escape) [']
+charconst = ['] (visible-[\]|escape) ['] ;
 
-stringconst:= ["] (visible-[\"]|escape)* ["]
+stringconst = ["] (visible-[\"]|escape)* ["] ;
 
-escape:= [\] ([ntfrb\'"]|nl|ascii_code)
+escape = [\] ([ntfrb\'"]|nl|ascii_code) ;
 
-typevar:= [*][*]*
+typevar = [*][*]* ;
 
-delimiter:= - | prefix1 | infix1 | other
+delimiter = - | prefix1 | infix1 | other ;
 
-infix1:= ++ | -- | : | \/ | & | > | >= | = | ~= | <= | < | + | * |
-/ | div | mod | ^ | . | ! | $identifier | $IDENTIFIER
+infix1 = ++ | -- | : | \/ | & | > | >= | = | ~= | <= | < | + | *
+       | / | div | mod | ^ | . | ! | $identifier | $IDENTIFIER ;
 
-infix:= infix1 | -
+infix = infix1 | - ;
 
-prefix1:= ~ | #
+prefix1 = ~ | # ;
 
-prefix:= prefix1 | -
+prefix = prefix1 | - ;
 
-other:= abstype | if | otherwise | readvals | show | type | where |
-with | %export | %free | %include | %insert | %list | %nolist |
-= | == | ::= | :: | => | vertical_bar | // | -> | ; | , | ( |
-) | [ | ] | { | } | <- | .. | $$ | $- | $+ | $*
+other = abstype | if | otherwise | readvals | show | type | where
+       | with | %export | %free | %include | %insert | %list | %nolist
+       | = | == | ::= | :: | => | vertical_bar | // | -> | \; | , | (
+       | ) | [ | ] | { | } | <- | .. | $$ | $- | $+ | $* ;
 
-vertical_bar:= |
+vertical_bar = '|' ;
 ```
 
 **Notes**

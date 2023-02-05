@@ -1,0 +1,131 @@
+script = decl* ;
+
+decl = def
+     | tdef
+     | spec
+     | libdir
+     ;
+
+def = fnform = rhs
+    | pat = rhs
+    ;
+
+tdef = tform '==' type(;)
+     | tform '::=' constructs(;)
+     | 'abstype' tform_list 'with' sig(;)
+     ;
+
+spec = var_list '::' type(;)
+     | tform_list '::' 'type'(;)
+     ;
+
+sig = spec spec* ;
+
+constructs = construct constructs
+           | construct
+           ;
+
+construct = constructor argtype*
+          | type $constructor type
+          | '(' construct ')' argtype*
+          ;
+
+type = argtype
+     | typename argtype*
+     | type '->' type
+     | type $typename type
+     ;
+
+argtype = typename
+        | typevar
+        | '(' type_list? ')'
+        | '[' type_list ']'
+        ;
+
+tform = typename typevar*
+      | typevar $typename typevar
+      ;
+
+fnform = var formal*
+       | pat $var pat
+       | '(' fnform ')' formal*
+       ;
+
+pat = formal
+    | '-'numeral
+    | constructor formal*
+    | pat ':' pat
+    | pat '+' nat
+    | pat $constructor pat
+    | '(' pat ')' formal*
+    ;
+
+formal = var
+       | constructor
+       | literal1
+       | '(' pat_list? ')'
+       | '[' pat_list? ']'
+       ;
+
+rhs = simple_rhs(;)
+    | cases
+    ;
+
+simple_rhs = exp whdefs? ;
+
+cases = alt(;) = cases
+      | lastcase(;)
+      ;
+
+alt = exp ',' 'if'? exp ;
+
+lastcase = lastalt whdefs? ;
+
+lastalt = exp ',' 'if'? exp
+        | exp ',' 'otherwise'
+        ;
+
+whdefs = 'where' def def* ;
+
+exp = e1
+    | prefix1
+    | infix
+    ;
+
+e1 = simple simple*
+   | prefix e1
+   | e1 infix e1
+   ;
+
+simple = var
+       | constructor
+       | literal
+       | 'readvals'
+       | 'show'
+       | '(' infix1 e1 ')'
+       | '(' e1 infix ')'
+       | '(' exp_list? ')'
+       | '[' exp_list? ']'
+       | '[' exp '..' exp? ']'
+       | '[' exp ',' exp '..' exp? ']'
+       | '[' exp '|' qualifs ']'
+       | '[' exp '//' qualifs ']'
+       ;
+
+qualifs = qualifier ';' qualifs
+        | qualifier
+        ;
+
+qualifier = exp
+         | generator
+         ;
+
+generator = pat_list '<-' exp
+          | pat '<-' exp ',' exp '..'
+          ;
+
+var = identifier ;
+
+constructor = IDENTIFIER ;
+
+typename = identifier ;

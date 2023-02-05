@@ -1,0 +1,49 @@
+script = (token | layout)* ;
+
+layout = \n | tab | formfeed | space | comment ;
+
+comment = vertical_bar vertical_bar [^\n]* \n ;
+
+token = identifier | IDENTIFIER | literal | typevar | delimiter ;
+
+identifier = ([a-z] [a-zA-Z0-9_']* ) -  delimiter ;
+
+IDENTIFIER = [A-Z] [a-zA-Z0-9_']* ;
+
+literal = numeral | charconst | stringconst ;
+
+literal1 = literal - float ;
+
+numeral = nat | float ;
+
+nat = [0-9] [0-9]* ;
+
+float =  [0-9]* [.] nat epart? | nat epart ;
+
+epart = [e] [+|-]? nat ;
+
+charconst = ['] (visible-[\]|escape) ['] ;
+
+stringconst = ["] (visible-[\"]|escape)* ["] ;
+
+escape = [\] ([ntfrb\'"]|nl|ascii_code) ;
+
+typevar = [*][*]* ;
+
+delimiter = - | prefix1 | infix1 | other ;
+
+infix1 = ++ | -- | : | \/ | & | > | >= | = | ~= | <= | < | + | *
+       | / | div | mod | ^ | . | ! | $identifier | $IDENTIFIER ;
+
+infix = infix1 | - ;
+
+prefix1 = ~ | '#' ;
+
+prefix = prefix1 | - ;
+
+other = abstype | if | otherwise | readvals | show | type | where
+       | with | %export | %free | %include | %insert | %list | %nolist
+       | = | == | ::= | :: | => | vertical_bar | // | -> | \; | , | (
+       | ) | [ | ] | { | } | <- | .. | $$ | $- | $+ | $* ;
+
+vertical_bar = '|' ;

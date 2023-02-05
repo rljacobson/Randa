@@ -41,7 +41,7 @@ use crate::{
   pub debug: bool,
   /// The heap on which everything is constructed.
   heap: Heap,
-
+  
   lexstates   : RawValue,
 
   // Parser state.
