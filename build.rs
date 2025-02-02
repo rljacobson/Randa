@@ -2,14 +2,15 @@ use std::path::Path;
 use std::process::Command;
 
 
-use rust_bison_skeleton::{process_bison_file, BisonErr};
+// use rust_bison_skeleton::{process_bison_file, BisonErr};
 
 use chrono::Local;
 
 
-static SPEC_FILE_PATH: &'static str = "src/compiler/parser.y";
+// static SPEC_FILE_PATH: &'static str = "src/compiler/parser.y";
 
 fn main() {
+    /*
     // region Bison parser generation
     // Bison is used to generate `parser.rs` from `parser.y`.
 
@@ -23,6 +24,7 @@ fn main() {
 
     println!("cargo:rerun-if-changed={}", SPEC_FILE_PATH);
     // endregion
+    */
 
     // region Compile-time Constants
     // Constants generated as compile time. These are used in `Options.rs` and reported via `/v`, `/V`, `-v`,

@@ -1,544 +1,544 @@
-$accept  =  entity ;
+$accept  ::=  entity ;
 
-entity  =  error
-        |  script
-        |  VALUE exp
-        |  EVAL exp
-        |  EVAL exp COLONCOLON
-        |  EVAL exp TO
-        ;
-
-script  = epsilon
-        |  defs
-        ;
-
-exp  =  op
-     |  e1
-     ;
-
-op  =  '~'
-    |  '#'
-    |  diop
-    ;
-
-diop  =  '-'
-      |  diop1
-      ;
-
-diop1  =  '+'
-       |  PLUSPLUS
-       |  ':'
-       |  MINUSMINUS
-       |  VEL
-       |  '&'
-       |  relop
-       |  '*'
-       |  '/'
-       |  DIV
-       |  REM
-       |  '^'
-       |  '.'
-       |  '!'
-       |  INFIXNAME
-       |  INFIXCNAME
-       ;
-
-relop  =  '>'
-       |  GE
-       |  eqop
-       |  NE
-       |  LE
-       |  '<'
-       ;
-
-eqop  =  EQEQ
-      |  '='
-      ;
-
-rhs  =  cases WHERE ldefs
-     |  exp WHERE ldefs
-     |  exp
-     |  cases
-     ;
-
-cases  =  exp ',' if exp
-       |  exp ',' OTHERWISE
-       |  cases reindent ELSEQ alt
-       ;
-
-alt  =  here exp
-     |  here exp ',' if exp
-     |  here exp ',' OTHERWISE
-     ;
-
-if  = epsilon
-    |  IF
-    ;
-
-indent  = epsilon ;
-
-outdent  =  separator ;
-
-separator  =  OFFSIDE
-           |  ';'
-           ;
-
-reindent  = epsilon ;
-
-liste  =  exp
-       |  liste ',' exp
-       ;
-
-e1  =  '~' e1
-    |  e1 PLUSPLUS e1
-    |  e1 ':' e1
-    |  e1 MINUSMINUS e1
-    |  e1 VEL e1
-    |  e1 '&' e1
-    |  reln
-    |  e2
-    ;
-
-es1  =  '~' e1
-     |  e1 PLUSPLUS e1
-     |  e1 PLUSPLUS
-     |  e1 ':' e1
-     |  e1 ':'
-     |  e1 MINUSMINUS e1
-     |  e1 MINUSMINUS
-     |  e1 VEL e1
-     |  e1 VEL
-     |  e1 '&' e1
-     |  e1 '&'
-     |  relsn
-     |  es2
-     ;
-
-e2  =  '-' e2
-    |  '#' e2
-    |  e2 '+' e2
-    |  e2 '-' e2
-    |  e2 '*' e2
-    |  e2 '/' e2
-    |  e2 DIV e2
-    |  e2 REM e2
-    |  e2 '^' e2
-    |  e2 '.' e2
-    |  e2 '!' e2
-    |  e3
-    ;
-
-es2  =  '-' e2
-     |  '#' e2
-     |  e2 '+' e2
-     |  e2 '+'
-     |  e2 '-' e2
-     |  e2 '-'
-     |  e2 '*' e2
-     |  e2 '*'
-     |  e2 '/' e2
-     |  e2 '/'
-     |  e2 DIV e2
-     |  e2 DIV
-     |  e2 REM e2
-     |  e2 REM
-     |  e2 '^' e2
-     |  e2 '^'
-     |  e2 '.' e2
-     |  e2 '.'
-     |  e2 '!' e2
-     |  e2 '!'
-     |  es3
-     ;
-
-e3  =  comb INFIXNAME e3
-    |  comb INFIXCNAME e3
-    |  comb
-    ;
-
-es3  =  comb INFIXNAME e3
-     |  comb INFIXNAME
-     |  comb INFIXCNAME e3
-     |  comb INFIXCNAME
-     |  comb
-     ;
-
-comb  =  comb arg
-      |  arg
-      ;
-
-reln  =  e2 relop e2
-      |  reln relop e2
-      ;
-
-relsn  =  e2 relop e2
-       |  e2 relop
-       |  reln relop e2
-       ;
-
-$$1  = epsilon ;
-
-arg  =  $$1 LEX lexrules ENDIR
-     |  NAME
-     |  CNAME
-     |  CONST
-     |  READVALSY
-     |  SHOWSYM
-     |  DOLLAR2
-     |  '[' ']'
-     |  '[' exp ']'
-     |  '[' exp ',' exp ']'
-     |  '[' exp ',' exp ',' liste ']'
-     |  '[' exp DOTDOT exp ']'
-     |  '[' exp DOTDOT ']'
-     |  '[' exp ',' exp DOTDOT exp ']'
-     |  '[' exp ',' exp DOTDOT ']'
-     |  '[' exp '|' qualifiers ']'
-     |  '[' exp DIAG qualifiers ']'
-     |  '(' op ')'
-     |  '(' es1 ')'
-     |  '(' diop1 e1 ')'
-     |  '(' ')'
-     |  '(' exp ',' liste ')'
-     ;
-
-$$2  = epsilon ;
-
-$$3  = epsilon ;
-
-lexrules  =  lexrules lstart here re indent $$2 ARROW exp lpostfix $$3 outdent
-          |  lexdefs
+entity  ::=  error
+            |  script
+          |  VALUE exp
+          |  EVAL exp
+          |  EVAL exp COLONCOLON
+          |  EVAL exp TO
           ;
 
-lstart  = epsilon
-        |  '<' cnames '>'
-        ;
-
-cnames  =  CNAME
-        |  cnames CNAME
-        ;
-
-lpostfix  = epsilon
-          |  LBEGIN CNAME
-          |  LBEGIN CONST
+script  ::= epsilon
+          |  defs
           ;
 
-lexdefs  =  lexdefs LEXDEF indent '=' re outdent
-         | 
+exp  ::=  op
+       |  e1
+       ;
+
+op  ::=  "~"
+      |  "#"
+      |  diop
+      ;
+
+diop  ::=  "-"
+        |  diop1
+        ;
+
+diop1  ::=  "+"
+         |  PLUSPLUS
+         |  ":"
+         |  MINUSMINUS
+         |  VEL
+         |  "&"
+         |  relop
+         |  "*"
+         |  "/"
+         |  DIV
+         |  REM
+         |  "^"
+         |  "."
+         |  "!"
+         |  INFIXNAME
+         |  INFIXCNAME
          ;
 
-re  =  re1 '|' re
-    |  re1
-    ;
-
-re1  =  lterm '/' lterm
-     |  lterm '/'
-     |  lterm
-     ;
-
-lterm  =  lfac lterm
-       |  lfac
-       ;
-
-lfac  =  lunit '*'
-      |  lunit '+'
-      |  lunit '?'
-      |  lunit
-      ;
-
-lunit  =  '(' re ')'
-       |  CONST
-       |  CHARCLASS
-       |  ANTICHARCLASS
-       |  '.'
-       |  name
-       ;
-
-name  =  NAME
-      |  CNAME
-      ;
-
-qualifiers  =  exp
-            |  generator
-            |  qualifiers ';' generator
-            |  qualifiers ';' exp
-            ;
-
-generator  =  e1 ',' generator
-           |  generator1
-           ;
-
-generator1  =  e1 LEFTARROW exp
-            |  e1 LEFTARROW exp ',' exp DOTDOT
-            ;
-
-defs  =  def
-      |  defs def
-      ;
-
-def  =  v act2 indent '=' here rhs outdent
-     |  spec
-     |  ABSTYPE here typeforms indent WITH lspecs outdent
-     |  typeform indent act1 here EQEQ type act2 outdent
-     |  typeform indent act1 here COLON2EQ construction act2 outdent
-     |  indent setexp EXPORT parts outdent
-     |  FREE here '{' specs '}'
-     |  INCLUDE bindings modifiers outdent
-     |  here BNF $$4 names outdent productions ENDIR
-     ;
-
-$$4  = epsilon ;
-
-setexp  =  here ;
-
-bindings  = epsilon
-          |  '{' bindingseq '}'
-          ;
-
-bindingseq  =  bindingseq binding
-            |  binding
-            ;
-
-binding  =  NAME indent '=' exp outdent
-         |  typeform indent act1 EQEQ type act2 outdent
+relop  ::=  ">"
+         |  GE
+         |  eqop
+         |  NE
+         |  LE
+         |  "<"
          ;
 
-modifiers  = epsilon
-           |  negmods
-           ;
-
-negmods  =  negmods negmod
-         |  negmod
-         ;
-
-negmod  =  NAME '/' NAME
-        |  CNAME '/' CNAME
-        |  '-' NAME
+eqop  ::=  EQEQ
+        |  "="
         ;
 
-here  = epsilon ;
-
-act1  = epsilon ;
-
-act2  = epsilon ;
-
-ldefs  =  ldef
-       |  ldefs ldef
+rhs  ::=  cases WHERE ldefs
+       |  exp WHERE ldefs
+       |  exp
+       |  cases
        ;
 
-ldef  =  spec
-      |  typeform here EQEQ
-      |  typeform here COLON2EQ
-      |  v act2 indent '=' here rhs outdent
-      ;
-
-vlist  =  v
-       |  vlist ',' v
-       ;
-
-v  =  v1
-   |  v1 ':' v
-   ;
-
-v1  =  v1 '+' CONST
-    |  '-' CONST
-    |  v2 INFIXNAME v1
-    |  v2 INFIXCNAME v1
-    |  v2
-    ;
-
-v2  =  v3
-    |  v2 v3
-    ;
-
-v3  =  NAME
-    |  CNAME
-    |  CONST
-    |  '[' ']'
-    |  '[' vlist ']'
-    |  '(' ')'
-    |  '(' v ')'
-    |  '(' v ',' vlist ')'
-    ;
-
-type  =  type1
-      |  type ARROW type
-      ;
-
-type1  =  type2 INFIXNAME type1
-       |  type2
-       ;
-
-type2  =  tap
-       |  argtype
-       ;
-
-tap  =  NAME argtype
-     |  tap argtype
-     ;
-
-argtype  =  NAME
-         |  typevar
-         |  '(' typelist ')'
-         |  '[' type ']'
-         |  '[' type ',' typel ']'
+cases  ::=  exp "," if exp
+         |  exp "," OTHERWISE
+         |  cases reindent ELSEQ alt
          ;
 
-typelist  = epsilon
-          |  type
-          |  type ',' typel
-          ;
-
-typel  =  type
-       |  typel ',' type
+alt  ::=  here exp
+       |  here exp "," if exp
+       |  here exp "," OTHERWISE
        ;
 
-parts  =  parts NAME
-       |  parts '-' NAME
-       |  parts PATHNAME
-       |  parts '+'
-       |  NAME
-       |  '-' NAME
-       |  PATHNAME
-       |  '+'
-       ;
+if  ::= epsilon
+      |  IF
+      ;
 
-specs  =  specs spec
-       |  spec
-       ;
+indent  ::= epsilon ;
 
-spec  =  typeforms indent here COLONCOLON ttype outdent ;
+outdent  ::=  separator ;
 
-lspecs  =  lspecs lspec
-        |  lspec
-        ;
-
-$$5  = epsilon ;
-
-lspec  =  namelist indent here $$5 COLONCOLON type outdent ;
-
-namelist  =  NAME ',' namelist
-          |  NAME
-          ;
-
-typeforms  =  typeforms ',' typeform act2
-           |  typeform act2
-           ;
-
-typeform  =  CNAME typevars
-          |  NAME typevars
-          |  typevar INFIXNAME typevar
-          |  typevar INFIXCNAME typevar
-          ;
-
-ttype  =  type
-       |  TYPE
-       ;
-
-typevar  =  '*'
-         |  TYPEVAR
-         ;
-
-typevars  = epsilon
-          |  typevar typevars
-          ;
-
-construction  =  constructs ;
-
-constructs  =  construct
-            |  constructs '|' construct
-            ;
-
-construct  =  field here INFIXCNAME field
-           |  construct1
-           ;
-
-construct1  =  '(' construct ')'
-            |  construct1 field1
-            |  here CNAME
-            ;
-
-field  =  type
-       |  argtype '!'
-       ;
-
-field1  =  argtype '!'
-        |  argtype
-        ;
-
-names  = epsilon
-       |  names NAME
-       ;
-
-productions  =  lspec
-             |  production
-             |  productions lspec
-             |  productions production
+separator  ::=  OFFSIDE
+             |  ";"
              ;
 
-production  =  NAME params ':' indent grhs outdent ;
+reindent  ::= epsilon ;
 
-params  = epsilon
-        |  $$6 '(' names ')'
-        ;
-
-$$6  = epsilon ;
-
-grhs  =  here phrase ;
-
-phrase  =  error_term
-        |  phrase1
-        |  phrase1 '|' error_term
-        ;
-
-phrase1  =  term
-         |  phrase1 '|' here term
+liste  ::=  exp
+         |  liste "," exp
          ;
 
-term  =  count_factors
-      |  count_factors $$7 indent '=' here rhs outdent
+e1  ::=  "~" e1
+      |  e1 PLUSPLUS e1
+      |  e1 ":" e1
+      |  e1 MINUSMINUS e1
+      |  e1 VEL e1
+      |  e1 "&" e1
+      |  reln
+      |  e2
       ;
 
-$$7  = epsilon ;
+es1  ::=  "~" e1
+       |  e1 PLUSPLUS e1
+       |  e1 PLUSPLUS
+       |  e1 ":" e1
+       |  e1 ":"
+       |  e1 MINUSMINUS e1
+       |  e1 MINUSMINUS
+       |  e1 VEL e1
+       |  e1 VEL
+       |  e1 "&" e1
+       |  e1 "&"
+       |  relsn
+       |  es2
+       ;
 
-error_term  =  ERRORSY
-            |  ERRORSY $$8 indent '=' here rhs outdent
+e2  ::=  "-" e2
+      |  "#" e2
+      |  e2 "+" e2
+      |  e2 "-" e2
+      |  e2 "*" e2
+      |  e2 "/" e2
+      |  e2 DIV e2
+      |  e2 REM e2
+      |  e2 "^" e2
+      |  e2 "." e2
+      |  e2 "!" e2
+      |  e3
+      ;
+
+es2  ::=  "-" e2
+       |  "#" e2
+       |  e2 "+" e2
+       |  e2 "+"
+       |  e2 "-" e2
+       |  e2 "-"
+       |  e2 "*" e2
+       |  e2 "*"
+       |  e2 "/" e2
+       |  e2 "/"
+       |  e2 DIV e2
+       |  e2 DIV
+       |  e2 REM e2
+       |  e2 REM
+       |  e2 "^" e2
+       |  e2 "^"
+       |  e2 "." e2
+       |  e2 "."
+       |  e2 "!" e2
+       |  e2 "!"
+       |  es3
+       ;
+
+e3  ::=  comb INFIXNAME e3
+      |  comb INFIXCNAME e3
+      |  comb
+      ;
+
+es3  ::=  comb INFIXNAME e3
+       |  comb INFIXNAME
+       |  comb INFIXCNAME e3
+       |  comb INFIXCNAME
+       |  comb
+       ;
+
+comb  ::=  comb arg
+        |  arg
+        ;
+
+reln  ::=  e2 relop e2
+        |  reln relop e2
+        ;
+
+relsn  ::=  e2 relop e2
+         |  e2 relop
+         |  reln relop e2
+         ;
+
+$$1  ::= epsilon ;
+
+arg  ::=  $$1 LEX lexrules ENDIR
+       |  NAME
+       |  CNAME
+       |  CONST
+       |  READVALSY
+       |  SHOWSYM
+       |  DOLLAR2
+       |  "[" "]"
+       |  "[" exp "]"
+       |  "[" exp "," exp "]"
+       |  "[" exp "," exp "," liste "]"
+       |  "[" exp DOTDOT exp "]"
+       |  "[" exp DOTDOT "]"
+       |  "[" exp "," exp DOTDOT exp "]"
+       |  "[" exp "," exp DOTDOT "]"
+       |  "[" exp "|" qualifiers "]"
+       |  "[" exp DIAG qualifiers "]"
+       |  "(" op ")"
+       |  "(" es1 ")"
+       |  "(" diop1 e1 ")"
+       |  "(" ")"
+       |  "(" exp "," liste ")"
+       ;
+
+$$2  ::= epsilon ;
+
+$$3  ::= epsilon ;
+
+lexrules  ::=  lexrules lstart here re indent $$2 ARROW exp lpostfix $$3 outdent
+            |  lexdefs
             ;
 
-$$8  = epsilon ;
+lstart  ::= epsilon
+          |  "<" cnames ">"
+          ;
 
-count_factors  =  EMPTYSY
-               |  EMPTYSY factors
-               |  $$9 factors
-               ;
+cnames  ::=  CNAME
+          |  cnames CNAME
+          ;
 
-$$9  = epsilon ;
+lpostfix  ::= epsilon
+            |  LBEGIN CNAME
+            |  LBEGIN CONST
+            ;
 
-factors  =  factor
-         |  factors factor
-         ;
+lexdefs  ::=  lexdefs LEXDEF indent "=" re outdent
+           |
+           ;
 
-factor  =  unit
-        |  '{' unit '}'
-        |  '{' unit
-        |  unit '}'
-        ;
-
-unit  =  symbol
-      |  symbol '*'
-      |  symbol '+'
-      |  symbol '?'
+re  ::=  re1 "|" re
+      |  re1
       ;
 
-symbol  =  NAME
-        |  ENDSY
-        |  CONST
-        |  '^'
-        |  $$10 '[' exp $$11 ']'
-        |  '-'
+re1  ::=  lterm "/" lterm
+       |  lterm "/"
+       |  lterm
+       ;
+
+lterm  ::=  lfac lterm
+         |  lfac
+         ;
+
+lfac  ::=  lunit "*"
+        |  lunit "+"
+        |  lunit "?"
+        |  lunit
         ;
 
-$$10  = epsilon ;
+lunit  ::=  "(" re ")"
+         |  CONST
+         |  CHARCLASS
+         |  ANTICHARCLASS
+         |  "."
+         |  name
+         ;
 
-$$11  = epsilon ;
+name  ::=  NAME
+        |  CNAME
+        ;
+
+qualifiers  ::=  exp
+              |  generator
+              |  qualifiers ";" generator
+              |  qualifiers ";" exp
+              ;
+
+generator  ::=  e1 "," generator
+             |  generator1
+             ;
+
+generator1  ::=  e1 LEFTARROW exp
+              |  e1 LEFTARROW exp "," exp DOTDOT
+              ;
+
+defs  ::=  def
+        |  defs def
+        ;
+
+def  ::=  v act2 indent "=" here rhs outdent
+       |  spec
+       |  ABSTYPE here typeforms indent WITH lspecs outdent
+       |  typeform indent act1 here EQEQ type act2 outdent
+       |  typeform indent act1 here COLON2EQ construction act2 outdent
+       |  indent setexp EXPORT parts outdent
+       |  FREE here "{" specs "}"
+       |  INCLUDE bindings modifiers outdent
+       |  here BNF $$4 names outdent productions ENDIR
+       ;
+
+$$4  ::= epsilon ;
+
+setexp  ::=  here ;
+
+bindings  ::= epsilon
+            |  "{" bindingseq "}"
+            ;
+
+bindingseq  ::=  bindingseq binding
+              |  binding
+              ;
+
+binding  ::=  NAME indent "=" exp outdent
+           |  typeform indent act1 EQEQ type act2 outdent
+           ;
+
+modifiers  ::= epsilon
+             |  negmods
+             ;
+
+negmods  ::=  negmods negmod
+           |  negmod
+           ;
+
+negmod  ::=  NAME "/" NAME
+          |  CNAME "/" CNAME
+          |  "-" NAME
+          ;
+
+here  ::= epsilon ;
+
+act1  ::= epsilon ;
+
+act2  ::= epsilon ;
+
+ldefs  ::=  ldef
+         |  ldefs ldef
+         ;
+
+ldef  ::=  spec
+        |  typeform here EQEQ
+        |  typeform here COLON2EQ
+        |  v act2 indent "=" here rhs outdent
+        ;
+
+vlist  ::=  v
+         |  vlist "," v
+         ;
+
+v  ::=  v1
+     |  v1 ":" v
+     ;
+
+v1  ::=  v1 "+" CONST
+      |  "-" CONST
+      |  v2 INFIXNAME v1
+      |  v2 INFIXCNAME v1
+      |  v2
+      ;
+
+v2  ::=  v3
+      |  v2 v3
+      ;
+
+v3  ::=  NAME
+      |  CNAME
+      |  CONST
+      |  "[" "]"
+      |  "[" vlist "]"
+      |  "(" ")"
+      |  "(" v ")"
+      |  "(" v "," vlist ")"
+      ;
+
+type  ::=  type1
+        |  type ARROW type
+        ;
+
+type1  ::=  type2 INFIXNAME type1
+         |  type2
+         ;
+
+type2  ::=  tap
+         |  argtype
+         ;
+
+tap  ::=  NAME argtype
+       |  tap argtype
+       ;
+
+argtype  ::=  NAME
+           |  typevar
+           |  "(" typelist ")"
+           |  "[" type "]"
+           |  "[" type "," typel "]"
+           ;
+
+typelist  ::= epsilon
+            |  type
+            |  type "," typel
+            ;
+
+typel  ::=  type
+         |  typel "," type
+         ;
+
+parts  ::=  parts NAME
+         |  parts "-" NAME
+         |  parts PATHNAME
+         |  parts "+"
+         |  NAME
+         |  "-" NAME
+         |  PATHNAME
+         |  "+"
+         ;
+
+specs  ::=  specs spec
+         |  spec
+         ;
+
+spec  ::=  typeforms indent here COLONCOLON ttype outdent ;
+
+lspecs  ::=  lspecs lspec
+          |  lspec
+          ;
+
+$$5  ::= epsilon ;
+
+lspec  ::=  namelist indent here $$5 COLONCOLON type outdent ;
+
+namelist  ::=  NAME "," namelist
+            |  NAME
+            ;
+
+typeforms  ::=  typeforms "," typeform act2
+             |  typeform act2
+             ;
+
+typeform  ::=  CNAME typevars
+            |  NAME typevars
+            |  typevar INFIXNAME typevar
+            |  typevar INFIXCNAME typevar
+            ;
+
+ttype  ::=  type
+         |  TYPE
+         ;
+
+typevar  ::=  "*"
+           |  TYPEVAR
+           ;
+
+typevars  ::= epsilon
+            |  typevar typevars
+            ;
+
+construction  ::=  constructs ;
+
+constructs  ::=  construct
+              |  constructs "|" construct
+              ;
+
+construct  ::=  field here INFIXCNAME field
+             |  construct1
+             ;
+
+construct1  ::=  "(" construct ")"
+              |  construct1 field1
+              |  here CNAME
+              ;
+
+field  ::=  type
+         |  argtype "!"
+         ;
+
+field1  ::=  argtype "!"
+          |  argtype
+          ;
+
+names  ::= epsilon
+         |  names NAME
+         ;
+
+productions  ::=  lspec
+               |  production
+               |  productions lspec
+               |  productions production
+               ;
+
+production  ::=  NAME params ":" indent grhs outdent ;
+
+params  ::= epsilon
+          |  $$6 "(" names ")"
+          ;
+
+$$6  ::= epsilon ;
+
+grhs  ::=  here phrase ;
+
+phrase  ::=  error_term
+          |  phrase1
+          |  phrase1 "|" error_term
+          ;
+
+phrase1  ::=  term
+           |  phrase1 "|" here term
+           ;
+
+term  ::=  count_factors
+        |  count_factors $$7 indent "=" here rhs outdent
+        ;
+
+$$7  ::= epsilon ;
+
+error_term  ::=  ERRORSY
+              |  ERRORSY $$8 indent "=" here rhs outdent
+              ;
+
+$$8  ::= epsilon ;
+
+count_factors  ::=  EMPTYSY
+                 |  EMPTYSY factors
+                 |  $$9 factors
+                 ;
+
+$$9  ::= epsilon ;
+
+factors  ::=  factor
+           |  factors factor
+           ;
+
+factor  ::=  unit
+          |  "{" unit "}"
+          |  "{" unit
+          |  unit "}"
+          ;
+
+unit  ::=  symbol
+        |  symbol "*"
+        |  symbol "+"
+        |  symbol "?"
+        ;
+
+symbol  ::=  NAME
+          |  ENDSY
+          |  CONST
+          |  "^"
+          |  $$10 "[" exp $$11 "]"
+          |  "-"
+          ;
+
+$$10  ::= epsilon ;
+
+$$11  ::= epsilon ;
 

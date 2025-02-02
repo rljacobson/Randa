@@ -184,7 +184,7 @@ impl IdentifierRecord {
     let value: Option<IdentifierValue> = if id_cell.tail == Combinator::Nil.into() {
       None
     } else{
-      Some(IdentifierValue::from_ref(id_cell.tail.into(), heap)?)
+      Some(IdentifierValue::from_ref(id_cell.tail.into()))
     };
 
 

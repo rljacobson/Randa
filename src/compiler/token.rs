@@ -1,5 +1,5 @@
 /*
-  Miranda values of tokens.
+  Miranda values of tokens. Also defines a Logos lexer.
 */
 #![allow(dead_code)]
 

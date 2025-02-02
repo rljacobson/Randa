@@ -41,7 +41,7 @@ use crate::{
   pub debug: bool,
   /// The heap on which everything is constructed.
   heap: Heap,
-  
+
   lexstates   : RawValue,
 
   // Parser state.
@@ -1854,7 +1854,7 @@ impl Parser {
         }
       }
     }
-
+    
 
     fn report_syntax_error(&mut self, ctx: &Context) {
         let token_id: usize = ctx.token().code().try_into().unwrap();

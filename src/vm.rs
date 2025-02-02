@@ -125,8 +125,10 @@ pub struct VM {
   error_line: usize,
   errs      : Vec<ValueRepresentationType>, // Todo: What is this holding? It is `char[24]` in Miranda.
 
-  last_expression          : Value,       // A reference to the last expression evaluated.
-
+  last_expression          : Value, // A reference to the last expression evaluated.
+  private_symbol_base_index: usize, // The index into the private_symbol stack marking the beginning of the current file's private symbols.
+  include_depth: u32, // How many `%include`'s deep is the current file. (Miranda's `ideep`.)
+  
   // endregion
 
   heap: Heap,
@@ -267,11 +269,12 @@ impl Default for VM {
       in_semantic_redeclaration: false,
       rv_script                : false, // Flags readvals in use (for garbage collector)
       unused_types             : false, // There are orphaned types
-
-      in_file                  : None,
+      in_file                   : None,
       error_line               : 0,
       errs                     : vec![],
       last_expression          : Value::None, // A reference to the last expression evaluated.
+      private_symbol_base_index: 0,
+      include_depth            : 0,
       // endregion
 
       heap: Heap::default(),
@@ -473,11 +476,13 @@ impl VM {
       // (void) signal(SIGINT, oldsig);
     }
     // Todo: Once signal handlers are implemented, see if we actually need sigflag.
+    /*
     if sigflag {
       // If a signal fired during loading, we handle it now.
       sigflag = 0;
       (*oldsig)(); // Take deferred interrupt.
     }
+    */
 
     // Handle errors
     let dump_error_encountered: bool = // the result of the following match
@@ -495,7 +500,7 @@ impl VM {
       }
 
       Err(BytecodeError::NameClash) => {
-        if ideep == 0 {
+        if self.include_depth == 0 {
           let sorted = self.alfasort(self.clashes);
           println!("Cannot load {} due to name clashes: {}", binary_path, self.printlist(sorted));
         }
@@ -1464,7 +1469,7 @@ impl VM {
           if v & 128 {
             v = v | (!127);
           }
-          item_stack.push(self.heap.small_int((v as ValueRepresentationType)).into());
+          item_stack.push(self.heap.small_int(v as ValueRepresentationType).into());
         }
 
         Bytecode::Integer => {
@@ -1508,7 +1513,8 @@ impl VM {
           let mut v: usize = get_number_16bit::<u16>(byte_iter)? as usize;
 
           // See the notes for `private_symbol_base_index` in `vm.load_script()`.
-          v += private_symbol_base_index;
+          // Turn relative index into absolute index.
+          v += self.private_symbol_base_index;
 
           let ps = self.heap.get_nth_private_symbol(v);
           item_stack.push(ps.into());
@@ -1776,14 +1782,13 @@ impl VM {
               // Previous if gaurantees top_item is an identifier.
               // Todo: does it?
               top_item = *item_stack.last().unwrap();
-              let new_id = IdentifierRecord::from_ref(top
-              );
-              let new_id_type = new_id.get_type(heap);
+              let new_id = IdentifierRecord::from_ref(top_item);
+              let new_id_type = new_id.get_type(&self.heap);
               // The id's type will be an immediate value (not a reference) in the cases in the if condition below.
               // Likewise for the id's value.
               if new_id_type != Type::New.into() &&
                   (new_id_type != Type::Undefined.into()
-                  || new_id.get_raw_value(heap)!= Combinator::Undef.into())
+                  || new_id.get_raw_value(&self.heap)!= Combinator::Undef.into())
               {
                 if new_id_type == Type::Alias.into() {
                   // cyclic aliasing
@@ -1881,7 +1886,7 @@ impl VM {
 
       } // end match on bytecode value
     }
-    
+
     // Miranda returns `defs`, too.
     return Err(BytecodeError::MalformedDef); // Miranda: "should unsetids"
   }

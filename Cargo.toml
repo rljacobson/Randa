@@ -6,7 +6,7 @@ authors = ["Robert Jacobson <rljacobson@gmail.com>"]
 edition = "2021"
 
 readme     = "README.md"
-keywords   = ["programming language, functional, Miranda"]
+keywords   = ["programminglanguage", "functional", "Miranda"]
 homepage   = "https://github.com/rljacobson/Randa"
 repository = "https://github.com/rljacobson/Randa"
 license    = "BSD"

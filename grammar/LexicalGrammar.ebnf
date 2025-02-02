@@ -1,49 +1,49 @@
-script = (token | layout)* ;
+script ::= (token | layout)* ;
 
-layout = \n | tab | formfeed | space | comment ;
+layout ::= "\n" | "\t" | "\r" | " " | comment ;
 
-comment = vertical_bar vertical_bar [^\n]* \n ;
+comment ::= vertical_bar vertical_bar [^\n]* "\n" ;
 
-token = identifier | IDENTIFIER | literal | typevar | delimiter ;
+token ::= identifier | IDENTIFIER | literal | typevar | delimiter ;
 
-identifier = ([a-z] [a-zA-Z0-9_']* ) -  delimiter ;
+identifier ::= ([a-z] [a-zA-Z0-9_']* ) -  delimiter ;
 
-IDENTIFIER = [A-Z] [a-zA-Z0-9_']* ;
+IDENTIFIER ::= [A-Z] [a-zA-Z0-9_']* ;
 
-literal = numeral | charconst | stringconst ;
+literal ::= numeral | charconst | stringconst ;
 
-literal1 = literal - float ;
+literal1 ::= literal - float ;
 
-numeral = nat | float ;
+numeral ::= nat | float ;
 
-nat = [0-9] [0-9]* ;
+nat ::= [0-9] [0-9]* ;
 
-float =  [0-9]* [.] nat epart? | nat epart ;
+float ::=  [0-9]* [.] nat epart? | nat epart ;
 
-epart = [e] [+|-]? nat ;
+epart ::= [e] [+ | -]? nat ;
 
-charconst = ['] (visible-[\]|escape) ['] ;
+charconst ::= ['] (visible-[\]|escape) ['] ;
 
-stringconst = ["] (visible-[\"]|escape)* ["] ;
+stringconst ::= ["] (visible-[\"] | escape)* ["] ;
 
-escape = [\] ([ntfrb\'"]|nl|ascii_code) ;
+escape ::= [\] ([ntfrb'"] | nl | ascii_code) ;
 
-typevar = [*][*]* ;
+typevar ::= [*][*]* ;
 
-delimiter = - | prefix1 | infix1 | other ;
+delimiter ::= - | prefix1 | infix1 | other ;
 
-infix1 = ++ | -- | : | \/ | & | > | >= | = | ~= | <= | < | + | *
-       | / | div | mod | ^ | . | ! | $identifier | $IDENTIFIER ;
+infix1 ::= "++" | "--" | ":" | "/" | "&" | ">" | ">=" | "=" | "~=" | "<=" | "<" | "+" | "*"
+       | "/" | "div" | "mod" | "^" | "." | "!" | $identifier | $IDENTIFIER ;
 
-infix = infix1 | - ;
+infix ::= infix1 | "-" ;
 
-prefix1 = ~ | '#' ;
+prefix1 ::= "~" | "#" ;
 
-prefix = prefix1 | - ;
+prefix ::= prefix1 | "-" ;
 
-other = abstype | if | otherwise | readvals | show | type | where
-       | with | %export | %free | %include | %insert | %list | %nolist
-       | = | == | ::= | :: | => | vertical_bar | // | -> | \; | , | (
-       | ) | [ | ] | { | } | <- | .. | $$ | $- | $+ | $* ;
+other ::= "abstype" | "if" | "otherwise" | "readvals" | "show" | "type" | "where"
+       | "with" | "%export" | "%free" | "%include" | "%insert" | "%list" | "%nolist"
+       | "=" | "==" | "::=" | "::" | "=>" | "vertical_bar" | "//" | "->" | "\;" | "," | "("
+       | ")" | "[" | "]" | "{" | "}" | "<-" | ".." | "$$" | "$-" | "$+" | "$*" ;
 
-vertical_bar = '|' ;
+vertical_bar ::= "|" ;

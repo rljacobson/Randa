@@ -1,544 +1,544 @@
-$accept  =  entity ;
+$accept  ::=  entity ;
 
-entity  =  error
-        |  script
-        |  Value exp
-        |  Eval exp
-        |  Eval exp ColonColon
-        |  Eval exp To
-        ;
-
-script  = epsilon
-        |  defs
-        ;
-
-exp  =  op
-     |  e1
-     ;
-
-op  =  Tilde
-    |  Hash
-    |  diop
-    ;
-
-diop  =  Minus
-      |  diop1
-      ;
-
-diop1  =  Plus
-       |  PlusPlus
-       |  Colon
-       |  MinusMinus
-       |  Vel
-       |  Ampersand
-       |  relop
-       |  Asterisk
-       |  Slash
-       |  Divide
-       |  Remainder
-       |  Caret
-       |  Dot
-       |  Bang
-       |  InfixName
-       |  InfixCName
-       ;
-
-relop  =  Greater
-       |  GreaterEqual
-       |  eqop
-       |  NotEqual
-       |  LessEqual
-       |  Less
-       ;
-
-eqop  =  EqualEqual
-      |  Equal
-      ;
-
-rhs  =  cases Where ldefs
-     |  exp Where ldefs
-     |  exp
-     |  cases
-     ;
-
-cases  =  exp Comma if exp
-       |  exp Comma Otherwise
-       |  cases reindent ElseEqual alt
-       ;
-
-alt  =  here exp
-     |  here exp Comma if exp
-     |  here exp Comma Otherwise
-     ;
-
-if  = epsilon
-    |  If
-    ;
-
-indent  = epsilon ;
-
-outdent  =  separator ;
-
-separator  =  Offside
-           |  Semicolon
-           ;
-
-reindent  = epsilon ;
-
-liste  =  exp
-       |  liste Comma exp
-       ;
-
-e1  =  Tilde e1
-    |  e1 PlusPlus e1
-    |  e1 Colon e1
-    |  e1 MinusMinus e1
-    |  e1 Vel e1
-    |  e1 Ampersand e1
-    |  reln
-    |  e2
-    ;
-
-es1  =  Tilde e1
-     |  e1 PlusPlus e1
-     |  e1 PlusPlus
-     |  e1 Colon e1
-     |  e1 Colon
-     |  e1 MinusMinus e1
-     |  e1 MinusMinus
-     |  e1 Vel e1
-     |  e1 Vel
-     |  e1 Ampersand e1
-     |  e1 Ampersand
-     |  relsn
-     |  es2
-     ;
-
-e2  =  Minus e2
-    |  Hash e2
-    |  e2 Plus e2
-    |  e2 Minus e2
-    |  e2 Asterisk e2
-    |  e2 Slash e2
-    |  e2 Divide e2
-    |  e2 Remainder e2
-    |  e2 Caret e2
-    |  e2 Dot e2
-    |  e2 Bang e2
-    |  e3
-    ;
-
-es2  =  Minus e2
-     |  Hash e2
-     |  e2 Plus e2
-     |  e2 Plus
-     |  e2 Minus e2
-     |  e2 Minus
-     |  e2 Asterisk e2
-     |  e2 Asterisk
-     |  e2 Slash e2
-     |  e2 Slash
-     |  e2 Divide e2
-     |  e2 Divide
-     |  e2 Remainder e2
-     |  e2 Remainder
-     |  e2 Caret e2
-     |  e2 Caret
-     |  e2 Dot e2
-     |  e2 Dot
-     |  e2 Bang e2
-     |  e2 Bang
-     |  es3
-     ;
-
-e3  =  comb InfixName e3
-    |  comb InfixCName e3
-    |  comb
-    ;
-
-es3  =  comb InfixName e3
-     |  comb InfixName
-     |  comb InfixCName e3
-     |  comb InfixCName
-     |  comb
-     ;
-
-comb  =  comb arg
-      |  arg
-      ;
-
-reln  =  e2 relop e2
-      |  reln relop e2
-      ;
-
-relsn  =  e2 relop e2
-       |  e2 relop
-       |  reln relop e2
-       ;
-
-$$1  = epsilon ;
-
-arg  =  $$1 Lex lexrules EndIR
-     |  Name
-     |  ConstructorName
-     |  Constant
-     |  ReadVal
-     |  Show
-     |  DollarDollar
-     |  OpenBracket CloseBracket
-     |  OpenBracket exp CloseBracket
-     |  OpenBracket exp Comma exp CloseBracket
-     |  OpenBracket exp Comma exp Comma liste CloseBracket
-     |  OpenBracket exp DotDot exp CloseBracket
-     |  OpenBracket exp DotDot CloseBracket
-     |  OpenBracket exp Comma exp DotDot exp CloseBracket
-     |  OpenBracket exp Comma exp DotDot CloseBracket
-     |  OpenBracket exp Pipe qualifiers CloseBracket
-     |  OpenBracket exp Diagonal qualifiers CloseBracket
-     |  OpenParenthesis op CloseParenthesis
-     |  OpenParenthesis es1 CloseParenthesis
-     |  OpenParenthesis diop1 e1 CloseParenthesis
-     |  OpenParenthesis CloseParenthesis
-     |  OpenParenthesis exp Comma liste CloseParenthesis
-     ;
-
-$$2  = epsilon ;
-
-$$3  = epsilon ;
-
-lexrules  =  lexrules lstart here re indent $$2 Arrow exp lpostfix $$3 outdent
-          |  lexdefs
+entity  ::=  error
+          |  script
+          |  Value exp
+          |  Eval exp
+          |  Eval exp ColonColon
+          |  Eval exp To
           ;
 
-lstart  = epsilon
-        |  Less cnames Greater
-        ;
-
-cnames  =  ConstructorName
-        |  cnames ConstructorName
-        ;
-
-lpostfix  = epsilon
-          |  Begin ConstructorName
-          |  Begin Constant
+script  ::= ε
+          |  defs
           ;
 
-lexdefs  =  lexdefs LexDef indent Equal re outdent
-         | 
+exp  ::=  op
+       |  e1
+       ;
+
+op  ::=  Tilde
+      |  Hash
+      |  diop
+      ;
+
+diop  ::=  Minus
+        |  diop1
+        ;
+
+diop1  ::=  Plus
+         |  PlusPlus
+         |  Colon
+         |  MinusMinus
+         |  Vel
+         |  Ampersand
+         |  relop
+         |  Asterisk
+         |  Slash
+         |  Divide
+         |  Remainder
+         |  Caret
+         |  Dot
+         |  Bang
+         |  InfixName
+         |  InfixCName
          ;
 
-re  =  re1 Pipe re
-    |  re1
-    ;
-
-re1  =  lterm Slash lterm
-     |  lterm Slash
-     |  lterm
-     ;
-
-lterm  =  lfac lterm
-       |  lfac
-       ;
-
-lfac  =  lunit Asterisk
-      |  lunit Plus
-      |  lunit QuestionMark
-      |  lunit
-      ;
-
-lunit  =  OpenParenthesis re CloseParenthesis
-       |  Constant
-       |  CharClass
-       |  AntiCharClass
-       |  Dot
-       |  name
-       ;
-
-name  =  Name
-      |  ConstructorName
-      ;
-
-qualifiers  =  exp
-            |  generator
-            |  qualifiers Semicolon generator
-            |  qualifiers Semicolon exp
-            ;
-
-generator  =  e1 Comma generator
-           |  generator1
-           ;
-
-generator1  =  e1 LeftArrow exp
-            |  e1 LeftArrow exp Comma exp DotDot
-            ;
-
-defs  =  def
-      |  defs def
-      ;
-
-def  =  v act2 indent Equal here rhs outdent
-     |  spec
-     |  AbsoluteType here typeforms indent With lspecs outdent
-     |  typeform indent act1 here EqualEqual type act2 outdent
-     |  typeform indent act1 here Colon2Equal construction act2 outdent
-     |  indent setexp Export parts outdent
-     |  Free here OpenBrace specs CloseBrace
-     |  Include bindings modifiers outdent
-     |  here BNF $$4 names outdent productions EndIR
-     ;
-
-$$4  = epsilon ;
-
-setexp  =  here ;
-
-bindings  = epsilon
-          |  OpenBrace bindingseq CloseBrace
-          ;
-
-bindingseq  =  bindingseq binding
-            |  binding
-            ;
-
-binding  =  Name indent Equal exp outdent
-         |  typeform indent act1 EqualEqual type act2 outdent
+relop  ::=  Greater
+         |  GreaterEqual
+         |  eqop
+         |  NotEqual
+         |  LessEqual
+         |  Less
          ;
 
-modifiers  = epsilon
-           |  negmods
-           ;
-
-negmods  =  negmods negmod
-         |  negmod
-         ;
-
-negmod  =  Name Slash Name
-        |  ConstructorName Slash ConstructorName
-        |  Minus Name
+eqop  ::=  EqualEqual
+        |  Equal
         ;
 
-here  = epsilon ;
-
-act1  = epsilon ;
-
-act2  = epsilon ;
-
-ldefs  =  ldef
-       |  ldefs ldef
+rhs  ::=  cases Where ldefs
+       |  exp Where ldefs
+       |  exp
+       |  cases
        ;
 
-ldef  =  spec
-      |  typeform here EqualEqual
-      |  typeform here Colon2Equal
-      |  v act2 indent Equal here rhs outdent
-      ;
-
-vlist  =  v
-       |  vlist Comma v
-       ;
-
-v  =  v1
-   |  v1 Colon v
-   ;
-
-v1  =  v1 Plus Constant
-    |  Minus Constant
-    |  v2 InfixName v1
-    |  v2 InfixCName v1
-    |  v2
-    ;
-
-v2  =  v3
-    |  v2 v3
-    ;
-
-v3  =  Name
-    |  ConstructorName
-    |  Constant
-    |  OpenBracket CloseBracket
-    |  OpenBracket vlist CloseBracket
-    |  OpenParenthesis CloseParenthesis
-    |  OpenParenthesis v CloseParenthesis
-    |  OpenParenthesis v Comma vlist CloseParenthesis
-    ;
-
-type  =  type1
-      |  type Arrow type
-      ;
-
-type1  =  type2 InfixName type1
-       |  type2
-       ;
-
-type2  =  tap
-       |  argtype
-       ;
-
-tap  =  Name argtype
-     |  tap argtype
-     ;
-
-argtype  =  Name
-         |  typevar
-         |  OpenParenthesis typelist CloseParenthesis
-         |  OpenBracket type CloseBracket
-         |  OpenBracket type Comma typel CloseBracket
+cases  ::=  exp Comma if exp
+         |  exp Comma Otherwise
+         |  cases reindent ElseEqual alt
          ;
 
-typelist  = epsilon
-          |  type
-          |  type Comma typel
-          ;
-
-typel  =  type
-       |  typel Comma type
+alt  ::=  here exp
+       |  here exp Comma if exp
+       |  here exp Comma Otherwise
        ;
 
-parts  =  parts Name
-       |  parts Minus Name
-       |  parts PathName
-       |  parts Plus
-       |  Name
-       |  Minus Name
-       |  PathName
-       |  Plus
-       ;
+if  ::= ε
+      |  If
+      ;
 
-specs  =  specs spec
-       |  spec
-       ;
+indent  ::= ε ;
 
-spec  =  typeforms indent here ColonColon ttype outdent ;
+outdent  ::=  separator ;
 
-lspecs  =  lspecs lspec
-        |  lspec
-        ;
-
-$$5  = epsilon ;
-
-lspec  =  namelist indent here $$5 ColonColon type outdent ;
-
-namelist  =  Name Comma namelist
-          |  Name
-          ;
-
-typeforms  =  typeforms Comma typeform act2
-           |  typeform act2
-           ;
-
-typeform  =  ConstructorName typevars
-          |  Name typevars
-          |  typevar InfixName typevar
-          |  typevar InfixCName typevar
-          ;
-
-ttype  =  type
-       |  Type
-       ;
-
-typevar  =  Asterisk
-         |  TypeVar
-         ;
-
-typevars  = epsilon
-          |  typevar typevars
-          ;
-
-construction  =  constructs ;
-
-constructs  =  construct
-            |  constructs Pipe construct
-            ;
-
-construct  =  field here InfixCName field
-           |  construct1
-           ;
-
-construct1  =  OpenParenthesis construct CloseParenthesis
-            |  construct1 field1
-            |  here ConstructorName
-            ;
-
-field  =  type
-       |  argtype Bang
-       ;
-
-field1  =  argtype Bang
-        |  argtype
-        ;
-
-names  = epsilon
-       |  names Name
-       ;
-
-productions  =  lspec
-             |  production
-             |  productions lspec
-             |  productions production
+separator  ::=  Offside
+             |  Semicolon
              ;
 
-production  =  Name params Colon indent grhs outdent ;
+reindent  ::= ε ;
 
-params  = epsilon
-        |  $$6 OpenParenthesis names CloseParenthesis
-        ;
-
-$$6  = epsilon ;
-
-grhs  =  here phrase ;
-
-phrase  =  error_term
-        |  phrase1
-        |  phrase1 Pipe error_term
-        ;
-
-phrase1  =  term
-         |  phrase1 Pipe here term
+liste  ::=  exp
+         |  liste Comma exp
          ;
 
-term  =  count_factors
-      |  count_factors $$7 indent Equal here rhs outdent
+e1  ::=  Tilde e1
+      |  e1 PlusPlus e1
+      |  e1 Colon e1
+      |  e1 MinusMinus e1
+      |  e1 Vel e1
+      |  e1 Ampersand e1
+      |  reln
+      |  e2
       ;
 
-$$7  = epsilon ;
+es1  ::=  Tilde e1
+       |  e1 PlusPlus e1
+       |  e1 PlusPlus
+       |  e1 Colon e1
+       |  e1 Colon
+       |  e1 MinusMinus e1
+       |  e1 MinusMinus
+       |  e1 Vel e1
+       |  e1 Vel
+       |  e1 Ampersand e1
+       |  e1 Ampersand
+       |  relsn
+       |  es2
+       ;
 
-error_term  =  ErrorSymbol
-            |  ErrorSymbol $$8 indent Equal here rhs outdent
+e2  ::=  Minus e2
+      |  Hash e2
+      |  e2 Plus e2
+      |  e2 Minus e2
+      |  e2 Asterisk e2
+      |  e2 Slash e2
+      |  e2 Divide e2
+      |  e2 Remainder e2
+      |  e2 Caret e2
+      |  e2 Dot e2
+      |  e2 Bang e2
+      |  e3
+      ;
+
+es2  ::=  Minus e2
+       |  Hash e2
+       |  e2 Plus e2
+       |  e2 Plus
+       |  e2 Minus e2
+       |  e2 Minus
+       |  e2 Asterisk e2
+       |  e2 Asterisk
+       |  e2 Slash e2
+       |  e2 Slash
+       |  e2 Divide e2
+       |  e2 Divide
+       |  e2 Remainder e2
+       |  e2 Remainder
+       |  e2 Caret e2
+       |  e2 Caret
+       |  e2 Dot e2
+       |  e2 Dot
+       |  e2 Bang e2
+       |  e2 Bang
+       |  es3
+       ;
+
+e3  ::=  comb InfixName e3
+      |  comb InfixCName e3
+      |  comb
+      ;
+
+es3  ::=  comb InfixName e3
+       |  comb InfixName
+       |  comb InfixCName e3
+       |  comb InfixCName
+       |  comb
+       ;
+
+comb  ::=  comb arg
+        |  arg
+        ;
+
+reln  ::=  e2 relop e2
+        |  reln relop e2
+        ;
+
+relsn  ::=  e2 relop e2
+         |  e2 relop
+         |  reln relop e2
+         ;
+
+$$1  ::= ε ;
+
+arg  ::=  $$1 Lex lexrules EndIR
+       |  Name
+       |  ConstructorName
+       |  Constant
+       |  ReadVal
+       |  Show
+       |  DollarDollar
+       |  OpenBracket CloseBracket
+       |  OpenBracket exp CloseBracket
+       |  OpenBracket exp Comma exp CloseBracket
+       |  OpenBracket exp Comma exp Comma liste CloseBracket
+       |  OpenBracket exp DotDot exp CloseBracket
+       |  OpenBracket exp DotDot CloseBracket
+       |  OpenBracket exp Comma exp DotDot exp CloseBracket
+       |  OpenBracket exp Comma exp DotDot CloseBracket
+       |  OpenBracket exp Pipe qualifiers CloseBracket
+       |  OpenBracket exp Diagonal qualifiers CloseBracket
+       |  OpenParenthesis op CloseParenthesis
+       |  OpenParenthesis es1 CloseParenthesis
+       |  OpenParenthesis diop1 e1 CloseParenthesis
+       |  OpenParenthesis CloseParenthesis
+       |  OpenParenthesis exp Comma liste CloseParenthesis
+       ;
+
+$$2  ::= ε ;
+
+$$3  ::= ε ;
+
+lexrules  ::=  lexrules lstart here re indent $$2 Arrow exp lpostfix $$3 outdent
+            |  lexdefs
             ;
 
-$$8  = epsilon ;
+lstart  ::= ε
+          |  Less cnames Greater
+          ;
 
-count_factors  =  EmptySymbol
-               |  EmptySymbol factors
-               |  $$9 factors
-               ;
+cnames  ::=  ConstructorName
+          |  cnames ConstructorName
+          ;
 
-$$9  = epsilon ;
+lpostfix  ::= ε
+           |  Begin ConstructorName
+           |  Begin Constant
+           ;
 
-factors  =  factor
-         |  factors factor
-         ;
+lexdefs  ::=  lexdefs LexDef indent Equal re outdent
+           |
+           ;
 
-factor  =  unit
-        |  OpenBrace unit CloseBrace
-        |  OpenBrace unit
-        |  unit CloseBrace
-        ;
-
-unit  =  symbol
-      |  symbol Asterisk
-      |  symbol Plus
-      |  symbol QuestionMark
+re  ::=  re1 Pipe re
+      |  re1
       ;
 
-symbol  =  Name
-        |  EndSymbol
-        |  Constant
-        |  Caret
-        |  $$10 OpenBracket exp $$11 CloseBracket
-        |  Minus
+re1  ::=  lterm Slash lterm
+       |  lterm Slash
+       |  lterm
+       ;
+
+lterm  ::=  lfac lterm
+         |  lfac
+         ;
+
+lfac  ::=  lunit Asterisk
+        |  lunit Plus
+        |  lunit QuestionMark
+        |  lunit
         ;
 
-$$10  = epsilon ;
+lunit  ::=  OpenParenthesis re CloseParenthesis
+         |  Constant
+         |  CharClass
+         |  AntiCharClass
+         |  Dot
+         |  name
+         ;
 
-$$11  = epsilon ;
+name  ::=  Name
+        |  ConstructorName
+        ;
+
+qualifiers  ::=  exp
+             |  generator
+             |  qualifiers Semicolon generator
+             |  qualifiers Semicolon exp
+             ;
+
+generator  ::=  e1 Comma generator
+             |  generator1
+             ;
+
+generator1  ::=  e1 LeftArrow exp
+              |  e1 LeftArrow exp Comma exp DotDot
+              ;
+
+defs  ::=  def
+        |  defs def
+        ;
+
+def  ::=  v act2 indent Equal here rhs outdent
+       |  spec
+       |  AbsoluteType here typeforms indent With lspecs outdent
+       |  typeform indent act1 here EqualEqual type act2 outdent
+       |  typeform indent act1 here Colon2Equal construction act2 outdent
+       |  indent setexp Export parts outdent
+       |  Free here OpenBrace specs CloseBrace
+       |  Include bindings modifiers outdent
+       |  here BNF $$4 names outdent productions EndIR
+       ;
+
+$$4  ::= ε ;
+
+setexp  ::=  here ;
+
+bindings  ::= ε
+            |  OpenBrace bindingseq CloseBrace
+            ;
+
+bindingseq  ::=  bindingseq binding
+              |  binding
+              ;
+
+binding  ::=  Name indent Equal exp outdent
+           |  typeform indent act1 EqualEqual type act2 outdent
+           ;
+
+modifiers  ::= ε
+             |  negmods
+             ;
+
+negmods  ::=  negmods negmod
+           |  negmod
+           ;
+
+negmod  ::=  Name Slash Name
+          |  ConstructorName Slash ConstructorName
+          |  Minus Name
+          ;
+
+here  ::= ε ;
+
+act1  ::= ε ;
+
+act2  ::= ε ;
+
+ldefs  ::=  ldef
+         |  ldefs ldef
+         ;
+
+ldef  ::=  spec
+        |  typeform here EqualEqual
+        |  typeform here Colon2Equal
+        |  v act2 indent Equal here rhs outdent
+        ;
+
+vlist  ::=  v
+         |  vlist Comma v
+         ;
+
+v  ::=  v1
+     |  v1 Colon v
+     ;
+
+v1  ::=  v1 Plus Constant
+      |  Minus Constant
+      |  v2 InfixName v1
+      |  v2 InfixCName v1
+      |  v2
+      ;
+
+v2  ::=  v3
+      |  v2 v3
+      ;
+
+v3  ::=  Name
+      |  ConstructorName
+      |  Constant
+      |  OpenBracket CloseBracket
+      |  OpenBracket vlist CloseBracket
+      |  OpenParenthesis CloseParenthesis
+      |  OpenParenthesis v CloseParenthesis
+      |  OpenParenthesis v Comma vlist CloseParenthesis
+      ;
+
+type  ::=  type1
+        |  type Arrow type
+        ;
+
+type1  ::=  type2 InfixName type1
+         |  type2
+         ;
+
+type2  ::=  tap
+         |  argtype
+         ;
+
+tap  ::=  Name argtype
+       |  tap argtype
+       ;
+
+argtype  ::=  Name
+           |  typevar
+           |  OpenParenthesis typelist CloseParenthesis
+           |  OpenBracket type CloseBracket
+           |  OpenBracket type Comma typel CloseBracket
+           ;
+
+typelist  ::= ε
+            |  type
+            |  type Comma typel
+            ;
+
+typel  ::=  type
+         |  typel Comma type
+         ;
+
+parts  ::=  parts Name
+         |  parts Minus Name
+         |  parts PathName
+         |  parts Plus
+         |  Name
+         |  Minus Name
+         |  PathName
+         |  Plus
+         ;
+
+specs  ::=  specs spec
+         |  spec
+         ;
+
+spec  ::=  typeforms indent here ColonColon ttype outdent ;
+
+lspecs  ::=  lspecs lspec
+          |  lspec
+          ;
+
+$$5  ::= ε ;
+
+lspec  ::=  namelist indent here $$5 ColonColon type outdent ;
+
+namelist  ::=  Name Comma namelist
+            |  Name
+            ;
+
+typeforms  ::=  typeforms Comma typeform act2
+             |  typeform act2
+             ;
+
+typeform  ::=  ConstructorName typevars
+            |  Name typevars
+            |  typevar InfixName typevar
+            |  typevar InfixCName typevar
+            ;
+
+ttype  ::=  type
+         |  Type
+         ;
+
+typevar  ::=  Asterisk
+           |  TypeVar
+           ;
+
+typevars  ::= ε
+            | typevar typevars
+            ;
+
+construction  ::=  constructs ;
+
+constructs  ::=  construct
+              |  constructs Pipe construct
+              ;
+
+construct  ::=  field here InfixCName field
+             |  construct1
+             ;
+
+construct1  ::=  OpenParenthesis construct CloseParenthesis
+              |  construct1 field1
+              |  here ConstructorName
+              ;
+
+field  ::=  type
+        |  argtype Bang
+        ;
+
+field1  ::=  argtype Bang
+         |  argtype
+         ;
+
+names  ::= ε
+         |  names Name
+         ;
+
+productions  ::=  lspec
+               |  production
+               |  productions lspec
+               |  productions production
+               ;
+
+production  ::=  Name params Colon indent grhs outdent ;
+
+params  ::= ε
+          |  $$6 OpenParenthesis names CloseParenthesis
+          ;
+
+$$6  ::= ε ;
+
+grhs  ::=  here phrase ;
+
+phrase  ::=  error_term
+          |  phrase1
+          |  phrase1 Pipe error_term
+          ;
+
+phrase1  ::=  term
+           |  phrase1 Pipe here term
+           ;
+
+term  ::=  count_factors
+        |  count_factors $$7 indent Equal here rhs outdent
+        ;
+
+$$7  ::= ε ;
+
+error_term  ::=  ErrorSymbol
+              |  ErrorSymbol $$8 indent Equal here rhs outdent
+              ;
+
+$$8  ::= ε ;
+
+count_factors  ::=  EmptySymbol
+                 |  EmptySymbol factors
+                 |  $$9 factors
+                 ;
+
+$$9  ::= ε ;
+
+factors  ::=  factor
+           |  factors factor
+           ;
+
+factor  ::=  unit
+          |  OpenBrace unit CloseBrace
+          |  OpenBrace unit
+          |  unit CloseBrace
+          ;
+
+unit  ::=  symbol
+        |  symbol Asterisk
+        |  symbol Plus
+        |  symbol QuestionMark
+        ;
+
+symbol  ::=  Name
+          |  EndSymbol
+          |  Constant
+          |  Caret
+          |  $$10 OpenBracket exp $$11 CloseBracket
+          |  Minus
+          ;
+
+$$10  ::= ε ;
+
+$$11  ::= ε ;
 
