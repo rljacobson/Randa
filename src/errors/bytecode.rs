@@ -4,6 +4,7 @@ Errors associated with loadfile, unload, dump, undump, etc.
 
  */
 
+use std::error::Error;
 use std::fmt::{Display, Formatter};
 
 use crate::data::Value;
@@ -48,3 +49,5 @@ impl Display for BytecodeError {
     }
   }
 }
+
+impl Error for BytecodeError {}

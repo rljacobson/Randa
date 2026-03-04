@@ -29,7 +29,7 @@ use crate::{
   }
 };
 use crate::compiler::Token;
-
+use crate::errors::LexError;
 
 // todo: Figure out how to handle MIRALIB.
 #[allow(unused_variables)]
@@ -142,7 +142,7 @@ impl<'n, 't> Lexer<'n, 't> {
 
   pub fn yylex(&mut self) -> Result<Token, LexError>{
 
-    // Context sensitive syntax errors are handled where they are encountered, not here,
+    // Context-sensitive syntax errors are handled where they are encountered, not here,
     // contrary to lex.c.
 
     self.eat_hashbang();
@@ -232,7 +232,7 @@ impl<'n, 't> Lexer<'n, 't> {
   fn parse_identifier(&mut self, underlined: bool) -> Option<Span<'t, 't>> {
     lazy_static! {
       static ref IDENTIFIER_PATTERN: Regex = Regex::new("\\A[a-zA-Z][a-zA-Z0-9_']*").unwrap();
-      static ref UNDERLINED_IDENTIFIER_PATTERN: Regex = Regex::new("\\A_[a-zA-Z0-9_']*").unwrap();
+      static ref UNDERLINED_IDENTIFIER_PATTERN: Regex = Regex::new("\\A_[a-zA-Z0-9_']*").unwrap();
     }
 
     let matches = match underlined {
@@ -325,7 +325,7 @@ mod utilities {
     // todo: What is the point of `dic`?
     // dic.push(path);
 
-    return path;
+    path
   }
 
   /// Is the filename that of a literate program?

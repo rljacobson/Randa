@@ -10,11 +10,7 @@ readability: `id_type = hd[tl[the_val(x)]]`.
 
 Several data structures are implemented "by proxy" in an object that internally holds a reference to the object on
 the heap. The proxy object implements constructors and accessors for the members of the object. With such a proxy
-object, an object on the heap can be treated just like any other object:
-
-```rust
-
-```
+object, an object on the heap can be treated just like any other object.
 
 ## Miranda design oddities
 
@@ -34,7 +30,7 @@ fact, the IR and bytecode of programs are also stored on the heap. Is Miranda ho
 
 One possible reason to store them on the Randa heap is to know how much heap memory a given program uses. But what 
 constitutes "the program"? Another reason is to get a garbage collector "for free"–actually, at the cost of pointer 
-chasing, which must be significant when every single thing is boxed. Also, RIAA makes this of questionable benefit.
+chasing, which must be significant when every single thing is boxed. Also, RAII makes this of questionable benefit.
 
 Strangely, private names are not stored in the heap. They are stored in the vector `pnvec`. Other good candidates 
 for storing in vectors:
@@ -42,7 +38,6 @@ for storing in vectors:
     during script loading.
   * `clashes`, same.
   * `prefix_stack`, for resolving relative file paths during loading/unloading scripts.
-  * 
 
 ### `Type`, `Tag`, etc., versus `Combinator`. 
 

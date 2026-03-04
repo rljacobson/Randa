@@ -2,8 +2,6 @@
 
 See the `values` module for more information about how data is encoded in a `HeapCell`.
 
-Item representation within the heap:
-
  */
 
 use std::collections::HashMap;
@@ -11,7 +9,8 @@ use std::fmt::{Debug, Formatter};
 use std::ops::{Index, IndexMut};
 
 use crate::data::api::{
-    ConsList, HeapObjectProxy, IdentifierDefinition, IdentifierDefinitionData, IdentifierRecord,
+    ConsList, HeapObjectProxy, IdentifierDefinitionData, IdentifierDefinitionValue,
+    IdentifierRecord,
 };
 use crate::{
     compiler::Token,
@@ -20,16 +19,16 @@ use crate::{
         tag::Tag,
         types::Type,
         values::{RawValue, Value},
-        Combinator, Identifier, IdentifierDefinition, ValueRepresentationType, ATOM_LIMIT,
+        Combinator, Identifier, IdentifierDefinition, ATOM_LIMIT,
     },
 };
 
 type ValueResult = Result<Value, ()>;
 
 // Todo: Give these a home. Seems like they should be combinators.
-static GENERATOR: ValueRepresentationType = 0;
-static GUARD: ValueRepresentationType = 1;
-static REPEAT: ValueRepresentationType = 2;
+static GENERATOR: RawValue = 0;
+static GUARD: RawValue = 1;
+static REPEAT: RawValue = 2;
 
 /// The fundamental unit of data for data that lives in the heap.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
@@ -40,18 +39,17 @@ pub struct HeapCell {
 }
 
 impl HeapCell {
-    pub fn new(tag: Tag, head: Value, tail: Value) -> HeapCell {
+    pub fn new<R1: Into<RawValue>, R2: Into<RawValue>>(
+        tag: Tag,
+        head: R1,
+        tail: R2,
+    ) -> HeapCell {
         // Trivial implementation, but nice to have in case we decide we need a nontrivial implementation in the future.
         HeapCell {
             tag,
             head: head.into(),
             tail: tail.into(),
         }
-    }
-
-    pub fn new_raw(tag: Tag, head: RawValue, tail: RawValue) -> HeapCell {
-        // Trivial implementation, but nice to have in case we decide we need a nontrivial implementation in the future.
-        HeapCell { tag, head, tail }
     }
 }
 
@@ -73,7 +71,7 @@ pub struct Heap {
     /// The private environment is represented as a vector of references to items of the form `strcons(index, value)`,
     /// where `index` is the index of the item in `private_symbols`, and `value` is (a reference to) the item. This is
     /// one of the few things Miranda doesn't store as a cons list in the heap.
-    pub(crate) private_symbols: Vec<ValueRepresentationType>, // pnvec
+    pub(crate) private_symbols: Vec<RawValue>, // pnvec
 
     /// Special heap value NILL
     pub(crate) nill: Value,
@@ -125,7 +123,7 @@ impl Index<RawValue> for Heap {
 
     fn index(&self, index: RawValue) -> &Self::Output {
         // RawValues are the `index + ATOM_LIMIT`
-        let idx = index.0 - ATOM_LIMIT;
+        let idx = index - ATOM_LIMIT;
         if idx >= 0 {
             &self.data[idx as usize]
         } else {
@@ -139,7 +137,7 @@ impl Index<RawValue> for Heap {
 impl IndexMut<RawValue> for Heap {
     fn index_mut(&mut self, index: RawValue) -> &mut Self::Output {
         // RawValues are the `index + ATOM_LIMIT`
-        let idx = index.0 - ATOM_LIMIT;
+        let idx = index - ATOM_LIMIT;
         if idx >= 0 {
             &mut self.data[idx as usize]
         } else {
@@ -215,9 +213,9 @@ impl Heap {
         T: Into<Value>,
     {
         let id_ref = IdentifierRecord::new(
-            &mut self.heap,
+            &mut self,
             name.to_string(),
-            IdentifierDefinition::undefined(),
+            IdentifierDefinitionValue::undefined(),
             data_type.into(),
             None, // Value to be filled in after we get a reference to this identifier.
         );
@@ -238,9 +236,9 @@ impl Heap {
     pub fn make_empty_identifier(&mut self, name: &str) -> IdentifierRecord {
         // return self.make(ID, cons(strcons(p1, NIL), undef_t), UNDEF);
         IdentifierRecord::new(
-            &mut self.heap,
+            &mut self,
             name.to_string(),
-            IdentifierDefinition::from_ref(0.into()),
+            IdentifierDefinitionValue::from_ref(0),
             Type::Undefined.into(),
             None,
         )
@@ -370,12 +368,12 @@ impl Heap {
     pub fn put_cell(&mut self, cell: HeapCell) -> RawValue {
         let idx = self.data.len();
         self.data.push(cell);
-        idx as ValueRepresentationType
+        idx as RawValue
     }
 
     /// Same as `put_cell`, but creates the `HeapCell` as well. This is Miranda's `make`, roughly speaking.
     pub fn put(&mut self, tag: Tag, head: RawValue, tail: RawValue) -> RawValue {
-        self.put_cell(HeapCell::new_raw(tag, head, tail))
+        self.put_cell(HeapCell::new(tag, head, tail))
     }
 
     /// Dereference the given reference, and if the result has `tag`, returns the cell. If `reference` isn't a
@@ -425,15 +423,12 @@ impl Heap {
 
     /// Resolve the string cell to the string value.
     pub fn resolve_string(&self, value: RawValue) -> Result<String, ()> {
-        return Ok(self.strings[value.0 as usize].clone());
+        return Ok(self.strings[value as usize].clone());
     }
 
     /// Create a new private symbol with `value` and return a reference to it.
     pub fn make_private_symbol(&mut self, value: Value) -> RawValue {
-        let new_symbol = self.strcons(
-            Value::Data(self.private_symbols.len() as ValueRepresentationType),
-            value,
-        );
+        let new_symbol = self.strcons(Value::Data(self.private_symbols.len() as RawValue), value);
         self.private_symbols.push(new_symbol.into());
 
         new_symbol
@@ -442,14 +437,11 @@ impl Heap {
     /// If `n < private_symbols.len()`, returns `private_symbols[n]`. If `n >= private_symbols.len()`, creates new
     /// "empty" private symbols for all j with `private_symbols.len() <= j <= n` and returns `private_symbols[n]`.
     //  ToDo: This sounds dumb.
-    pub fn get_nth_private_symbol(&mut self, n: usize) -> ValueRepresentationType {
+    pub fn get_nth_private_symbol(&mut self, n: usize) -> RawValue {
         let length = self.private_symbols.len();
         if n >= length {
             for j in length..=n {
-                let new_symbol = self.strcons(
-                    Value::Data(j as ValueRepresentationType),
-                    Combinator::Undef.into(),
-                );
+                let new_symbol = self.strcons(Value::Data(j as RawValue), Combinator::Undef.into());
                 self.private_symbols.push(new_symbol.into());
             }
         }
@@ -481,11 +473,7 @@ impl Heap {
         }
 
         let idx = self.strings.len();
-        let string_ref = self.put(
-            Tag::String,
-            Value::Data(idx as ValueRepresentationType),
-            Value::None,
-        );
+        let string_ref = self.put(Tag::String, Value::Data(idx as RawValue), Value::None);
 
         self.symbol_table.insert(text.clone(), string_ref);
         self.strings.push(text);
@@ -493,19 +481,19 @@ impl Heap {
         string_ref
     }
 
-    pub fn small_int(&mut self, value: ValueRepresentationType) -> RawValue {
+    pub fn small_int(&mut self, value: RawValue) -> RawValue {
         let v = match value < 0 {
-            true => SIGNBIT | (-(X)),
-            false => x,
+            true => SIGNBIT | (-(value)),
+            false => value,
         };
 
-        self.put(Tag::Int, v, 0 as ValueRepresentationType)
+        self.put(Tag::Int, v, 0)
     }
 
     /// Creates a `HeapCell` with tag `Tag::Int`, head `value`, and tail `NIL`.
     /// This does _not_ create a cons list of ints.
-    pub fn integer(&mut self, value: ValueRepresentationType) -> RawValue {
-        self.put(Tag::Int, value.into(), 0)
+    pub fn integer(&mut self, value: RawValue) -> RawValue {
+        self.put(Tag::Int, value, 0)
     }
 
     pub fn identifier(&mut self, head: RawValue, tail: RawValue) -> RawValue {
@@ -521,7 +509,7 @@ impl Heap {
     }
 
     pub fn constructor(&mut self, n: i16, x: Value) -> RawValue {
-        self.put(Tag::Constructor, n, x)
+        self.put(Tag::Constructor, n as RawValue, x.into())
     }
 
     pub fn strcons(&mut self, head: RawValue, tail: RawValue) -> RawValue {
@@ -553,7 +541,7 @@ impl Heap {
     }
 
     pub fn start_read_vals(&mut self, head: RawValue, tail: RawValue) -> RawValue {
-        self.put(Tag::StartReadVals, head, tail)
+        self.put(Tag::StartReadValues, head, tail)
     }
 
     pub fn tcons(&mut self, head: RawValue, tail: RawValue) -> RawValue {
@@ -596,12 +584,12 @@ impl Heap {
 
     /// Boxes a real number (an `f64`).
     pub fn real(&mut self, number: f64) -> RawValue {
-        let bits = unsafe { std::mem::transmute::<f64, ValueRepresentationType>(number) };
+        let bits = unsafe { std::mem::transmute::<f64, RawValue>(number) };
         self.put(Tag::Double, Value::Data(bits), Value::None)
     }
 
     /// Creates a (boxed) Unicode character.
-    pub fn unicode(&mut self, code_point: ValueRepresentationType) -> RawValue {
+    pub fn unicode(&mut self, code_point: RawValue) -> RawValue {
         self.put(Tag::Unicode, code_point.into(), Value::None)
     }
 
@@ -620,7 +608,7 @@ impl Heap {
         let strcons = self[identifier_cell.head].head;
         let name_ref = self[strcons].head;
 
-        is_capitalized(self.strings[name_ref.0 as usize].as_str())
+        is_capitalized(self.strings[name_ref as usize].as_str())
     }
 
     /// Is the type referenced by `reference` an Arrow type? Not only checks the type but also that the correct
@@ -649,7 +637,7 @@ impl Heap {
             Err(_) => return false,
         };
 
-        return head_cell.head == RawValue(type_required as ValueRepresentationType);
+        return head_cell.head == type_required as RawValue;
     }
 
     /// Is the type referenced by reference a list type? Not only checks the type but also that the correct
@@ -660,7 +648,7 @@ impl Heap {
             Err(_) => return false,
         };
 
-        return type_cell.head == RawValue(Type::List as ValueRepresentationType);
+        return type_cell.head == Type::List as RawValue;
     }
 
     pub fn is_type_variable(&self, reference: Value) -> bool {
@@ -679,7 +667,7 @@ impl Heap {
             Err(_) => return false,
         };
 
-        return type_cell.head == RawValue(Type::Bind as ValueRepresentationType);
+        return type_cell.head == Type::Bind as RawValue;
     }
 
     pub fn arrow_type(&mut self, arg1: Value, arg2: Value) -> RawValue {
@@ -730,13 +718,15 @@ pub(crate) fn is_capitalized(word: &str) -> bool {
         return c.is_uppercase();
     }
     // Consists only of '$'
-    return false;
+    false
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::api::{IdentifierValue, IdentifierValueType, IdentifierValueTypeData};
+    use crate::data::api::{
+        IdentifierHeapValueType, IdentifierValueReference, IdentifierValueTypeData,
+    };
     use crate::data::types::Type;
     use crate::data::IdentifierValueType;
 
@@ -744,13 +734,12 @@ mod tests {
     fn round_trip_values() {
         let x: Value = Value::Data(42);
         let y: Value = Value::Data(43);
-        let expected: HeapCell = HeapCell::new(Tag::DataPair, head, tail);
+        let expected: HeapCell = HeapCell::new(Tag::DataPair, x, y);
         let mut heap: Heap = Heap::new();
-        let reference: Value = heap.data_pair(x, y);
-        let result: Result<HeapCell, ()> = heap.resolve(reference);
+        let reference: RawValue = heap.data_pair(x.into(), y.into());
+        let result: HeapCell = heap.resolve(reference).unwrap();
 
-        assert_eq!(result.is_ok(), true);
-        assert_eq!(result.unwrap(), expected);
+        assert_eq!(result, expected);
     }
 
     #[test]
@@ -761,15 +750,15 @@ mod tests {
         heap.strings.push(String::from("salad.ml"));
 
         let x = heap.cons(
-            RawValue(2).into(),
-            RawValue(1).into(), // "wontons"
+            2, 1, // "wontons"
         );
 
-        let value_type = IdentifierValueType::new(&mut heap, IdentifierValueTypeData::PlaceHolder);
+        let value_type =
+            IdentifierHeapValueType::new(&mut heap, IdentifierValueTypeData::PlaceHolder);
 
         let y = heap.cons(
             value_type.get_ref().into(),
-            RawValue(Combinator::Nil as ValueRepresentationType).into(),
+            (Combinator::Nil as RawValue).into(),
         );
         let value = heap.cons(x, y); //cons(cons(arity,showfn),cons(placeholder_t,NIL))
 
@@ -779,8 +768,8 @@ mod tests {
         // cons(aka,hereinfo)
         // fileinfo(script,line_no)
 
-        let x = heap.strcons(RawValue(0).into(), who);
-        let id_head = heap.cons(x, Value::Data(Type::Number as ValueRepresentationType));
+        let x = heap.strcons(0, who);
+        let id_head = heap.cons(x, Value::Data(Type::Number as RawValue));
         let id = heap.put(Tag::Id, id_head, value); // cons(strcons(name,who),type)
 
         let id_record = IdentifierRecord::from_ref(id.into());

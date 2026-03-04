@@ -15,8 +15,6 @@ null.
 
 */
 
-
-
 // Path manipulation functions that don't seem to belong anywhere.
 
 /**
@@ -27,73 +25,63 @@ Before calling `dump_script` or `load_script`, must `setprefix()` to that of cur
 dumped/loaded to get correct translation between internal path names (relative to dump script) and external path names.
 */
 pub fn path_prefix(mut path: &String) -> String {
-  let mut path = path.clone();
+    let mut path = path.clone();
 
-  // Todo: Make this platform independent by using path separator.
-  if let Some(idx) = path.rfind('/') {
-    // Take the part of the string up to the last '/'
-    let _ = path.split_off(idx);
-    path
-  } else {
-    "".to_string()
-  }
+    // Todo: Make this platform independent by using path separator.
+    if let Some(idx) = path.rfind('/') {
+        // Take the part of the string up to the last '/'
+        let _ = path.split_off(idx);
+        path
+    } else {
+        "".to_string()
+    }
 }
-
-
 
 /// Makes `path` correct relative to `prefix`. Must use when writing path names to dump. This function modifies `path`
 /// in place.
 pub fn make_relative_path(path: &mut String, prefix: &String) {
-  // Todo: This algorithm is weird. It strips a prefix, presumably making an absolute path into a relative path,
-  //       OR, if it doesn't have the prefix, it checks that it is in fact an absolute path...?
-  //       Compare to block in `load_script`, factored out as `make_absolute_path` below.
-  if Some(rest) = path.strip_prefix(prefix){
-    // Replace the value in path with the prefix stripped.
-    *path = rest.to_string();
-  }
-  else if path.starts_with('/') {
-    // Do nothing
-  }
-  else{
-    eprintln!("impossible event in make_relative_path");
-    // Not possible because all relative path names in files were computed wrt current script.
-  }
+    // Todo: This algorithm is weird. It strips a prefix, presumably making an absolute path into a relative path,
+    //       OR, if it doesn't have the prefix, it checks that it is in fact an absolute path...?
+    //       Compare to block in `load_script`, factored out as `make_absolute_path` below.
+    if Some(rest) = path.strip_prefix(prefix) {
+        // Replace the value in path with the prefix stripped.
+        *path = rest.to_string();
+    } else if path.starts_with('/') {
+        // Do nothing
+    } else {
+        eprintln!("impossible event in make_relative_path");
+        // Not possible because all relative path names in files were computed wrt current script.
+    }
 }
-
 
 /// If `path` is relative, add `prefix` to `path` in-place.
 pub fn make_absolute_path(path: &mut String, prefix: &String) {
-  if !path.starts_with('/'){
-    *path = prefix + path;
-  }
+    if !path.starts_with('/') {
+        *path = prefix + path;
+    }
 }
-
-
-
 
 #[cfg(test)]
 mod tests {
-  use super::{make_relative_path, path_prefix};
+    use super::{make_relative_path, path_prefix};
 
-  #[test]
-  fn make_relative_test() {
-    let mut name = String::from("/home/rljacobson/Documents/code/miranda/main.rs");
-    let prefix  =  String::from("/home/rljacobson/Documents/code/miranda/");
+    #[test]
+    fn make_relative_test() {
+        let mut name = String::from("/home/rljacobson/Documents/code/miranda/main.rs");
+        let prefix = String::from("/home/rljacobson/Documents/code/miranda/");
 
-    let relative = make_relative_path(&mut name, &prefix);
+        let relative = make_relative_path(&mut name, &prefix);
 
-    assert_eq!(relative, "main.rs");
-  }
+        assert_eq!(relative, "main.rs");
+    }
 
-  #[test]
-  fn path_prefix_text() {
-    let mut name = String::from("/home/rljacobson/Documents/code/miranda/main.rs");
-    let prefix  =  String::from("/home/rljacobson/Documents/code/miranda/");
+    #[test]
+    fn path_prefix_text() {
+        let mut name = String::from("/home/rljacobson/Documents/code/miranda/main.rs");
+        let prefix = String::from("/home/rljacobson/Documents/code/miranda/");
 
-    let relative = path_prefix(&name);
+        let relative = path_prefix(&name);
 
-    assert_eq!(relative, prefix);
-  }
-
-
+        assert_eq!(relative, prefix);
+    }
 }

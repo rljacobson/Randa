@@ -14,6 +14,7 @@ pub mod token;
 pub mod errors;
 mod lexer;
 pub(crate) mod bytecode;
+mod lexer_OLD;
 // mod parser;
 
 

@@ -14,30 +14,36 @@ NOTES:
 
 use enum_primitive_derive::Primitive;
 
-use crate::data::{Value, ValueRepresentationType};
+use crate::data::{RawValue, Value};
 
 #[derive(Copy, Clone, PartialOrd, Eq, PartialEq, Hash, Debug, Default, Primitive)]
 #[repr(isize)]
 pub enum Type {
-  #[default]
-  Undefined = 0, // Or Atom
-  Bool      = 1,
-  Number    = 2,
-  Char      = 3,
-  List      = 4,
-  Comma     = 5,
-  Arrow     = 6,
-  Void      = 7,
-  Wrong     = 8,  // A type error
-  Bind      = 9,
-  Type      = 10, // User defined type
-  Strict    = 11,
-  Alias     = 12,
-  New       = 13,
+    #[default]
+    Undefined = 0, // Or Atom
+    Bool = 1,
+    Number = 2,
+    Char = 3,
+    List = 4,
+    Comma = 5,
+    Arrow = 6,
+    Void = 7,
+    Wrong = 8, // A type error
+    Bind = 9,
+    Type = 10, // User defined type
+    Strict = 11,
+    Alias = 12,
+    New = 13,
 }
 
 impl From<Type> for Value {
-  fn from(type_value: Type) -> Self {
-    Value::Data(type_value as ValueRepresentationType)
-  }
+    fn from(type_value: Type) -> Self {
+        Value::Data(type_value as RawValue)
+    }
+}
+
+impl From<Type> for RawValue {
+    fn from(type_value: Type) -> Self {
+        type_value as RawValue
+    }
 }

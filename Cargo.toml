@@ -16,7 +16,7 @@ publish = false
 
 
 [dependencies]
-# saucepan   = {path = "../saucepan", features = ["reporting", "nom-parsing", "runtime-dispatch-simd"]}
+saucepan   = {path = "../saucepan", features = ["reporting", "nom-parsing", "runtime-dispatch-simd"]}
 logos      = "0.12.1"
 atty       = "0.2.14" # Checks if stdin is a terminal or piped input. Determines verbosity level.
 console    = "0.15.4" # Formatting & Coloring console text.
@@ -36,4 +36,4 @@ features         = ["std"]
 
 [build-dependencies]
 rust-bison-skeleton = {path = "../rust-bison-skeleton/rust-bison-skeleton"} #"0.41.0"
-chrono = "0.4.23" # For date and time.
+chrono = "0.4.44" # For date and time.

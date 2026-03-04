@@ -11,14 +11,14 @@ on a heap. The heap holds `HeapCell`s, which have the form
 ```Rust
 pub struct HeapCell {
   pub tag : Tag,       // TagRepresentationType   = i32
-  pub head: RawValue,  // ValueRepresentationType = isize
-  pub tail: RawValue,  // ValueRepresentationType = isize
+  pub head: RawValue,  // RawValue = isize
+  pub tail: RawValue,  // RawValue = isize
 }
 ```
 
 A `Tag` has representation `TagRepresentationType`, which will probably be an `i32`. The head and tail
 values will have type `Value` (an enum) in client code, which is represented internally and on the
-heap by a `ValueRepresentationType`, an `isize`. With very little effort, `ValueRepresentationType`
+heap by a `RawValue`, an `isize`. With very little effort, `RawValue`
 could probably be a `u32`, but this is not what Miranda does on 64-bit systems, so neither do we.
 
 ## Identifiers
@@ -65,7 +65,8 @@ where
 
 (Note: The Miranda source fails to mention the `UNDEF` and _"other literal value"_ cases.)
 
-<div style="display:none;">
+<!--This is the PlantUML code for the `DataRepresentation.png` file.-->
+```plantuml
 @startwbs
   + Id
   ++ cons
@@ -83,10 +84,11 @@ where
   +++ cons
   ++++ type
   ++++ typeinfo or nil
-  @endwbs
-</div>
+@endwbs
+```
 
-  ![diagram](Data%20Representation.png)
+<!--  ![diagram](DataRepresentation.png) -->
+
 
 ## Types
 
@@ -118,9 +120,9 @@ See src/data/types.rs.
 
 NOTES:
 
-User defined types are represented by Miranda identifiers (of type "`type`"),
-generic types (e.g. "`**`") by Miranda numbers, and compound types are
-built up with `AP` nodes, e.g. "`a->b`" is represented by '`ap2(arrow_t,a,b)`'
+User defined types are represented by Miranda identifiers (of type `type`),
+generic types (e.g. `**`) by Miranda numbers, and compound types are
+built up with `AP` nodes, e.g. `a->b` is represented by `ap2(arrow_t,a,b)`
 Applying `bind_t` to a type variable, thus: `ap(bind_t,tv)`, indicates that
 it is not to be instantiated. Applying `strict_t` to a type represents the
 '`!`' operator of algebraic type definitions.
@@ -137,13 +139,13 @@ HeapCell {
 ```
 ~~where `idx = high_bytes as usize << 32 + low_bytes as usize` is an index into a string table.~~
 
-**EDIT:** Actually we just use `idx=head` as the index into the string table by itself, because we changed 
-`ValueRepresentationType` to be `isize`. (Also, a `u32` is probably more than enough, anyway.) On the heap a string 
+**EDIT:** Actually we just use `idx=head` as the index into the string table by itself, because `RawValue`
+is `isize`. (Also, a `u32` is probably more than enough, anyway.) On the heap a string 
 looks like:
 
-|  `Tag::String`  |  `Value::Data(idx as ValueRepresentationType)`  |  `Value::None`  |
+|  `Tag::String`  |  `Value::Data(idx as RawValue)`  |  `Value::None`  |
 |:---------------:|:-----------------------------------------------:|:---------------:|
-
+| x | x | x |
 
 
 ## Other pointers
@@ -166,5 +168,4 @@ unsafe{
 ```
 ~~Wrap this in an API to client code need not use `transmute`.~~
 
-**EDIT:** Since `ValueRepresentationType` is an `isize`, pointers fit in just the head. (See notes on Strings.)
-
+**EDIT:** Since `RawValue` is an `isize`, pointers fit in just the head. (See notes on Strings.)

@@ -18,161 +18,129 @@ From Miranda:
   `setupheap()` in data.c.
 
 
- */
+*/
 
 use num_traits::{FromPrimitive, Num as Numeric}; // For conversion from `i32` to `Token` or `Combinator`
 
 use crate::{
-  data::{
-    ATOM_LIMIT,
-    COMBINATOR_BASE,
-    TOKEN_BASE,
-    Combinator,
-    ValueRepresentationType,
-  },
-  compiler::Token,
+    compiler::Token,
+    data::{Combinator, ATOM_LIMIT, COMBINATOR_BASE, TOKEN_BASE},
 };
 
+pub type RawValue = isize;
 
-#[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Debug, Default)]
-pub struct RawValue(pub ValueRepresentationType);
-
-impl RawValue {
-  pub fn from_value(value: Value) -> RawValue {
+pub fn raw_from_value(value: Value) -> RawValue {
     match value {
+        Value::Tag(tag) => tag,
+        Value::Char(c) => c as u32 as RawValue,
+        Value::Token(token) => token as RawValue,
+        Value::Combinator(combinator) => combinator as RawValue,
+        Value::Reference(p) => p + ATOM_LIMIT,
+        Value::Data(d) => d,
 
-      Value::Tag(tag) => RawValue(tag),
+        // The raw values for the variants used by the parser shouldn't be needed, as they not real Miranda values. We
+        // recycle `Value::None` to use as a "zero" `Value` and make the rest errors. Note that like
+        // `Value::Data`, `Value::None` cannot round-trip, because it collides with `Value::Char`.
+        Value::None => 0,
 
-      Value::Char(c) => RawValue((c as u32) as ValueRepresentationType),
-
-      Value::Token(token) => RawValue(token as ValueRepresentationType),
-
-      Value::Combinator(combinator) => RawValue(combinator as ValueRepresentationType),
-
-      Value::Reference(p) => RawValue(p + ATOM_LIMIT),
-
-      Value::Data(d) => RawValue(d),
-
-      // The `RawValue`s for the variants used by the parser shouldn't be needed, as they not real Miranda values. We
-      // recycle `Value::None` to use as a "zero" `Value` and make the rest errors. Note that like
-      // `Value::Data`, `Value::None` cannot round-trip, because it collides with `Value::Char`.
-      Value::None => RawValue(0),
-
-      _ => unreachable!("Attempted to convert a parser-only value to a RawValue. This is a bug.")
+        _ => unreachable!("Attempted to convert a parser-only value to a RawValue. This is a bug."),
     }
-  }
 }
-
 
 impl From<Value> for RawValue {
-  fn from(v: Value) -> Self {
-    RawValue::from_value(v)
-  }
+    fn from(v: Value) -> Self {
+        raw_from_value(v)
+    }
 }
 
-impl From<Value> for ValueRepresentationType {
-  fn from(value: Value) -> Self {
-    RawValue::from_value(value).0
-  }
-}
-
-impl<T> From<T> for RawValue
-  where T: Into<ValueRepresentationType> + Numeric
-{
-  fn from(c: T) -> Self {
-    RawValue(Into::<ValueRepresentationType>::into(c))
-  }
-}
-
+// impl<T> From<T> for RawValue
+//   where T: Into<RawValue> + Numeric
+// {
+//   fn from(c: T) -> Self {
+//     Into::<RawValue>::into(c)
+//   }
+// }
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 pub enum Value {
-  /// Required by parser.
-  None,
-  /// Required by parser.
-  Uninitialized,
-  /// Required by parser.
-  Stolen,
+    /// Required by parser.
+    None,
+    /// Required by parser.
+    Uninitialized,
+    /// Required by parser.
+    Stolen,
 
-
-  Tag(ValueRepresentationType),       // 0..23, distinguished from context.
-  Char(char),                         // 0..TOKEN_BASE-1               ==   0..255
-  /// Required by parser and used by compiler.
-  /// Represents a token that is returned from a Lexer
-  Token(Token),                       // TOKEN_BASE..COMBINATOR_BASE-1 == 256..305
-  Combinator(Combinator),             // COMBINATOR_BASE..ATOM_LIMIT-1 == 306..446
-  Reference(ValueRepresentationType), // Reference to another cell.
-  Data(ValueRepresentationType)       // Uninterpreted data. Shouldn't use this, as there should be a `Value` variant
-                                      // for everything.
+    Tag(RawValue), // 0..23, distinguished from context.
+    Char(char),    // 0..TOKEN_BASE-1               ==   0..255
+    /// Required by parser and used by compiler.
+    /// Represents a token that is returned from a Lexer
+    Token(Token), // TOKEN_BASE..COMBINATOR_BASE-1 == 256..305
+    Combinator(Combinator), // COMBINATOR_BASE..ATOM_LIMIT-1 == 306..446
+    Reference(RawValue), // Reference to another cell.
+    Data(RawValue), // Uninterpreted data. Shouldn't use this, as there should be a `Value` variant
+                   // for everything.
 }
 
-
 impl From<RawValue> for Value {
+    /// Warning: Use this method with care! `Value::Data(n)` will never round trip! However, the `RawValue` r it
+    /// encodes to will always be the same even under composition of `Value<-->RawValue` conversions.
+    fn from(value: RawValue) -> Self {
+        let v = value;
 
-  /// Warning: Use this method with care! `Value::Data(n)` will never round trip! However, the `RawValue` r it
-  /// encodes to will always be the same even under composition of `Value<-->RawValue` conversions.
-  fn from(value: RawValue) -> Self {
-    let v = value.0;
-
-    if v < TOKEN_BASE {
-      // It is possible to encode a non-ASCII char which then decodes as the wrong value type.
-      // Make sure `Value::Char`'s only hold ASCII characters.
-      Value::Char(
-        // This must be kept in sync with the target of the type alias `ValueRepresentationType`.
-        char::from_u32(v as u32).unwrap()
-      )
-    } else if v < COMBINATOR_BASE {
-      Value::Token(
-        Token::from_isize(v).unwrap()
-      )
-    } else if v < ATOM_LIMIT {
-      Value::Combinator(
-        Combinator::from_isize(v).unwrap()
-      )
-    } else {
-      Value::Reference(v - ATOM_LIMIT)
+        if v < TOKEN_BASE {
+            // It is possible to encode a non-ASCII char which then decodes as the wrong value type.
+            // Make sure `Value::Char`'s only hold ASCII characters.
+            Value::Char(
+                // This must be kept in sync with the target of `RawValue`.
+                char::from_u32(v as u32).unwrap(),
+            )
+        } else if v < COMBINATOR_BASE {
+            Value::Token(Token::from_isize(v).unwrap())
+        } else if v < ATOM_LIMIT {
+            Value::Combinator(Combinator::from_isize(v).unwrap())
+        } else {
+            Value::Reference(v - ATOM_LIMIT)
+        }
     }
-  }
 }
 
 impl Default for Value {
-  fn default() -> Self {
-    Self::Stolen
-  }
+    fn default() -> Self {
+        Self::Stolen
+    }
 }
 
 impl Value {
-  /// Required method, parser expects it to be defined.
-  ///
-  /// Constructor for `LexicalValue::Token(token)` variant.
-  pub(crate) fn from_token(value: Token) -> Self {
-    Self::Token(value)
-  }
+    /// Required method, parser expects it to be defined.
+    ///
+    /// Constructor for `LexicalValue::Token(token)` variant.
+    pub(crate) fn from_token(value: Token) -> Self {
+        Self::Token(value)
+    }
 
-  pub(crate) fn new_uninitialized() -> Self {
-    Self::Uninitialized
-  }
+    pub(crate) fn new_uninitialized() -> Self {
+        Self::Uninitialized
+    }
 
-  pub(crate) fn is_uninitialized(&self) -> bool {
-    matches!(self, Self::Uninitialized)
-  }
+    pub(crate) fn is_uninitialized(&self) -> bool {
+        matches!(self, Self::Uninitialized)
+    }
 }
 
-
 impl From<char> for Value {
-  fn from(c: char) -> Self {
-    Value::Char(c)
-  }
+    fn from(c: char) -> Self {
+        Value::Char(c)
+    }
 }
 
 impl From<Combinator> for Value {
-  fn from(combinator: Combinator) -> Value {
-    Value::Combinator(combinator)
-  }
+    fn from(combinator: Combinator) -> Value {
+        Value::Combinator(combinator)
+    }
 }
 
 impl From<Token> for Value {
-  fn from(token: Token) -> Value {
-    Value::Token(token)
-  }
+    fn from(token: Token) -> Value {
+        Value::Token(token)
+    }
 }

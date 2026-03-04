@@ -9,7 +9,7 @@ on a heap. The heap holds `HeapCell`s, which have the form
 ```
 A `Tag` has representation `TagRepresentationType`, which will probably be a `i32`. The head and tail
 values will have type `Value` (an enum) in client code, which is represented internally and on the
-heap by a `ValueRepresentationType`, a `usize`. With very little effort, `ValueRepresentationType`
+heap by a `RawValue`, an `isize`. With very little effort, `RawValue`
 could probably be a `u32`, but this is not what Miranda does on 64-bit systems, so neither do we.
 
 As is common in functional programming languages, Miranda treats code as data, storing the code as the
@@ -23,7 +23,7 @@ instead intern strings and store the interned string's handle as values.
 
 TODO: Strings should be reference counted.
 
-Which variant of the enum `Value` a value of type `ValueRepresentationType` represents can be determined by which of
+Which variant of the enum `Value` a value of type `RawValue` represents can be determined by which of
 the ranges in the table below the value falls into. Thus, values do not require tags in their representation on the
 heap. (There are some exceptions, see below.) The `Value` enum exists as a convenience and to enforce type safety
 outside of the heap implementation details.
@@ -57,34 +57,33 @@ However, Miranda does it this way, so we do to.
 
 */
 
+pub(crate) mod api;
 pub mod combinator;
+pub(crate) mod heap;
+pub mod identifier;
+pub(crate) mod path;
 pub mod tag;
 pub mod types;
 pub mod values;
-pub(crate) mod heap;
-pub(crate) mod api;
-pub(crate) mod path;
-
 
 pub use crate::{
-  compiler::Token,
-  data::{
-    combinator::Combinator,
-    heap::{Heap, HeapCell},
-    identifier::*,
-    types::Type,
-    values::{Value, RawValue},
-    tag::Tag
-  }
+    compiler::Token,
+    data::{
+        combinator::Combinator,
+        heap::{Heap, HeapCell},
+        identifier::*,
+        tag::Tag,
+        types::Type,
+        values::{RawValue, Value},
+    },
 };
 
 /// The type used to represent tokens, combinators, pointers, Randa types...
 /// Miranda uses size of a pointer, 64-bits, which removes an indirection for pointer data.
-/// If the bit-width of `ValueRepresentationType` changes, synchronize it with
+/// If the bit-width of `RawValue` changes, synchronize it with
 ///    * `Heap::resolve_string()`
 ///    * instances of `IdentifierValueType::from_usize`
-pub(crate) type ValueRepresentationType = isize;
-pub const TOKEN_BASE     : ValueRepresentationType = 256; // There are 80 token values.
-pub const COMBINATOR_BASE: ValueRepresentationType = TOKEN_BASE + 80; // 336; // There are 141 combinators.
-pub const ATOM_LIMIT     : ValueRepresentationType = COMBINATOR_BASE + 141; // = 477
-// Note: X_LIMIT=`ATOM_LIMIT` - 256 + 16 must remain >=512 for bytecode representation to work.
+pub const TOKEN_BASE: RawValue = 256; // There are 80 token values.
+pub const COMBINATOR_BASE: RawValue = TOKEN_BASE + 80; // 336; // There are 141 combinators.
+pub const ATOM_LIMIT: RawValue = COMBINATOR_BASE + 141; // = 477
+                                                        // Note: X_LIMIT=`ATOM_LIMIT` - 256 + 16 must remain >=512 for bytecode representation to work.

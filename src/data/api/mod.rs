@@ -17,73 +17,64 @@ parameter.
 
 */
 
-mod file_record;
 mod cons_list;
+mod file_record;
 mod identifier_record;
 mod open_file;
 
 // Implementors of HeapObjectProxy (defined below)
+pub(crate) use cons_list::ConsList;
 pub(crate) use file_record::FileRecord;
 pub(crate) use identifier_record::*;
-pub(crate) use cons_list::ConsList;
 pub(crate) use open_file::OpenFile;
 
-use crate::{
-  data::{
-    Value,
-    ValueRepresentationType,
-    RawValue,
-    Heap
-  }
-};
-
-
+use crate::data::{Heap, RawValue, Value};
 
 pub type HeapString = String;
-pub type LineNumber = ValueRepresentationType;
+pub type LineNumber = RawValue;
 /// A lightweight proxy for an object that lives on the heap.
-pub trait HeapObjectProxy: Copy + Clone + Eq + PartialEq {
-  /// Constructs a `Self` from an existing object on the heap at `reference`.
-  fn from_ref(reference: RawValue) -> Self;
+pub trait HeapObjectProxy: Copy + Clone {
+    /// Constructs a `Self` from an existing object on the heap at `reference`.
+    fn from_ref(reference: RawValue) -> Self;
 
-  // Creates a new object on the heap and returns a `Self` referencing that object.
-  // Because `new(..)` needs to take the members of the object as parameters, it isn't part of the trait.
-  // fn new(&mut heap: Heap) -> Self;
+    // Creates a new object on the heap and returns a `Self` referencing that object.
+    // Because `new(..)` needs to take the members of the object as parameters, it isn't part of the trait.
+    // fn new(&mut heap: Heap) -> Self;
 
-  /// Get a raw reference to the underlying heap object.
-  fn get_ref(&self) -> RawValue;
+    /// Get a raw reference to the underlying heap object.
+    fn get_ref(&self) -> RawValue;
 
-  // Fetches the data referenced by this `HeapProxyObject`. The data will contain other `HeapProxyObject`s where
-  // appropriate.
-  // fn get_data(&self, heap: &Heap) -> HeapObject;
+    // Fetches the data referenced by this `HeapProxyObject`. The data will contain other `HeapProxyObject`s where
+    // appropriate.
+    // fn get_data(&self, heap: &Heap) -> HeapObject;
 }
 
 // region Conversion to/from the different value representations
 
-impl From<T> for ValueRepresentationType
-  where T: HeapObjectProxy
+// impl From<T> for RawValue
+//   where T: HeapObjectProxy
+// {
+//   fn from(value: &T) -> RawValue {
+//     value.get_ref()
+//   }
+// }
+
+impl<T> From<T> for Value
+where
+    T: HeapObjectProxy,
 {
-  fn from(value: &T) -> ValueRepresentationType {
-    value.get_ref().0
-  }
+    fn from(value: T) -> Value {
+        value.get_ref().into()
+    }
 }
 
-
-impl From<T> for Value
-  where T: HeapObjectProxy
+impl<T> From<T> for RawValue
+where
+    T: HeapObjectProxy,
 {
-  fn from(value: &T) -> Value {
-    value.get_ref().into()
-  }
-}
-
-
-impl From<T> for RawValue
-  where T: HeapObjectProxy
-{
-  fn from(value: &T) -> RawValue {
-    value.get_ref()
-  }
+    fn from(value: T) -> RawValue {
+        value.get_ref()
+    }
 }
 
 // endregion

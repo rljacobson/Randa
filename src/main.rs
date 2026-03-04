@@ -1,6 +1,5 @@
 #![allow(ambiguous_associated_items)]
 #![allow(dead_code)]
-#![feature(arbitrary_enum_discriminant)]
 #![feature(pattern)]
 
 
