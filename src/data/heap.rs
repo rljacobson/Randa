@@ -8,10 +8,8 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::ops::{Index, IndexMut};
 
-use crate::data::api::{
-    ConsList, HeapObjectProxy, IdentifierDefinitionData, IdentifierDefinitionValue,
-    IdentifierRecord,
-};
+use crate::constants::SIGNBIT;
+use crate::data::api::{HeapObjectProxy, IdentifierDefinitionValue, IdentifierRecord};
 use crate::{
     compiler::Token,
     constants::INIT_SPACE,
@@ -19,7 +17,7 @@ use crate::{
         tag::Tag,
         types::Type,
         values::{RawValue, Value},
-        Combinator, Identifier, IdentifierDefinition, ATOM_LIMIT,
+        Combinator, ATOM_LIMIT,
     },
 };
 
@@ -39,11 +37,7 @@ pub struct HeapCell {
 }
 
 impl HeapCell {
-    pub fn new<R1: Into<RawValue>, R2: Into<RawValue>>(
-        tag: Tag,
-        head: R1,
-        tail: R2,
-    ) -> HeapCell {
+    pub fn new<R1: Into<RawValue>, R2: Into<RawValue>>(tag: Tag, head: R1, tail: R2) -> HeapCell {
         // Trivial implementation, but nice to have in case we decide we need a nontrivial implementation in the future.
         HeapCell {
             tag,
@@ -111,7 +105,7 @@ impl Default for Heap {
         //       Possible answer: So it can be used in contexts that allow Combinator values that are not actually
         //       combinators.
         // Nill lives in `Heap` because some `Heap` functions use it.
-        heap.nill = heap.cons(Value::Token(Token::Constant), Combinator::Nil.into());
+        heap.nill = heap.cons_ref(Value::Token(Token::Constant), Value::from(Combinator::Nil));
 
         heap
     }
@@ -188,18 +182,6 @@ impl Heap {
 
     // region Generic read/write functions
 
-    /*
-    /// Extracts the type of an identifier represented on the stack. Assumes `value` is a reference to an identifier.
-    pub(crate) fn id_type(&mut self, value: Value) -> &mut RawValue {
-      self.tl_hd_mut(value)
-    }
-
-    /// Extracts the value of an identifier represented on the stack. Assumes `value` is a reference to an identifier.
-    pub(crate) fn id_val(&mut self, value: Value) -> &mut RawValue {
-      &mut self.index_mut(value).tail
-    }
-    */
-
     /// A convenience method used by "privlib" and "stdlib", see below. It creates an identifier with the given name,
     /// value, and datatype, constructing the value according to whether the name is that of a constructor
     /// (capitalized) or not.
@@ -213,15 +195,16 @@ impl Heap {
         T: Into<Value>,
     {
         let id_ref = IdentifierRecord::new(
-            &mut self,
+            self,
             name.to_string(),
             IdentifierDefinitionValue::undefined(),
             data_type.into(),
             None, // Value to be filled in after we get a reference to this identifier.
         );
 
-        let id_value = if is_capitalized(name) {
-            self.constructor(value, id_ref.get_ref().into())
+        let id_value: Value = if is_capitalized(name) {
+            let constructor_index: i16 = Into::<RawValue>::into(value) as i16;
+            self.constructor_ref(constructor_index, id_ref.get_ref().into())
         } else {
             value
         };
@@ -236,7 +219,7 @@ impl Heap {
     pub fn make_empty_identifier(&mut self, name: &str) -> IdentifierRecord {
         // return self.make(ID, cons(strcons(p1, NIL), undef_t), UNDEF);
         IdentifierRecord::new(
-            &mut self,
+            self,
             name.to_string(),
             IdentifierDefinitionValue::from_ref(0),
             Type::Undefined.into(),
@@ -299,48 +282,6 @@ impl Heap {
     }
     */
 
-    /// Returns a mutable reference to the RawValue in the head of the head of the provided reference.
-    pub fn hd_hd_mut<T: Into<RawValue>>(&mut self, idx: T) -> &mut RawValue {
-        let hd = self[idx.into()].head;
-        &mut self[hd].head
-    }
-
-    /// Returns a copy of the RawValue in the head of the head of the provided reference.
-    pub fn hd_hd<T: Into<RawValue>>(&self, idx: T) -> RawValue {
-        let hd = self[idx.into()].head;
-        self[hd].head
-    }
-
-    pub fn hd_tl_mut<T: Into<RawValue>>(&mut self, idx: T) -> &mut RawValue {
-        let hd = self[idx.into()].tail;
-        &mut self[hd].head
-    }
-
-    pub fn hd_tl<T: Into<RawValue>>(&self, idx: T) -> RawValue {
-        let hd = self[idx.into()].tail;
-        self[hd].head
-    }
-
-    pub fn tl_tl_mut<T: Into<RawValue>>(&mut self, idx: T) -> &mut RawValue {
-        let tl = self[idx.into()].tail;
-        &mut self[tl].tail
-    }
-
-    pub fn tl_tl<T: Into<RawValue>>(&self, idx: T) -> RawValue {
-        let tl = self[idx.into()].tail;
-        self[tl].tail
-    }
-
-    pub fn tl_hd_mut<T: Into<RawValue>>(&mut self, idx: T) -> &mut RawValue {
-        let tl = self[idx.into()].head;
-        &mut self[tl].tail
-    }
-
-    pub fn tl_hd<T: Into<RawValue>>(&self, idx: T) -> RawValue {
-        let tl = self[idx.into()].head;
-        self[tl].tail
-    }
-
     /// Resolves a reference to the `HeapCell` it points to.
     pub fn resolve(&self, value: Value) -> Result<HeapCell, ()> {
         match value {
@@ -365,15 +306,25 @@ impl Heap {
     }
 
     /// Pushes the given cell into the heap and returns a reference to the `HeapCell` in the heap (the index of the `HeapCell` in `heap.data`).
-    pub fn put_cell(&mut self, cell: HeapCell) -> RawValue {
+    fn put_cell(&mut self, cell: HeapCell) -> RawValue {
         let idx = self.data.len();
         self.data.push(cell);
         idx as RawValue
     }
 
+    /// Typed wrapper around [`Heap::put_cell`] that returns a typed heap reference.
+    pub fn put_cell_ref(&mut self, cell: HeapCell) -> Value {
+        Value::Reference(self.put_cell(cell))
+    }
+
     /// Same as `put_cell`, but creates the `HeapCell` as well. This is Miranda's `make`, roughly speaking.
-    pub fn put(&mut self, tag: Tag, head: RawValue, tail: RawValue) -> RawValue {
+    fn put(&mut self, tag: Tag, head: RawValue, tail: RawValue) -> RawValue {
         self.put_cell(HeapCell::new(tag, head, tail))
+    }
+
+    /// Typed wrapper around [`Heap::put`] that returns a typed heap reference.
+    pub fn put_ref(&mut self, tag: Tag, head: Value, tail: Value) -> Value {
+        Value::Reference(self.put(tag, head.into(), tail.into()))
     }
 
     /// Dereference the given reference, and if the result has `tag`, returns the cell. If `reference` isn't a
@@ -421,32 +372,54 @@ impl Heap {
         Err(())
     }
 
-    /// Resolve the string cell to the string value.
-    pub fn resolve_string(&self, value: RawValue) -> Result<String, ()> {
-        return Ok(self.strings[value as usize].clone());
+    /// Resolve a string reference (or legacy string index payload) to its string value.
+    pub fn resolve_string(&self, value: Value) -> Result<String, ()> {
+        match value {
+            Value::Reference(reference) => {
+                let cell = self.data.get(reference as usize).ok_or(())?;
+                if cell.tag != Tag::String {
+                    return Err(());
+                }
+                self.strings.get(cell.head as usize).cloned().ok_or(())
+            }
+            Value::Data(index) => self.strings.get(index as usize).cloned().ok_or(()),
+            _ => Err(()),
+        }
     }
 
     /// Create a new private symbol with `value` and return a reference to it.
-    pub fn make_private_symbol(&mut self, value: Value) -> RawValue {
-        let new_symbol = self.strcons(Value::Data(self.private_symbols.len() as RawValue), value);
-        self.private_symbols.push(new_symbol.into());
+    fn make_private_symbol(&mut self, value: Value) -> RawValue {
+        let new_symbol: RawValue = self
+            .strcons_ref(Value::Data(self.private_symbols.len() as RawValue), value)
+            .into();
+        self.private_symbols.push(new_symbol);
 
         new_symbol
+    }
+
+    pub fn make_private_symbol_ref(&mut self, value: Value) -> Value {
+        Value::Reference(self.make_private_symbol(value))
     }
 
     /// If `n < private_symbols.len()`, returns `private_symbols[n]`. If `n >= private_symbols.len()`, creates new
     /// "empty" private symbols for all j with `private_symbols.len() <= j <= n` and returns `private_symbols[n]`.
     //  ToDo: This sounds dumb.
-    pub fn get_nth_private_symbol(&mut self, n: usize) -> RawValue {
+    fn get_nth_private_symbol(&mut self, n: usize) -> RawValue {
         let length = self.private_symbols.len();
         if n >= length {
             for j in length..=n {
-                let new_symbol = self.strcons(Value::Data(j as RawValue), Combinator::Undef.into());
-                self.private_symbols.push(new_symbol.into());
+                let new_symbol: RawValue = self
+                    .strcons_ref(Value::Data(j as RawValue), Value::from(Combinator::Undef))
+                    .into();
+                self.private_symbols.push(new_symbol);
             }
         }
 
         self.private_symbols[n]
+    }
+
+    pub fn get_nth_private_symbol_ref(&mut self, n: usize) -> Value {
+        Value::Reference(self.get_nth_private_symbol(n))
     }
 
     // endregion
@@ -469,128 +442,227 @@ impl Heap {
 
         // Cannot use `Entry` API because we would need a second mutable borrow of self to create the ID on the heap.
         if let Some(value) = self.symbol_table.get(&text) {
-            return *value;
+            return (*value).into();
         }
 
         let idx = self.strings.len();
-        let string_ref = self.put(Tag::String, Value::Data(idx as RawValue), Value::None);
+        let string_ref = self.put(
+            Tag::String,
+            Value::Data(idx as RawValue).into(),
+            Value::None.into(),
+        );
 
-        self.symbol_table.insert(text.clone(), string_ref);
+        self.symbol_table.insert(text.clone(), string_ref.into());
         self.strings.push(text);
 
         string_ref
     }
 
-    pub fn small_int(&mut self, value: RawValue) -> RawValue {
+    fn small_int(&mut self, value: RawValue) -> RawValue {
         let v = match value < 0 {
-            true => SIGNBIT | (-(value)),
+            true => SIGNBIT | (-value),
             false => value,
         };
 
         self.put(Tag::Int, v, 0)
     }
 
+    pub fn small_int_ref(&mut self, value: isize) -> Value {
+        Value::Reference(self.small_int(value))
+    }
+
     /// Creates a `HeapCell` with tag `Tag::Int`, head `value`, and tail `NIL`.
     /// This does _not_ create a cons list of ints.
-    pub fn integer(&mut self, value: RawValue) -> RawValue {
+    fn integer(&mut self, value: RawValue) -> RawValue {
         self.put(Tag::Int, value, 0)
     }
 
-    pub fn identifier(&mut self, head: RawValue, tail: RawValue) -> RawValue {
+    pub fn integer_ref(&mut self, value: isize) -> Value {
+        Value::Reference(self.integer(value))
+    }
+
+    fn identifier(&mut self, head: RawValue, tail: RawValue) -> RawValue {
         self.put(Tag::Id, head, tail)
     }
 
-    pub fn data_pair(&mut self, head: RawValue, tail: RawValue) -> RawValue {
+    pub fn identifier_ref(&mut self, head: Value, tail: Value) -> Value {
+        Value::Reference(self.identifier(head.into(), tail.into()))
+    }
+
+    fn data_pair(&mut self, head: RawValue, tail: RawValue) -> RawValue {
         self.put(Tag::DataPair, head, tail)
     }
 
-    pub fn file_info(&mut self, head: RawValue, tail: RawValue) -> RawValue {
+    pub fn data_pair_ref(&mut self, head: Value, tail: Value) -> Value {
+        Value::Reference(self.data_pair(head.into(), tail.into()))
+    }
+
+    fn file_info(&mut self, head: RawValue, tail: RawValue) -> RawValue {
         self.put(Tag::FileInfo, head, tail)
     }
 
-    pub fn constructor(&mut self, n: i16, x: Value) -> RawValue {
+    pub fn file_info_ref(&mut self, head: Value, tail: Value) -> Value {
+        Value::Reference(self.file_info(head.into(), tail.into()))
+    }
+
+    fn constructor(&mut self, n: i16, x: Value) -> RawValue {
         self.put(Tag::Constructor, n as RawValue, x.into())
     }
 
-    pub fn strcons(&mut self, head: RawValue, tail: RawValue) -> RawValue {
+    pub fn constructor_ref(&mut self, n: i16, x: Value) -> Value {
+        Value::Reference(self.constructor(n, x))
+    }
+
+    fn strcons(&mut self, head: RawValue, tail: RawValue) -> RawValue {
         self.put(Tag::StrCons, head, tail)
     }
 
-    pub fn cons(&mut self, head: RawValue, tail: RawValue) -> RawValue {
+    /// Typed wrapper around [`Heap::strcons`] that returns a typed heap reference.
+    pub fn strcons_ref(&mut self, head: Value, tail: Value) -> Value {
+        Value::Reference(self.strcons(head.into(), tail.into()))
+    }
+
+    fn cons(&mut self, head: RawValue, tail: RawValue) -> RawValue {
         self.put(Tag::Cons, head, tail)
     }
 
-    pub fn lambda(&mut self, head: RawValue, tail: RawValue) -> RawValue {
+    /// Typed wrapper around [`Heap::cons`] that returns a typed heap reference.
+    pub fn cons_ref(&mut self, head: Value, tail: Value) -> Value {
+        Value::Reference(self.cons(head.into(), tail.into()))
+    }
+
+    fn lambda(&mut self, head: RawValue, tail: RawValue) -> RawValue {
         self.put(Tag::Lambda, head, tail)
     }
 
-    pub fn let_(&mut self, head: RawValue, tail: RawValue) -> RawValue {
+    pub fn lambda_ref(&mut self, head: Value, tail: Value) -> Value {
+        Value::Reference(self.lambda(head.into(), tail.into()))
+    }
+
+    fn let_(&mut self, head: RawValue, tail: RawValue) -> RawValue {
         self.put(Tag::Let, head, tail)
     }
 
-    pub fn letrec(&mut self, head: RawValue, tail: RawValue) -> RawValue {
+    pub fn let_ref(&mut self, head: Value, tail: Value) -> Value {
+        Value::Reference(self.let_(head.into(), tail.into()))
+    }
+
+    fn letrec(&mut self, head: RawValue, tail: RawValue) -> RawValue {
         self.put(Tag::LetRec, head, tail)
     }
 
-    pub fn share(&mut self, head: RawValue, tail: RawValue) -> RawValue {
+    pub fn letrec_ref(&mut self, head: Value, tail: Value) -> Value {
+        Value::Reference(self.letrec(head.into(), tail.into()))
+    }
+
+    fn share(&mut self, head: RawValue, tail: RawValue) -> RawValue {
         self.put(Tag::Share, head, tail)
     }
 
-    pub fn pair(&mut self, head: RawValue, tail: RawValue) -> RawValue {
+    pub fn share_ref(&mut self, head: Value, tail: Value) -> Value {
+        Value::Reference(self.share(head.into(), tail.into()))
+    }
+
+    fn pair(&mut self, head: RawValue, tail: RawValue) -> RawValue {
         self.put(Tag::Pair, head, tail)
     }
 
-    pub fn start_read_vals(&mut self, head: RawValue, tail: RawValue) -> RawValue {
+    pub fn pair_ref(&mut self, head: Value, tail: Value) -> Value {
+        Value::Reference(self.pair(head.into(), tail.into()))
+    }
+
+    fn start_read_vals(&mut self, head: RawValue, tail: RawValue) -> RawValue {
         self.put(Tag::StartReadValues, head, tail)
     }
 
-    pub fn tcons(&mut self, head: RawValue, tail: RawValue) -> RawValue {
+    pub fn start_read_vals_ref(&mut self, head: Value, tail: Value) -> Value {
+        Value::Reference(self.start_read_vals(head.into(), tail.into()))
+    }
+
+    fn tcons(&mut self, head: RawValue, tail: RawValue) -> RawValue {
         self.put(Tag::TCons, head, tail)
     }
 
-    pub fn tries(&mut self, head: RawValue, tail: RawValue) -> RawValue {
+    pub fn tcons_ref(&mut self, head: Value, tail: Value) -> Value {
+        Value::Reference(self.tcons(head.into(), tail.into()))
+    }
+
+    fn tries(&mut self, head: RawValue, tail: RawValue) -> RawValue {
         self.put(Tag::Tries, head, tail)
     }
 
-    pub fn type_var(&mut self, head: RawValue, tail: RawValue) -> RawValue {
+    pub fn tries_ref(&mut self, head: Value, tail: Value) -> Value {
+        Value::Reference(self.tries(head.into(), tail.into()))
+    }
+
+    fn type_var(&mut self, head: RawValue, tail: RawValue) -> RawValue {
         self.put(Tag::TypeVar, head, tail)
     }
 
-    pub fn label(&mut self, head: RawValue, tail: RawValue) -> RawValue {
+    pub fn type_var_ref(&mut self, head: Value, tail: Value) -> Value {
+        Value::Reference(self.type_var(head.into(), tail.into()))
+    }
+
+    fn label(&mut self, head: RawValue, tail: RawValue) -> RawValue {
         self.put(Tag::Label, head, tail)
     }
 
-    pub fn show(&mut self, head: RawValue, tail: RawValue) -> RawValue {
+    pub fn label_ref(&mut self, head: Value, tail: Value) -> Value {
+        Value::Reference(self.label(head.into(), tail.into()))
+    }
+
+    fn show(&mut self, head: RawValue, tail: RawValue) -> RawValue {
         self.put(Tag::Show, head, tail)
     }
 
-    pub fn readvals(&mut self, head: RawValue, tail: RawValue) -> RawValue {
+    pub fn show_ref(&mut self, head: Value, tail: Value) -> Value {
+        Value::Reference(self.show(head.into(), tail.into()))
+    }
+
+    fn readvals(&mut self, head: RawValue, tail: RawValue) -> RawValue {
         self.put(Tag::StartReadValues, head, tail)
     }
 
-    pub fn apply(&mut self, head: RawValue, tail: RawValue) -> RawValue {
+    pub fn readvals_ref(&mut self, head: Value, tail: Value) -> Value {
+        Value::Reference(self.readvals(head.into(), tail.into()))
+    }
+
+    fn apply(&mut self, head: RawValue, tail: RawValue) -> RawValue {
         self.put(Tag::Ap, head, tail)
     }
 
-    pub fn apply2(&mut self, x: Value, y: Value, z: Value) -> RawValue {
-        let f = self.apply(x, y);
-        self.apply(f, z)
+    /// Typed wrapper around [`Heap::apply`] that returns a typed heap reference.
+    pub fn apply_ref(&mut self, head: Value, tail: Value) -> Value {
+        Value::Reference(self.apply(head.into(), tail.into()))
     }
 
-    pub fn apply3(&mut self, w: Value, x: Value, y: Value, z: Value) -> RawValue {
+    pub fn apply2(&mut self, x: Value, y: Value, z: Value) -> Value {
+        let f = self.apply_ref(x, y);
+        self.apply_ref(f, z)
+    }
+
+    pub fn apply3(&mut self, w: Value, x: Value, y: Value, z: Value) -> Value {
         let f = self.apply2(w, x, y);
-        self.apply(f, z)
+        self.apply_ref(f, z)
     }
 
     /// Boxes a real number (an `f64`).
-    pub fn real(&mut self, number: f64) -> RawValue {
+    fn real(&mut self, number: f64) -> RawValue {
         let bits = unsafe { std::mem::transmute::<f64, RawValue>(number) };
-        self.put(Tag::Double, Value::Data(bits), Value::None)
+        self.put(Tag::Double, Value::Data(bits).into(), Value::None.into())
+    }
+
+    pub fn real_ref(&mut self, number: f64) -> Value {
+        Value::Reference(self.real(number))
     }
 
     /// Creates a (boxed) Unicode character.
-    pub fn unicode(&mut self, code_point: RawValue) -> RawValue {
-        self.put(Tag::Unicode, code_point.into(), Value::None)
+    fn unicode(&mut self, code_point: RawValue) -> RawValue {
+        self.put(Tag::Unicode, code_point.into(), Value::None.into())
+    }
+
+    pub fn unicode_ref(&mut self, code_point: isize) -> Value {
+        Value::Reference(self.unicode(code_point))
     }
 
     // endregion
@@ -670,21 +742,33 @@ impl Heap {
         return type_cell.head == Type::Bind as RawValue;
     }
 
-    pub fn arrow_type(&mut self, arg1: Value, arg2: Value) -> RawValue {
-        self.apply2(Type::Arrow.into(), arg1, arg2)
+    fn arrow_type(&mut self, arg1: Value, arg2: Value) -> RawValue {
+        self.apply2(Type::Arrow.into(), arg1, arg2).into()
     }
 
-    pub fn arrow2_type(&mut self, arg1: Value, arg2: Value, arg3: Value) -> RawValue {
-        let composed: Value = self.arrow_type(arg2, arg3);
+    pub fn arrow_type_ref(&mut self, arg1: Value, arg2: Value) -> Value {
+        Value::Reference(self.arrow_type(arg1, arg2))
+    }
+
+    fn arrow2_type(&mut self, arg1: Value, arg2: Value, arg3: Value) -> RawValue {
+        let composed = self.arrow_type_ref(arg2, arg3);
         self.arrow_type(arg1, composed)
     }
 
-    pub fn arrow3_type(&mut self, arg1: Value, arg2: Value, arg3: Value, arg4: Value) -> RawValue {
-        let composed: Value = self.arrow2_type(arg2, arg3, arg4);
+    pub fn arrow2_type_ref(&mut self, arg1: Value, arg2: Value, arg3: Value) -> Value {
+        Value::Reference(self.arrow2_type(arg1, arg2, arg3))
+    }
+
+    fn arrow3_type(&mut self, arg1: Value, arg2: Value, arg3: Value, arg4: Value) -> RawValue {
+        let composed = self.arrow2_type_ref(arg2, arg3, arg4);
         self.arrow_type(arg1, composed)
     }
 
-    pub fn arrow4_type(
+    pub fn arrow3_type_ref(&mut self, arg1: Value, arg2: Value, arg3: Value, arg4: Value) -> Value {
+        Value::Reference(self.arrow3_type(arg1, arg2, arg3, arg4))
+    }
+
+    fn arrow4_type(
         &mut self,
         arg1: Value,
         arg2: Value,
@@ -692,17 +776,36 @@ impl Heap {
         arg4: Value,
         arg5: Value,
     ) -> RawValue {
-        let composed: Value = self.arrow3_type(arg2, arg3, arg4, arg5);
+        let composed = self.arrow3_type_ref(arg2, arg3, arg4, arg5);
         self.arrow_type(arg1, composed)
     }
 
-    pub fn list_type(&mut self, arg: Value) -> RawValue {
-        self.apply(Type::List.into(), arg)
+    pub fn arrow4_type_ref(
+        &mut self,
+        arg1: Value,
+        arg2: Value,
+        arg3: Value,
+        arg4: Value,
+        arg5: Value,
+    ) -> Value {
+        Value::Reference(self.arrow4_type(arg1, arg2, arg3, arg4, arg5))
     }
 
-    pub fn pair_type(&mut self, arg1: Value, arg2: Value) -> RawValue {
+    fn list_type(&mut self, arg: Value) -> RawValue {
+        self.apply_ref(Type::List.into(), arg).into()
+    }
+
+    pub fn list_type_ref(&mut self, arg: Value) -> Value {
+        Value::Reference(self.list_type(arg))
+    }
+
+    fn pair_type(&mut self, arg1: Value, arg2: Value) -> RawValue {
         let inner = self.apply2(Type::Comma.into(), arg2, Type::Void.into());
-        self.apply2(Type::Comma.into(), arg1, inner)
+        self.apply2(Type::Comma.into(), arg1, inner).into()
+    }
+
+    pub fn pair_type_ref(&mut self, arg1: Value, arg2: Value) -> Value {
+        Value::Reference(self.pair_type(arg1, arg2))
     }
 
     // endregion
@@ -724,11 +827,8 @@ pub(crate) fn is_capitalized(word: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::api::{
-        IdentifierHeapValueType, IdentifierValueReference, IdentifierValueTypeData,
-    };
+    use crate::data::api::{IdentifierHeapValueType, IdentifierValueTypeData};
     use crate::data::types::Type;
-    use crate::data::IdentifierValueType;
 
     #[test]
     fn round_trip_values() {
@@ -736,8 +836,8 @@ mod tests {
         let y: Value = Value::Data(43);
         let expected: HeapCell = HeapCell::new(Tag::DataPair, x, y);
         let mut heap: Heap = Heap::new();
-        let reference: RawValue = heap.data_pair(x.into(), y.into());
-        let result: HeapCell = heap.resolve(reference).unwrap();
+        let reference: RawValue = heap.data_pair_ref(x, y).into();
+        let result: HeapCell = heap.resolve(reference.into()).unwrap();
 
         assert_eq!(result, expected);
     }
@@ -762,8 +862,8 @@ mod tests {
         );
         let value = heap.cons(x, y); //cons(cons(arity,showfn),cons(placeholder_t,NIL))
 
-        let aka = heap.data_pair(Value::Data(0), Value::Data(0)); // Aliasing noodles.
-        let y = heap.file_info(Value::Data(2), Value::Data(328)); // salad.ml
+        let aka: RawValue = heap.data_pair_ref(Value::Data(0), Value::Data(0)).into(); // Aliasing noodles.
+        let y: RawValue = heap.file_info_ref(Value::Data(2), Value::Data(328)).into(); // salad.ml
         let who = heap.cons(aka, y);
         // cons(aka,hereinfo)
         // fileinfo(script,line_no)

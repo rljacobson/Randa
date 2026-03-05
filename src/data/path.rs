@@ -24,7 +24,7 @@ Returns a string containing the part of `path` up to but excluding the final '/'
 Before calling `dump_script` or `load_script`, must `setprefix()` to that of current path name of file being
 dumped/loaded to get correct translation between internal path names (relative to dump script) and external path names.
 */
-pub fn path_prefix(mut path: &String) -> String {
+pub fn path_prefix(path: &String) -> String {
     let mut path = path.clone();
 
     // Todo: Make this platform independent by using path separator.
@@ -43,7 +43,7 @@ pub fn make_relative_path(path: &mut String, prefix: &String) {
     // Todo: This algorithm is weird. It strips a prefix, presumably making an absolute path into a relative path,
     //       OR, if it doesn't have the prefix, it checks that it is in fact an absolute path...?
     //       Compare to block in `load_script`, factored out as `make_absolute_path` below.
-    if Some(rest) = path.strip_prefix(prefix) {
+    if let Some(rest) = path.strip_prefix(prefix) {
         // Replace the value in path with the prefix stripped.
         *path = rest.to_string();
     } else if path.starts_with('/') {
@@ -57,7 +57,7 @@ pub fn make_relative_path(path: &mut String, prefix: &String) {
 /// If `path` is relative, add `prefix` to `path` in-place.
 pub fn make_absolute_path(path: &mut String, prefix: &String) {
     if !path.starts_with('/') {
-        *path = prefix + path;
+        *path = prefix.to_owned() + path;
     }
 }
 
@@ -70,9 +70,9 @@ mod tests {
         let mut name = String::from("/home/rljacobson/Documents/code/miranda/main.rs");
         let prefix = String::from("/home/rljacobson/Documents/code/miranda/");
 
-        let relative = make_relative_path(&mut name, &prefix);
+        make_relative_path(&mut name, &prefix);
 
-        assert_eq!(relative, "main.rs");
+        assert_eq!(name, "main.rs");
     }
 
     #[test]

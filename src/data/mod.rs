@@ -67,11 +67,9 @@ pub mod types;
 pub mod values;
 
 pub use crate::{
-    compiler::Token,
     data::{
         combinator::Combinator,
         heap::{Heap, HeapCell},
-        identifier::*,
         tag::Tag,
         types::Type,
         values::{RawValue, Value},

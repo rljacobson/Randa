@@ -28,10 +28,10 @@ pub(crate) use file_record::FileRecord;
 pub(crate) use identifier_record::*;
 pub(crate) use open_file::OpenFile;
 
-use crate::data::{Heap, RawValue, Value};
+use crate::data::{RawValue, Value};
 
 pub type HeapString = String;
-pub type LineNumber = RawValue;
+pub type LineNumber = isize;
 /// A lightweight proxy for an object that lives on the heap.
 pub trait HeapObjectProxy: Copy + Clone {
     /// Constructs a `Self` from an existing object on the heap at `reference`.
@@ -65,15 +65,6 @@ where
 {
     fn from(value: T) -> Value {
         value.get_ref().into()
-    }
-}
-
-impl<T> From<T> for RawValue
-where
-    T: HeapObjectProxy,
-{
-    fn from(value: T) -> RawValue {
-        value.get_ref()
     }
 }
 

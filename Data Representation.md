@@ -143,9 +143,9 @@ HeapCell {
 is `isize`. (Also, a `u32` is probably more than enough, anyway.) On the heap a string 
 looks like:
 
-|  `Tag::String`  |  `Value::Data(idx as RawValue)`  |  `Value::None`  |
-|:---------------:|:-----------------------------------------------:|:---------------:|
-| x | x | x |
+| `Tag::String` | `Value::Data(idx as RawValue)` | `Value::None` |
+|:-------------:|:------------------------------:|:-------------:|
+|     `u32`      |             `isize`             |    `isize`     |
 
 
 ## Other pointers

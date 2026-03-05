@@ -6,13 +6,9 @@ manipulation, environment initialization, and compilation from generic heap func
 
  */
 
-use std::iter::Peekable;
-use std::slice::Iter;
-use std::time::Duration;
 use std::{
     fs::File,
     io::{BufRead, BufReader, Read},
-    process::exit,
     time::SystemTime,
 };
 
@@ -20,12 +16,11 @@ use console::{pad_str, style, Alignment, Term};
 use num_traits::FromPrimitive;
 
 use crate::bytecode_parser::{
-    get_machine_word, get_number, get_number_16bit, parse_filename_modified_time,
-    parse_line_number, parse_string,
+    get_i16_le, get_machine_word, get_u16_le, get_word_f64, get_word_raw_value,
+    parse_filename_modified_time, parse_string,
 };
 use crate::compiler::bytecode::Bytecode;
 use crate::data::api::IdentifierDefinitionData;
-use crate::data::HeapCell;
 use crate::{
     compiler::Token,
     constants::{DEFAULT_SPACE, WORD_SIZE, XVERSION},
@@ -37,8 +32,7 @@ use crate::{
             OpenFile,
         },
         path::*,
-        Combinator, Heap, Identifier, IdentifierDefinition, IdentifierValue, IdentifierValueType,
-        RawValue, Tag, Type, Value,
+        Combinator, Heap, RawValue, Tag, Type, Value,
     },
     errors::{emit_error, fatal_error, BytecodeError},
     options::{make_version_string, setup_argument_parser, Options},
@@ -399,7 +393,7 @@ impl VM {
         // Todo: Implement unload
         self.unload();
 
-        #[cfg(feature = "DEBUG")]
+        #[cfg(feature = "debug")]
         if !self.initialising {
             println!("undumping from {}", binary_path);
         }
@@ -475,7 +469,7 @@ impl VM {
 
     }; // end match on load_result
 
-        #[cfg(feature = "DEBUG")]
+        #[cfg(feature = "debug")]
         if !self.initialising {
             println!(
                 "{} undumped, success={}",
@@ -518,9 +512,27 @@ impl VM {
         unimplemented!()
     }
 
+    fn alfasort(&mut self, items: ConsList<IdentifierRecord>) -> ConsList<IdentifierRecord> {
+        let _ = items;
+        unimplemented!()
+    }
+
+    fn printlist(&self, mut items: ConsList<IdentifierRecord>) -> String {
+        let _ = &mut items;
+        unimplemented!()
+    }
+
+    fn source_update_check(&self) -> bool {
+        unimplemented!()
+    }
+
+    fn unfix_exports(&mut self) {
+        unimplemented!()
+    }
+
     fn prefix(&self) -> Result<String, ()> {
-        let str_ref = self.prefix_stack.raw_head(&self.heap).ok_or(())?;
-        self.heap.resolve_string(str_ref.into())
+        let str_ref = self.prefix_stack.value_head(&self.heap).ok_or(())?;
+        self.heap.resolve_string(str_ref)
     }
 
     /// Replace aliases with their referent
@@ -543,7 +555,7 @@ impl VM {
                 //   )
                 // Entries in `aliases` look like this:
                 //   cons(new_id, old_id)
-                let mut alias = alias_iterator.head_unchecked(heap);
+                let alias: RawValue = alias_iterator.pop_value(&self.heap).unwrap().into();
                 let new_ref = self.heap[alias].head;
                 let old = IdentifierRecord::from_ref(self.heap[alias].tail);
 
@@ -553,22 +565,26 @@ impl VM {
                     let old_who = old.get_definition(&self.heap).unwrap();
                     let old_type = old.get_datatype(&self.heap).unwrap();
                     let old_val = old.get_value(&self.heap).unwrap();
-                    let tl = self.heap.cons(old_type.into(), old_val.into());
-                    self.heap.cons(old_who.into(), tl);
+                    let old_val = match old_val {
+                        Some(value_ref) => value_ref.get_ref().into(),
+                        None => NIL,
+                    };
+                    let tl = self.heap.cons_ref(old_type, old_val);
+                    self.heap.cons_ref(old_who.into(), tl.into()).into()
                 };
 
                 old.set_type(&mut self.heap, Type::Alias.into());
                 // We make old an alias of new.
-                old.set_val(&mut self.heap, new_ref);
+                old.set_value(&mut self.heap, IdentifierValueReference::from_ref(new_ref));
 
                 // Todo: This check suggests that `new` might not be an Identifier? Correct, `alias` is replaced by
                 //       `cons( old_who, cons(old_type, old_val) )`, the data required to undo the aliasing.
                 if self.heap[new_ref].tag == Tag::Id {
                     let new = IdentifierRecord::from_ref(new_ref);
                     let new_datatype = new.get_datatype(&self.heap);
-                    if (new_datatype != Type::Undefined
+                    if (new_datatype != Ok(Type::Undefined.into())
                         || new.get_value(&self.heap).unwrap().is_some())
-                        && new_datatype != Type::Alias
+                        && new_datatype != Ok(Type::Alias.into())
                     {
                         // Insert new into self.clashes such that self.clashes remains in ascending address order.
                         // Todo: Why order these?
@@ -596,11 +612,11 @@ impl VM {
             // both name clash and missing aliasee, but without fix the two errors cancel each other out and are unreported
             let mut alias_iterator = aliases; // Not technically an iterator.
             while !alias_iterator.is_empty() {
-                let alias = alias_iterator.pop_unchecked(&mut self.heap);
+                let alias: RawValue = alias_iterator.pop_value(&self.heap).unwrap().into();
                 let ch = self.heap[alias].tail;
                 if self.heap[ch].tag == Tag::Id {
                     let ch = IdentifierRecord::from_ref(ch);
-                    if ch.get_datatype(&self.heap) != Type::Alias {
+                    if ch.get_datatype(&self.heap) != Ok(Type::Alias.into()) {
                         ch.set_type(&mut self.heap, Type::New.into());
                     }
                 }
@@ -654,17 +670,17 @@ impl VM {
             }
         }
         // An iterator over the bytes of the file.
-        let mut byte_iter: Peekable<Iter<u8>> = file_bytes.iter().peekable();
+        let mut byte_iter = file_bytes.iter().peekable();
 
         // Parse the machine word size
         // First byte: `__WORDSIZE` (64 bits in my case, so `__WORDSIZE == 64 == 0x40`.)
-        if byte_iter.next().unwrap() != WORD_SIZE {
+        if *byte_iter.next().unwrap() as usize != WORD_SIZE {
             return Err(BytecodeError::ArchitectureMismatch);
         }
 
         // Parse the bytecode version
         // Second byte: `XVERSION`, the bytecode version. (Latest Miranda` == 83 == 0x53`)
-        if byte_iter.next().unwrap() != XVERSION {
+        if *byte_iter.next().unwrap() as i32 != XVERSION {
             return Err(BytecodeError::WrongBytecodeVersion);
         }
 
@@ -696,7 +712,7 @@ impl VM {
         //   [definition-list] ]
         // block. (Note: This is skipped over in the case of a syntax-error script.)
         while let Some(ch) = byte_iter.next() {
-            if ch == 0 || bad_dump {
+            if *ch == 0 || bad_dump {
                 if !bad_dump {
                     // But we need to also return `files`?
                     // I *think* the returned `files` isn't used if there is an error.
@@ -711,9 +727,10 @@ impl VM {
             // If we encounter a `ch==1` *before* we ever even see a file, it is because it is the magic number for a
             // type-error script.
             // Todo: It is awkward to have this inside the loop.
-            if ch == 1 && files.is_empty() {
+            if *ch == 1 && files.is_empty() {
                 // The next w bytes (8 bytes) give the line number of the error.
-                let error_line_prefetch: usize = get_machine_word(&mut byte_iter)?;
+                let error_line_prefetch: usize =
+                    get_machine_word(&mut byte_iter.by_ref().copied())?;
                 if is_main_script {
                     // But only save it if this is the main script.
                     self.error_line = error_line_prefetch;
@@ -729,16 +746,16 @@ impl VM {
             }
 
             // Parse sharable bit
-            let sharable: bool = byte_iter.next().unwrap_or(&0u8) == 1;
+            let sharable: bool = *byte_iter.next().unwrap_or(&0u8) == 1;
 
-            #[cfg(feature = "DEBUG")]
+            #[cfg(feature = "debug")]
             println("loading: {}({})", filename, _modified_time);
 
             if files.is_empty() {
                 // Is this the right dump file?
                 if filename != source_file {
                     // I don't think unalias is needed here.
-                    if aliases != NIL {
+                    if !aliases.is_empty() {
                         self.unalias(aliases);
                     }
                     return Err(BytecodeError::WrongSourceFile);
@@ -753,7 +770,7 @@ impl VM {
                 //          `unload`  until  attached  to  global `files', so interrupts are disabled during
                 //          `load_script` - see steer.c
                 // For big dumps this may be too coarse - FIX
-                let new_defs = self.load_defs(&mut byte_iter)?;
+                let new_defs = self.load_defs(&mut byte_iter.by_ref().copied())?;
                 let file_record =
                     FileRecord::new(&mut self.heap, filename, modified_time, sharable, new_defs);
                 files.push(&mut self.heap, file_record);
@@ -767,7 +784,8 @@ impl VM {
             // The next w bytes (8 bytes) give the line number of the error.
             {
                 // Scope of `error_line_prefetch`
-                let error_line_prefetch: usize = get_machine_word(&mut byte_iter)?;
+                let error_line_prefetch: usize =
+                    get_machine_word(&mut byte_iter.by_ref().copied())?;
                 if is_main_script {
                     // But only save it if this is the main script.
                     self.error_line = error_line_prefetch;
@@ -777,12 +795,12 @@ impl VM {
 
             while let Some(_ch) = byte_iter.next() {
                 // Parse filename and modified time.
-                let (filename, modified_time) = parse_filename_modified_time(&mut byte_iter);
+                let (mut filename, modified_time) = parse_filename_modified_time(&mut byte_iter)?;
                 if let Ok(prefix) = self.prefix() {
                     make_absolute_path(&mut filename, &prefix);
                 }
 
-                if old_files.is_empty() {
+                if self.old_files.is_empty() {
                     // Is this the right dump file?
                     if filename != source_file {
                         // I don't think unalias is needed here.
@@ -822,13 +840,13 @@ impl VM {
         // Parse algebraic show functions
         {
             // scope of new_defs
-            let new_defs = self.load_defs(&mut byte_iter)?;
+            let new_defs = self.load_defs(&mut byte_iter.by_ref().copied())?;
             self.algebraic_show_functions
                 .append(&mut self.heap, new_defs.get_ref());
         }
 
         // Parse [ND] or [True] (Are there type orphans?)
-        if self.load_defs(&mut byte_iter)? == Combinator::True {
+        if self.load_defs(&mut byte_iter.by_ref().copied())? == Combinator::True {
             self.undefined_names = ConsList::EMPTY;
             self.unused_types = true;
         }
@@ -837,7 +855,7 @@ impl VM {
         // Parse sui generis constructors
         // Todo: This does not appear in the binary description
         {
-            let new_defs = self.load_defs(&mut byte_iter)?;
+            let new_defs = self.load_defs(&mut byte_iter.by_ref().copied())?;
             self.sui_generis_constructors
                 .append(&mut self.heap, new_defs.get_ref());
         }
@@ -845,10 +863,11 @@ impl VM {
         // Parse DEF_X
         // Parse free_ids
         if is_main_script || self.includees.is_empty() {
-            self.free_ids = self.load_defs(&mut byte_iter)?;
+            self.free_ids = self.load_defs(&mut byte_iter.by_ref().copied())?;
         } else {
-            // Todo: Implement bindparams, hdsort
-            bindparams(self.load_defs(f), hdsort(params)); // the only use of params
+            // Todo: Implement bindparams/hdsort path.
+            // For now, consume and discard the defs payload to keep bytecode stream alignment.
+            let _deferred_bindparams_defs = self.load_defs(&mut byte_iter.by_ref().copied())?;
         }
 
         // Housekeeping
@@ -860,7 +879,7 @@ impl VM {
         // Parse DEF_X
         // Parse internals
         if is_main_script {
-            let new_defs = self.load_defs(&mut byte_iter)?;
+            let new_defs = self.load_defs(&mut byte_iter.by_ref().copied())?;
             self.internals = new_defs;
         }
 
@@ -871,9 +890,12 @@ impl VM {
     fn unalias(&mut self, aliases: ConsList) {
         let mut cursor = aliases;
 
-        while !cursor.is_empty() {
-            let old = IdentifierRecord::from_ref(self.heap.tl_hd(aliases.get_ref()));
-            let mut hold = IdentifierRecord::from_ref(self.heap.hd_hd(old));
+        while let Some(alias_ref_value) = cursor.pop_value(&self.heap) {
+            let alias_ref: RawValue = alias_ref_value.into();
+            let alias_head_ref = self.heap[alias_ref].head;
+            let old = IdentifierRecord::from_ref(self.heap[alias_head_ref].tail);
+            let old_head_ref = self.heap[old.get_ref()].head;
+            let hold = IdentifierRecord::from_ref(self.heap[old_head_ref].head);
             let new_value: IdentifierValueReference = match old.get_value(&self.heap) {
                 Ok(Some(v)) => v,
                 _ => {
@@ -882,13 +904,13 @@ impl VM {
             };
 
             // Put `new_value` (which is the _value_ of `old`) where `hold` used to be. For missing check, see below.
-            *self.heap.hd_hd_mut(aliases.get_ref()) = new_value.get_ref();
+            self.heap[alias_head_ref].head = new_value.get_ref();
 
             let hold_data = hold
                 .get_data(&self.heap)
                 .expect("Impossible value found in aliases.");
             // id_who(old)=hd[hold]; hold=tl[hold];
-            old.set_definiton(&mut self.heap, hold_data.definition);
+            old.set_definition(&mut self.heap, hold_data.definition);
             // id_type(old)=hd[hold];
             old.set_type(&mut self.heap, hold_data.datatype);
             {
@@ -897,8 +919,6 @@ impl VM {
                     hold_data.value.expect("Impossible value found in aliases.");
                 old.set_value(&mut self.heap, v);
             }
-
-            cursor = cursor.rest_unchecked(&self.heap);
         } // end iter over `aliases`
 
         // Now adjust self.aliases
@@ -908,16 +928,16 @@ impl VM {
 
         cursor = self.aliases;
         while !cursor.is_empty() {
-            let alias: RawValue = cursor.pop_unchecked(&mut self.heap);
+            let alias: RawValue = cursor.pop_value(&self.heap).unwrap().into();
             let new_ref = self.heap[alias].head;
             let old_ref = self.heap[alias].tail;
 
             if self.heap[new_ref].tag != Tag::Id {
                 // aka stuff irrelevant to pnames
                 // Todo: This is wrong by definition, because we only get here if tag != Tag:Id.
-                let new_id = IdentifierRecord.from_ref(new_ref);
+                let new_id = IdentifierRecord::from_ref(new_ref);
                 if !self.suppressed.contains(&self.heap, new_id) {
-                    missing_aliases.push(&mut self.heap, new_id)
+                    missing_aliases.push(&mut self.heap, new_id.get_ref())
                 }
                 continue;
             }
@@ -935,7 +955,7 @@ impl VM {
                 let old_id = IdentifierRecord::from_ref(old_ref);
                 missing_aliases.push(&mut self.heap, old_id.get_ref());
             } else if !self.clashes.contains(&self.heap, new_id) {
-                let new_def: IdentifierDefinition = new_id.get_definition(&self.heap).unwrap();
+                let new_def: IdentifierDefinitionValue = new_id.get_definition(&self.heap).unwrap();
                 let new_def_data: IdentifierDefinitionData = new_def.get_data(&self.heap).unwrap();
 
                 // Install aka info in new
@@ -945,15 +965,16 @@ impl VM {
                     // If it's not an alias
                     _ => {
                         // Todo: This is a complete mess.
-                        let old_tmp = self.heap.hd_hd(old_ref);
+                        let old_head_ref = self.heap[old_ref].head;
+                        let old_tmp = self.heap[old_head_ref].head;
                         let old_id = self.heap[old_tmp].head;
                         // Todo: This does not look like the correct format for the who field.
                         // id_who(new) = cons(datapair(get_id(old), 0), id_who(new));
-                        let datapair = self.heap.data_pair(old_id.into(), Value::None);
-                        let new_who = self.heap.cons(datapair, new_def.get_ref().into());
-                        new_id.set_definiton(
+                        let datapair = self.heap.data_pair_ref(old_id.into(), Value::None.into());
+                        let new_who = self.heap.cons_ref(datapair, new_def.get_ref().into());
+                        new_id.set_definition(
                             &mut self.heap,
-                            IdentifierDefinition::from_ref(new_who.into()),
+                            IdentifierDefinitionValue::from_ref(new_who.into()),
                         );
                     }
                 }
@@ -1069,22 +1090,24 @@ impl VM {
         IdentifierRecord::new(
             &mut self.heap,
             "()".to_string(),
-            IdentifierDefinition::undefined(),
+            IdentifierDefinitionValue::undefined(),
             Type::Void.into(),
             None,
         );
         // *self.heap.id_type(self.void_) = Type::Void as RawValue;
         // *self.heap.id_val(self.void_)  = self.heap.constructor(0, self.void_).into();
-        let value = self.heap.constructor(0, self.void_.into()).into();
+        let value: Value = self.heap.constructor_ref(0, self.void_.into());
         self.void_.set_value(
             &mut self.heap,
             IdentifierValueReference::from_ref(value.into()),
         );
 
-        self.common_stdin = self.heap.apply(Combinator::Read.into(), 0);
-        self.common_stdinb = self.heap.apply(Combinator::ReadBin.into(), 0);
-        let readvals = self.heap.readvals(0, 0);
-        self.cook_stdin = self.heap.apply(
+        self.common_stdin = self.heap.apply_ref(Combinator::Read.into(), Value::from(0));
+        self.common_stdinb = self
+            .heap
+            .apply_ref(Combinator::ReadBin.into(), Value::from(0));
+        let readvals = self.heap.readvals_ref(0.into(), 0.into());
+        self.cook_stdin = self.heap.apply_ref(
             readvals,
             // Todo: Should Offside be a combinator?
             Token::Offside.into(),
@@ -1108,7 +1131,7 @@ impl VM {
         self.showvoid = self.heap.make_empty_identifier("showvoid");
         self.showwhat = self.heap.make_empty_identifier("showwhat");
         let stdout_ = self.heap.string("Stdout");
-        self.stdout = self.heap.constructor(0, stdout_);
+        self.stdout = self.heap.constructor_ref(0, stdout_.into());
     }
 
     /// This is tsetup() in Miranda.
@@ -1120,30 +1143,32 @@ impl VM {
     fn setup_standard_types(&mut self) {
         self.numeric_function_type = self
             .heap
-            .arrow_type(Type::Number.into(), Type::Number.into());
+            .arrow_type_ref(Type::Number.into(), Type::Number.into());
         self.numeric_function2_type = self
             .heap
-            .arrow_type(Type::Number.into(), self.numeric_function_type);
-        self.boolean_function_type = self.heap.arrow_type(Type::Bool.into(), Type::Bool.into());
+            .arrow_type_ref(Type::Number.into(), self.numeric_function_type);
+        self.boolean_function_type = self
+            .heap
+            .arrow_type_ref(Type::Bool.into(), Type::Bool.into());
         self.boolean_function2_type = self
             .heap
-            .arrow_type(Type::Bool.into(), self.boolean_function_type);
-        self.char_list_type = self.heap.list_type(Type::Char.into());
+            .arrow_type_ref(Type::Bool.into(), self.boolean_function_type);
+        self.char_list_type = self.heap.list_type_ref(Type::Char.into());
         self.string_function_type = self
             .heap
-            .arrow_type(self.char_list_type, self.char_list_type);
+            .arrow_type_ref(self.char_list_type, self.char_list_type);
 
         // tfnumnum is identical to self.numeric_function_type
         // let tfnumnum   = tf(num_t   , num_t);
 
-        let number_list_type = self.heap.list_type(Type::Number.into());
+        let number_list_type: Value = self.heap.list_type_ref(Type::Number.into());
         self.range_step_type =
             self.heap
-                .arrow2_type(Type::Number.into(), Type::Number.into(), number_list_type);
+                .arrow2_type_ref(Type::Number.into(), Type::Number.into(), number_list_type);
 
         self.range_step_until_type = self
             .heap
-            .arrow_type(Type::Number.into(), self.range_step_type);
+            .arrow_type_ref(Type::Number.into(), self.range_step_type);
     }
 
     /// The primdef function just creates an identifier on the heap and appends it to the primitive environment.
@@ -1162,7 +1187,7 @@ impl VM {
         let h_id = IdentifierRecord::new(
             &mut self.heap,
             name.to_string(),
-            IdentifierDefinition::Undefined,
+            IdentifierDefinitionValue::undefined(),
             Type::Type.into(),
             Some(h_id_value),
         );
@@ -1179,7 +1204,7 @@ impl VM {
         let h_bool_constant = IdentifierRecord::new(
             &mut self.heap,
             name.to_string(),
-            IdentifierDefinition::Undefined,
+            IdentifierDefinitionValue::undefined(),
             Type::Bool.into(),
             Some(h_value),
         );
@@ -1244,9 +1269,8 @@ impl VM {
         //     head(self.files) == first
         //     first == cons(cons(fileinfo(filename, mtime), share), definienda)
         //     tail( first  ) == definienda
-        if !self.files.is_empty() {
-            let rest = self.heap.tl_hd(self.files.get_ref());
-            *self.heap.tl_hd_mut(self.files) = self.heap.cons(item.into(), rest.into()).into();
+        if let Some(current_file) = self.files.head(&self.heap) {
+            current_file.push_item(&mut self.heap, item.into());
         }
     }
 
@@ -1277,7 +1301,7 @@ impl VM {
             Combinator::Append.into(),
             Combinator::Nil.into_value(),
         );
-        self.predefine_identifier("concat", concat, Type::Undefined);
+        self.predefine_identifier("concat", concat.into(), Type::Undefined);
         self.predefine_identifier("decode", Combinator::Decode.into(), Type::Undefined);
         self.predefine_identifier("drop", Combinator::Drop.into(), Type::Undefined);
         self.predefine_identifier("error", Combinator::Error_.into(), Type::Undefined);
@@ -1304,7 +1328,7 @@ impl VM {
         self.predefine_identifier("filestat", Combinator::FileStat.into(), Type::Undefined); // Added Feb 91
         self.predefine_identifier("foldl", Combinator::FoldL.into(), Type::Undefined);
         self.predefine_identifier("foldl1", Combinator::FoldL1.into(), Type::Undefined); // New at release 2
-        let huge_num = self.heap.real(f64::MAX);
+        let huge_num = self.heap.real_ref(f64::MAX);
         // Note: Miranda says, "`hugenum' is the largest fractional number that can exist in this implementation (should
         // be around 1e308 for IEEE standard 64 bit floating point." We use the exact value provided by `f64::MAX`.
         self.predefine_identifier("hugenum", huge_num, Type::Undefined);
@@ -1329,7 +1353,7 @@ impl VM {
         self.predefine_identifier("sqrt", Combinator::Sqrt_Fn.into(), Type::Undefined);
         self.predefine_identifier("system", Combinator::Exec.into(), Type::Undefined); // New at release 2
         self.predefine_identifier("take", Combinator::Take.into(), Type::Undefined);
-        let tiny_num = self.heap.real(f64::MIN_POSITIVE);
+        let tiny_num = self.heap.real_ref(f64::MIN_POSITIVE);
         // Note: This is likely different from Miranda's `mktiny()`. Miranda says, "`tinynum' is
         // the smallest positive fractional number that can be distinguished from zero in this
         // implementation (should be around 1e-324 for IEEE standard 64 bit floating point)."
@@ -1369,15 +1393,15 @@ impl VM {
 
             let definienda = file.get_definienda(&self.heap);
             if !definienda.is_empty() {
-                self.unset_ids(definienda.get_ref().into()) // unsetids(fil_defs(hd[files]));
+                self.unset_ids(ConsList::<IdentifierRecord>::from_ref(definienda.get_ref()))
+                // unsetids(fil_defs(hd[files]));
             }
             file.clear_definienda(&mut self.heap); // fil_defs(hd[files]) = NIL;
         }
 
         // Remember `self.mkinclude_files` is a nested list of lists.
         while !self.mkinclude_files.is_empty() {
-            let file_list = self.mkinclude_files.pop(&self.heap).unwrap();
-            let mut file_list = ConsList::<ConsList<FileRecord>>::from_ref(file_list);
+            let mut file_list = self.mkinclude_files.pop(&self.heap).unwrap();
 
             while !file_list.is_empty() {
                 let file: FileRecord = file_list.pop(&self.heap).unwrap();
@@ -1386,7 +1410,8 @@ impl VM {
                 if !definienda.is_empty() {
                     // Todo: Miranda checks that the item has Tag::Id and just continues if not.
                     //       Do we expect everything in `id_list` to be an identifier?
-                    self.unset_ids(definienda.get_ref().into()) // unsetids(fil_defs(hd[files]));
+                    self.unset_ids(ConsList::<IdentifierRecord>::from_ref(definienda.get_ref()))
+                    // unsetids(fil_defs(hd[files]));
                 }
             }
         }
@@ -1442,64 +1467,66 @@ impl VM {
 
                 Bytecode::TypeVariable => {
                     let v = next(byte_iter)?;
-                    let type_var = self.heap.type_var(Value::None.into(), v as RawValue);
+                    let type_var = self
+                        .heap
+                        .type_var_ref(Value::None.into(), (v as RawValue).into());
                     item_stack.push(type_var.into());
                 }
 
                 // Todo: Do we want to support "small" integers? Yes for now, for Miranda compatibility.
                 Bytecode::Short => {
                     let mut v = next(byte_iter)?;
-                    if v & 128u8 {
+                    if (v & 128u8) != 0 {
                         v = v | (!127u8);
                     }
-                    item_stack.push(self.heap.small_int(v as RawValue));
+                    item_stack.push(self.heap.small_int_ref(v as RawValue).into());
                 }
 
                 Bytecode::Integer => {
                     // Allow the very first value to be -1.
-                    let mut v: RawValue = get_number::<RawValue>(byte_iter)?;
-                    let mut int_list: RawValue = self.heap.integer(v).into();
+                    let mut v: RawValue = get_word_raw_value(byte_iter)?;
+                    let mut int_list: RawValue = self.heap.integer_ref(v).into();
 
                     item_stack.push(int_list);
 
                     // The list of ints is constructed from the head to the tail, the opposite from if we used `push`.
                     // The `cursor` always points to the "tail", the next empty slot the next boxed integer will go.
                     let mut cursor: &mut RawValue = &mut self.heap[int_list].tail;
-                    v = get_number::<RawValue>(byte_iter)?;
+                    v = get_word_raw_value(byte_iter)?;
 
                     while v != -1 {
                         // Construct a boxed integer and store it in the tail of the previous boxed integer
-                        *cursor = self.heap.integer(v);
+                        *cursor = self.heap.integer_ref(v).into();
                         // Read the next integer from the byte iterator
-                        v = get_number::<RawValue>(byte_iter)?;
+                        v = get_word_raw_value(byte_iter)?;
                         // Update the cursor to point to the tail of the newly constructed boxed integer
                         cursor = &mut self.heap[*cursor].tail;
                     }
                 }
 
                 Bytecode::Double => {
-                    let real_number = get_number::<f64>(byte_iter)?;
+                    let real_number = get_word_f64(byte_iter)?;
 
                     // Todo: We convert isize-->f64 and then f64-->isize. This is stupid.
-                    item_stack.push(self.heap.real(real_number).into());
+                    item_stack.push(self.heap.real_ref(real_number).into());
                 }
 
                 Bytecode::Unicode => {
-                    let v = get_number::<RawValue>(byte_iter)?;
+                    let v = get_word_raw_value(byte_iter)?;
 
-                    item_stack.push(self.heap.unicode(v).into());
+                    item_stack.push(self.heap.unicode_ref(v).into());
                 }
 
                 // Reads in the index of a private symbol. Differs from `Bytecode::PrtivateName1` in that it only reads two
                 // bytes.
                 Bytecode::PrivateName => {
-                    let mut v: usize = get_number_16bit::<u16>(byte_iter)? as usize;
+                    let mut v: usize = get_u16_le(byte_iter)? as usize;
 
                     // See the notes for `private_symbol_base_index` in `vm.load_script()`.
                     // Turn relative index into absolute index.
                     v += self.private_symbol_base_index;
 
-                    let ps = self.heap.get_nth_private_symbol(v);
+                    let ps = self.heap.get_nth_private_symbol_ref(v);
                     item_stack.push(ps.into());
 
                     // Todo: This is an index into `vm.private_names`?
@@ -1513,32 +1540,32 @@ impl VM {
 
                 // This differs from Bytecode::PrivateName in that is reads `MACHINE_WORD_SIZE` bytes.
                 Bytecode::PrivateName1 => {
-                    let mut v = get_number::<usize>(byte_iter)?;
+                    let mut v = get_machine_word(byte_iter)?;
                     // See the notes  for `private_symbol_base_index` in `vm.load_script()`.
-                    v += private_symbol_base_index;
+                    v += self.private_symbol_base_index;
 
-                    let ps = self.heap.get_nth_private_symbol(v);
+                    let ps = self.heap.get_nth_private_symbol_ref(v);
                     item_stack.push(ps.into());
                 }
 
                 Bytecode::Construct => {
-                    let v: i16 = get_number_16bit::<i16>(byte_iter)?;
+                    let v: i16 = get_i16_le(byte_iter)?;
                     // Wrap the top value on the stack with the constructor.
                     if item_stack.is_empty() {
                         item_stack.push(Combinator::Nil.into());
                     }
-                    let last_value = item_stack.last().unwrap();
-                    *last_value = self.heap.constructor(v, (*last_value));
+                    let last_value = item_stack.last_mut().unwrap();
+                    *last_value = self.heap.constructor_ref(v, (*last_value).into()).into();
 
-                    let new_value = self.heap.constructor(v, last_value);
+                    let new_value = self.heap.constructor_ref(v, (*last_value).into());
                     item_stack.push(new_value.into());
                 }
 
                 Bytecode::ReadVals => {
-                    let previous_value = item_stack.pop_unchecked(&mut self.heap);
+                    let previous_value = item_stack.pop().unwrap_or(Combinator::Nil.into());
                     let new_value = self
                         .heap
-                        .start_read_vals(Value::None, previous_value.into());
+                        .start_read_vals_ref(Value::None.into(), previous_value.into());
                     item_stack.push(new_value.into());
 
                     self.rv_script = true;
@@ -1549,7 +1576,7 @@ impl VM {
 
                     match self.heap.symbol_table.get(name.as_str()) {
                         Some(id_ref) => {
-                            let id = IdentifierRecord::from_ref(id_ref.into());
+                            let id = IdentifierRecord::from_ref((*id_ref).into());
                             let id_type = id.get_type(&mut self.heap);
 
                             if id_type == Type::New.into() {
@@ -1557,7 +1584,10 @@ impl VM {
                                 self.clashes.insert_ordered(&mut self.heap, id);
                             } else if id_type == Type::Alias.into() {
                                 // Follow the alias.
-                                match id.get_value(&self.heap)? {
+                                match id
+                                    .get_value(&self.heap)
+                                    .map_err(|_| BytecodeError::MalformedDef)?
+                                {
                                     None => return Err(BytecodeError::MalformedDef),
                                     Some(id_value) => {
                                         item_stack.push(id_value.get_ref());
@@ -1565,7 +1595,7 @@ impl VM {
                                 }
                             } else {
                                 // Can this happen?
-                                item_stack.push(id_ref.into());
+                                item_stack.push((*id_ref).into());
                             }
                         }
 
@@ -1584,29 +1614,30 @@ impl VM {
                         .symbol_table
                         .get(name.as_str())
                         .ok_or(BytecodeError::SymbolNotFound)?;
-                    let pair = self.heap.data_pair(*id, Value::None);
+                    let pair = self.heap.data_pair_ref((*id).into(), Value::None.into());
 
                     item_stack.push(pair.into());
                 }
 
                 Bytecode::Here => {
-                    let ch = byte_iter.peek();
-                    let file_path: String = // the value of the following if block
-              if ch == 0 {
-                // ch==0 is shorthand for "current file"
-                byte_iter.next(); // Consumed peeked value.
-                self.current_file()
-              }
-              else if ch != b'/' {
-                // Transform path into absolute path.
-                let prefix_ref = self.prefix_stack.head(&self.heap);
-                let mut prefix = self.heap.resolve_string(prefix_ref.into()).unwrap();
+                    let first = next(byte_iter)?;
+                    let file_path: String = if first == 0 {
+                        // `first == 0` is shorthand for "current file".
+                        self.current_file()
+                    } else if first != b'/' {
+                        // Transform path into absolute path.
+                        let prefix_ref = self.prefix_stack.head(&self.heap);
+                        let prefix = self.heap.resolve_string(prefix_ref.into()).unwrap();
 
-                format!("{}{}", prefix, parse_string(byte_iter)?)
-              }
-              else {
-                parse_string(byte_iter)?
-              };
+                        format!(
+                            "{}{}{}",
+                            prefix,
+                            char::from(first),
+                            parse_string(byte_iter)?
+                        )
+                    } else {
+                        format!("/{}", parse_string(byte_iter)?)
+                    };
                     let file_id = match self.heap.symbol_table.get(file_path.as_str()) {
                         Some(value) => value.clone(),
                         None => {
@@ -1617,13 +1648,15 @@ impl VM {
                                 .into()
                         }
                     };
-                    let line_number = parse_line_number(byte_iter)?;
-                    let file_info = self.heap.file_info(file_id, line_number.into());
+                    let line_number = get_u16_le(byte_iter)? as usize;
+                    let file_info = self
+                        .heap
+                        .file_info_ref(file_id.into(), (line_number as RawValue).into());
 
                     item_stack.push(file_info.into());
                 }
 
-                Bytecode::Definitions => {
+                Bytecode::Definition => {
                     // This function (`load_defs`) loads a sequence of definitions terminated by DEF_X, or a single object
                     // terminated by DEF_X. When we encounter `DEF_X`, we need to construct the item whose components have
                     // accumulated in `item_stack`. Also, in some cases `DEF_X` does not signal to stop loading definitions. A
@@ -1641,7 +1674,7 @@ impl VM {
                     match item_stack.len() {
                         0 => {
                             // Case 1: Definition list delimiter, signals the end of a definition list.
-                            return Ok(defs.reversed(heap));
+                            return Ok(defs.reversed(&mut self.heap));
                         }
 
                         1 => {
@@ -1685,10 +1718,10 @@ impl VM {
                                 let private_aka = {
                                     // Scope of temporary
                                     let top_item = item_stack.last().unwrap();
-                                    if self.heap[top_item].tag == Tag::Cons {
-                                        self.heap[top_item].head
+                                    if self.heap[*top_item].tag == Tag::Cons {
+                                        self.heap[*top_item].head
                                     } else {
-                                        NIL
+                                        NIL.into()
                                     }
                                 };
 
@@ -1714,7 +1747,7 @@ impl VM {
                                         let mut alias: RawValue = NIL.into();
                                         let mut id: Option<IdentifierRecord> = None;
                                         while !aliases.is_empty() {
-                                            alias = aliases.pop_unchecked(&self.heap);
+                                            alias = aliases.pop_value(&self.heap).unwrap().into();
                                             let inner =
                                                 IdentifierRecord::from_ref(self.heap[alias].tail); // a temporary
                                             id = Some(inner);
@@ -1722,9 +1755,11 @@ impl VM {
                                             // operation.
                                             if let Ok(Some(found_val)) = inner.get_value(&self.heap)
                                             {
-                                                if found_val.get_data(heap)
-                                                    == IdentifierHeapValueData::Arbitrary(top_item)
-                                                {
+                                                if matches!(
+                                                    found_val.get_data(&self.heap),
+                                                    IdentifierHeapValueData::Arbitrary(v)
+                                                        if v == Value::from(top_item)
+                                                ) {
                                                     break;
                                                 }
                                             }
@@ -1734,9 +1769,14 @@ impl VM {
                                             // Surely must hold ??
                                             self.suppressed_t.push(&mut self.heap, found_id);
                                         }
-                                    } else if new_id.get_value(&self.heap)
-                                        == Ok(Some(IdentifierHeapValueData::Undefined))
-                                    {
+                                    } else if matches!(
+                                        new_id.get_value(&self.heap),
+                                        Ok(Some(v))
+                                            if matches!(
+                                                v.get_data(&self.heap),
+                                                IdentifierHeapValueData::Undefined
+                                            )
+                                    ) {
                                         // Special kludge for undefined names, necessary only if we allow names specified
                                         // but not defined to be %included.
                                         if private_aka == Combinator::NIL.into() {
@@ -1745,7 +1785,8 @@ impl VM {
                                             let mut alias: RawValue = NIL.into();
                                             let mut id: Option<IdentifierRecord> = None;
                                             while !aliases.is_empty() {
-                                                alias = aliases.pop_unchecked(&self.heap);
+                                                alias =
+                                                    aliases.pop_value(&self.heap).unwrap().into();
                                                 let inner = IdentifierRecord::from_ref(
                                                     self.heap[alias].tail,
                                                 ); // a temporary
@@ -1755,11 +1796,11 @@ impl VM {
                                                 if let Ok(Some(found_val)) =
                                                     inner.get_value(&self.heap)
                                                 {
-                                                    if found_val.get_data(heap)
-                                                        == IdentifierHeapValueData::Arbitrary(
-                                                            top_item,
-                                                        )
-                                                    {
+                                                    if matches!(
+                                                        found_val.get_data(&self.heap),
+                                                        IdentifierHeapValueData::Arbitrary(v)
+                                                            if v == Value::from(top_item)
+                                                    ) {
                                                         break;
                                                     }
                                                 }
@@ -1767,22 +1808,38 @@ impl VM {
                                             }
                                             if let Some(found_id) = id {
                                                 // Todo: Untangle what Miranda is doing here. What's the difference between `id_val` and `get_id`?
-                                                private_aka = self.heap.data_pair(found_id, 0);
+                                                private_aka = self
+                                                    .heap
+                                                    .data_pair_ref(
+                                                        found_id.get_ref().into(),
+                                                        0.into(),
+                                                    )
+                                                    .into();
                                             }
                                         }
                                         // this will generate sensible error message
                                         // see reduction rule for DATAPAIR
+                                        let file_info_ref = {
+                                            let current_file_ref =
+                                                self.heap.string(self.current_file());
+                                            self.heap
+                                                .file_info_ref(current_file_ref.into(), 0.into())
+                                                .into()
+                                        };
+                                        let applied_value: RawValue = self
+                                            .heap
+                                            .apply_ref(
+                                                private_aka.into(),
+                                                IdentifierValueReference::from_ref(file_info_ref)
+                                                    .into(),
+                                            )
+                                            .into();
                                         new_id.set_value(
                                             &mut self.heap,
-                                            self.heap.apply(
-                                                private_aka,
-                                                IdentifierValueReference::from_ref(
-                                                    self.heap.file_info(self.current_file(), 0),
-                                                ),
-                                            ),
+                                            IdentifierValueReference::from_ref(applied_value),
                                         );
                                     }
-                                    defs.push(&mut self.heap, top_item);
+                                    defs.push(&mut self.heap, top_item.into());
                                     continue;
                                 }
                             }
@@ -1796,7 +1853,8 @@ impl VM {
                             // Likewise for the id's value.
                             if new_id_type != Type::New.into()
                                 && (new_id_type != Type::Undefined.into()
-                                    || new_id.get_raw_value(&self.heap) != Combinator::Undef.into())
+                                    || new_id.get_value_field(&self.heap)
+                                        != Combinator::Undef.into())
                             {
                                 if new_id_type == Type::Alias.into() {
                                     // cyclic aliasing
@@ -1804,8 +1862,8 @@ impl VM {
                                     let mut alias: RawValue = NIL.into();
                                     let mut id: Option<IdentifierRecord> = None;
                                     while !aliases.is_empty() {
-                                        alias = aliases.pop_unchecked(&self.heap);
-                                        id = Some(alias);
+                                        alias = aliases.pop_value(&self.heap).unwrap().into();
+                                        id = Some(IdentifierRecord::from_ref(alias));
 
                                         if self.heap[alias].tail == top_item {
                                             break;
@@ -1816,7 +1874,7 @@ impl VM {
                                     if id.is_none() {
                                         // Todo: Make infrastructure for nonfatal errors.
                                         eprintln!(
-                                            "impossible event in cyclic alias ({})",
+                                            "impossible event in cyclic alias ({:?})",
                                             new_id.get_name(&self.heap)
                                         );
                                         item_stack.clear();
@@ -1825,9 +1883,11 @@ impl VM {
                                     defs.push(&mut self.heap, top_item);
 
                                     // Manipulating the alias, not an id.
-                                    self.hd_hd(alias) = item_stack.pop().unwrap(); // who
-                                    self.heap[self.tl_hd(alias)].head = item_stack.pop().unwrap(); // type
-                                    self.heap[self.tl_hd(alias)].tail = item_stack.pop().unwrap(); // value
+                                    let alias_head = self.heap[alias].head;
+                                    self.heap[alias_head].head = item_stack.pop().unwrap(); // who
+                                    let alias_type_value = self.heap[alias_head].tail;
+                                    self.heap[alias_type_value].head = item_stack.pop().unwrap(); // type
+                                    self.heap[alias_type_value].tail = item_stack.pop().unwrap(); // value
                                     continue;
                                 }
 
@@ -1836,14 +1896,14 @@ impl VM {
                             } else {
                                 defs.push(&mut self.heap, top_item);
 
-                                #[cfg(feature = "DEBUG")]
+                                #[cfg(feature = "debug")]
                                 println!("{} undumped", new_id.get_name(&self.heap));
 
                                 item_stack.pop(); // top_item
                                                   // who
-                                new_id.set_definiton(
+                                new_id.set_definition(
                                     &mut self.heap,
-                                    IdentifierDefinition::from_ref(item_stack.pop().unwrap()),
+                                    IdentifierDefinitionValue::from_ref(item_stack.pop().unwrap()),
                                 );
                                 // type
                                 new_id.set_type(&mut self.heap, item_stack.pop().unwrap().into());
@@ -1867,18 +1927,22 @@ impl VM {
                     let top_item = item_stack.pop().unwrap();
                     let next_item = item_stack.pop().unwrap();
                     if next_item == Combinator::Read.into() && top_item == 0 {
-                        item_stack.push(self.common_stdin);
+                        item_stack.push(self.common_stdin.into());
                     } else if next_item == Combinator::ReadBin.into() && top_item == 0 {
-                        item_stack.push(self.common_stdinb);
+                        item_stack.push(self.common_stdinb.into());
                     } else {
-                        item_stack.push(self.heap.apply(next_item, top_item));
+                        item_stack.push(
+                            self.heap
+                                .apply_ref(next_item.into(), top_item.into())
+                                .into(),
+                        );
                     }
                 } // end Bytecode::Apply branch
 
                 Bytecode::Cons => {
                     let head = item_stack.pop().unwrap();
                     let tail = item_stack.pop().unwrap();
-                    item_stack.push(self.heap.cons(head, tail));
+                    item_stack.push(self.heap.cons_ref(head.into(), tail.into()).into());
                 }
 
                 _ => {

@@ -15,9 +15,7 @@ ToDo: Should `ConsList` have a type parameter `ConstList<T>` such that `pop` ret
 
 use std::marker::PhantomData;
 
-use crate::data::{
-    api::HeapObjectProxy, values::raw_from_value, Combinator, Heap, RawValue, Value,
-};
+use crate::data::{api::HeapObjectProxy, Combinator, Heap, RawValue, Value};
 
 #[derive(Eq, PartialEq, Debug)]
 pub struct ConsList<T = RawValue>
@@ -44,8 +42,7 @@ impl<T> Copy for ConsList<T> where T: Clone {}
 
 impl<T> ConsList<T>
 where
-    T: Clone,
-    Value: From<T>,
+    T: Clone + Into<Value>,
 {
     /// A `ConsList` that isn't an actual cons list on the heap but rather the literal NIL. This represents an
     /// "empty" list.
@@ -57,10 +54,7 @@ where
     /// Constructs a new cons list on the heap with the given initial value.
     #[inline(always)]
     pub fn new(heap: &mut Heap, initial_value: T) -> Self {
-        let reference = heap.cons(
-            raw_from_value(Into::<Value>::into(initial_value)),
-            Combinator::Nil.into(),
-        );
+        let reference = heap.cons_ref(Into::<Value>::into(initial_value), Combinator::Nil.into());
 
         Self {
             reference: reference.into(),
@@ -84,14 +78,14 @@ where
 
     #[inline(always)]
     pub fn push(&mut self, heap: &mut Heap, item: T) {
-        let new_list = heap.cons(raw_from_value(item.into()), self.reference.into());
+        let new_list = heap.cons_ref(item.into(), self.reference.into());
 
         self.reference = new_list.into();
     }
 
     #[inline(always)]
     pub fn push_raw(&mut self, heap: &mut Heap, item: RawValue) {
-        let new_list = heap.cons(item, self.reference.into());
+        let new_list = heap.cons_ref(Value::from(item), self.reference.into());
 
         self.reference = new_list.into();
     }
@@ -102,7 +96,7 @@ where
     pub fn append(&mut self, heap: &mut Heap, item: T) {
         // Special case, as there is no tail.
         if self.is_empty() {
-            let new_list = heap.cons(raw_from_value(item.into()), self.reference.into());
+            let new_list = heap.cons_ref(item.into(), self.reference.into());
             self.reference = new_list.into();
         } else {
             // Walk to the last cons, which will be cons(last_item, NIL).
@@ -114,7 +108,7 @@ where
             }
 
             // Place item in the tail
-            let new_cons = heap.cons(raw_from_value(item.into()), Combinator::NIL.into());
+            let new_cons = heap.cons_ref(item.into(), Combinator::NIL.into());
             heap[cursor.reference].tail = new_cons.into();
         }
     }
@@ -123,12 +117,20 @@ where
         heap[self.reference].head
     }
 
+    pub fn value_head_unchecked(&self, heap: &Heap) -> Value {
+        self.raw_head_unchecked(heap).into()
+    }
+
     pub fn raw_head(&self, heap: &Heap) -> Option<RawValue> {
         if self.reference == Combinator::Nil.into() {
             None
         } else {
             Some(heap[self.reference].head)
         }
+    }
+
+    pub fn value_head(&self, heap: &Heap) -> Option<Value> {
+        self.raw_head(heap).map(Into::into)
     }
 
     // Does not check if `self` is empty.
@@ -156,7 +158,7 @@ where
 
         // If the list is empty, then `self == NIL`.
         if self.is_empty() || item_address < self.raw_head_unchecked(heap).into() {
-            let new_cons = heap.cons(item.into(), self.reference.into());
+            let new_cons = heap.cons_ref(item, self.reference.into());
             self.reference = new_cons.into();
             return;
         }
@@ -178,12 +180,12 @@ where
         }
 
         if cursor.rest_unchecked(heap).is_empty() {
-            let new_cons = heap.cons(item.into(), Combinator::NIL.into());
+            let new_cons = heap.cons_ref(item, Combinator::NIL.into());
             // `item` goes on the end
             heap[cursor.reference].tail = new_cons.into();
         } else if item_address != cursor.rest_unchecked(heap).raw_head_unchecked(heap).into() {
             // Item is not already in the list.
-            let new_cons = heap.cons(item.into(), cursor.rest_unchecked(heap).into());
+            let new_cons = heap.cons_ref(item, cursor.rest_unchecked(heap).into());
             heap[cursor.reference].tail = new_cons.into();
         }
         // The remaining case is `item_address != cursor.rest_unchecked(heap).raw_head_unchecked(heap).into()`, which is a noop,
@@ -215,13 +217,17 @@ where
         }
     }
 
+    pub fn pop_value(&mut self, heap: &Heap) -> Option<Value> {
+        self.pop_raw(heap).map(Into::into)
+    }
+
     /// Returns `true` if the given value is one of the elements of the cons list, `false` otherwise.
     pub fn contains(&self, heap: &Heap, item: T) -> bool {
-        let item_value = raw_from_value(item.into());
-        let mut cursor: Self = (*self).clone();
+        let item_value: Value = item.into();
+        let mut cursor = *self;
 
         while let Some(next) = cursor.pop_raw(heap) {
-            if next == item_value {
+            if Value::from(next) == item_value {
                 return true;
             }
         }

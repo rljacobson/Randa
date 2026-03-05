@@ -20,7 +20,7 @@ From Miranda:
 
 */
 
-use num_traits::{FromPrimitive, Num as Numeric}; // For conversion from `i32` to `Token` or `Combinator`
+use num_traits::{FromPrimitive}; // For conversion from `i32` to `Token` or `Combinator`
 
 use crate::{
     compiler::Token,
@@ -29,27 +29,25 @@ use crate::{
 
 pub type RawValue = isize;
 
-pub fn raw_from_value(value: Value) -> RawValue {
-    match value {
-        Value::Tag(tag) => tag,
-        Value::Char(c) => c as u32 as RawValue,
-        Value::Token(token) => token as RawValue,
-        Value::Combinator(combinator) => combinator as RawValue,
-        Value::Reference(p) => p + ATOM_LIMIT,
-        Value::Data(d) => d,
-
-        // The raw values for the variants used by the parser shouldn't be needed, as they not real Miranda values. We
-        // recycle `Value::None` to use as a "zero" `Value` and make the rest errors. Note that like
-        // `Value::Data`, `Value::None` cannot round-trip, because it collides with `Value::Char`.
-        Value::None => 0,
-
-        _ => unreachable!("Attempted to convert a parser-only value to a RawValue. This is a bug."),
-    }
-}
-
 impl From<Value> for RawValue {
-    fn from(v: Value) -> Self {
-        raw_from_value(v)
+    fn from(value: Value) -> Self {
+        match value {
+            Value::Tag(tag) => tag,
+            Value::Char(c) => c as u32 as RawValue,
+            Value::Token(token) => token as RawValue,
+            Value::Combinator(combinator) => combinator as RawValue,
+            Value::Reference(p) => p + ATOM_LIMIT,
+            Value::Data(d) => d,
+
+            // The raw values for the variants used by the parser shouldn't be needed, as they not real Miranda values.
+            // We recycle `Value::None` to use as a "zero" `Value` and make the rest errors. Note that like
+            // `Value::Data`, `Value::None` cannot round-trip, because it collides with `Value::Char`.
+            Value::None => 0,
+
+            _ => unreachable!(
+                "Attempted to convert a parser-only value to a RawValue. This is a bug."
+            ),
+        }
     }
 }
 

@@ -7,8 +7,6 @@ Errors associated with loadfile, unload, dump, undump, etc.
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
-use crate::data::Value;
-
 /// This is Miranda's `BAD_DUMP`. Most of these errors are produced in `VM::load_file()`.
 #[derive(Debug, Eq, PartialEq)]
 pub enum BytecodeError {

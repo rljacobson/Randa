@@ -14,6 +14,9 @@ license    = "BSD"
 
 publish = false
 
+[features]
+
+debug = []
 
 [dependencies]
 saucepan   = {path = "../saucepan", features = ["reporting", "nom-parsing", "runtime-dispatch-simd"]}
@@ -35,5 +38,9 @@ features         = ["std"]
 
 
 [build-dependencies]
-rust-bison-skeleton = {path = "../rust-bison-skeleton/rust-bison-skeleton"} #"0.41.0"
+#rust-bison-skeleton = {path = "../rust-bison-skeleton/rust-bison-skeleton"} #"0.41.0"
+rust-bison-skeleton = "0.41.0"
 chrono = "0.4.44" # For date and time.
+
+[lints.rust]
+mismatched_lifetime_syntaxes = "allow"

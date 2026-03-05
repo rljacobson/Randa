@@ -8,7 +8,6 @@ use std::process::exit;
 
 use console::{style, Term};
 
-pub use lexical::LexError;
 pub use bytecode::BytecodeError;
 
 pub fn emit_error(e: &dyn Error) {

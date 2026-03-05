@@ -9,25 +9,19 @@ AST nodes.
 
 */
 
-
-pub mod token;
+pub(crate) mod bytecode;
 pub mod errors;
 mod lexer;
-pub(crate) mod bytecode;
-mod lexer_OLD;
+pub mod token;
 // mod parser;
 
-
-
-pub use saucepan::Span;
-pub use token::Token;
-pub use lexer::Lexer;
 use crate::data::api::HeapString;
+pub use token::Token;
 
 pub type Loc = std::ops::Range<u32>;
 
 // Todo: Make this a span?
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HereInfo {
   pub(crate) script_file: HeapString,
   pub(crate) line_number: isize

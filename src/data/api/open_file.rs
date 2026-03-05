@@ -1,5 +1,4 @@
 use crate::data::api::{FileRecord, HeapObjectProxy};
-use crate::data::values::raw_from_value;
 use crate::data::{Heap, RawValue, Value};
 
 /**
@@ -21,7 +20,9 @@ pub struct OpenFile {
 
 impl OpenFile {
     pub fn new(heap: &mut Heap, stream: Value, file_record: FileRecord) -> Self {
-        let reference = heap.strcons(raw_from_value(stream), file_record.get_ref());
+        let reference: RawValue = heap
+            .strcons_ref(stream, file_record.get_ref().into())
+            .into();
         OpenFile { reference }
     }
 

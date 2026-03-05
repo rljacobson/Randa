@@ -9,7 +9,6 @@ use logos::Logos;
 
 // use saucepan::Span;
 use enum_primitive_derive::Primitive;
-use num_traits::FromPrimitive; // For conversion from `i32` to Token // For conversion from `i32` to Token
 
 use crate::data::{Value, TOKEN_BASE};
 
