@@ -21,7 +21,7 @@ fn next(byte_iter: &mut dyn Iterator<Item = u8>) -> PResult<u8> {
     match byte_iter.next() {
         Some(ch) => Ok(ch),
 
-        None => Err(BytecodeError::UnexpectedEOF),
+        None => Err(BytecodeError::unexpected_eof()),
     }
 }
 

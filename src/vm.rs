@@ -508,17 +508,15 @@ impl VM {
         Ok(())
     }
 
-    fn load_file(&mut self, source_path: &str) -> Result<(), BytecodeError> {
+    fn load_file(&mut self, _source_path: &str) -> Result<(), BytecodeError> {
         unimplemented!()
     }
 
-    fn alfasort(&mut self, items: ConsList<IdentifierRecord>) -> ConsList<IdentifierRecord> {
-        let _ = items;
+    fn alfasort(&mut self, _items: ConsList<IdentifierRecord>) -> ConsList<IdentifierRecord> {
         unimplemented!()
     }
 
-    fn printlist(&self, mut items: ConsList<IdentifierRecord>) -> String {
-        let _ = &mut items;
+    fn printlist(&self, _items: ConsList<IdentifierRecord>) -> String {
         unimplemented!()
     }
 
@@ -527,6 +525,14 @@ impl VM {
     }
 
     fn unfix_exports(&mut self) {
+        unimplemented!()
+    }
+
+    fn hdsort(&mut self, _params: Value) -> Value {
+        unimplemented!()
+    }
+
+    fn bindparams(&mut self, _formal: Value, _actual: Value) {
         unimplemented!()
     }
 
@@ -639,8 +645,8 @@ impl VM {
         &mut self,
         in_file: &File,
         mut source_file: String,
-        mut aliases: ConsList, // List of cons(new_id, old_id)
-        parameters: Value,     // Todo: `parameters` never used?
+        aliases: ConsList, // List of cons(new_id, old_id)
+        parameters: Value, // Todo: `parameters` never used?
         is_main_script: bool,
     ) -> Result<ConsList<FileRecord>, BytecodeError> {
         /*
@@ -664,9 +670,9 @@ impl VM {
             let mut f_reader = BufReader::new(in_file);
             let bytes_read = f_reader
                 .read_to_end(&mut file_bytes)
-                .map_err(|e| BytecodeError::UnexpectedEOF)?;
+                .map_err(BytecodeError::unexpected_eof_with_source)?;
             if bytes_read < 16 {
-                return Err(BytecodeError::UnexpectedEOF);
+                return Err(BytecodeError::unexpected_eof());
             }
         }
         // An iterator over the bytes of the file.
@@ -688,7 +694,7 @@ impl VM {
         self.obey_aliases(aliases)?;
 
         // PNBASE = nextpn; // base for relocation of internal names in dump
-        let private_symbol_base_index = self.heap.private_symbols.len();
+        self.private_symbol_base_index = self.heap.private_symbols.len();
         // I think the idea is that the indices of the names in the serialized binary bytecode assume an empty private
         // symbol table, and that may not be the case if the current file is, say, included in another file. So indices
         // in the bytecode are actually _relative_ to the index of the first private symbol of the current file, and
@@ -698,8 +704,6 @@ impl VM {
         //       in this function.
         self.suppressed = ConsList::EMPTY; // SUPPRESSED  // list of `-id' aliases successfully obeyed
         self.suppressed_t = ConsList::EMPTY; // TSUPPRESSED // list of -typename aliases (illegal just now)
-
-        let mut bad_dump: bool = false; // Flags an error condition
 
         // The following parses the rest of the binary file. See
         // (Serialized Binary Representation.md)[../Serialized Binary Representation.md]
@@ -712,12 +716,7 @@ impl VM {
         //   [definition-list] ]
         // block. (Note: This is skipped over in the case of a syntax-error script.)
         while let Some(ch) = byte_iter.next() {
-            if *ch == 0 || bad_dump {
-                if !bad_dump {
-                    // But we need to also return `files`?
-                    // I *think* the returned `files` isn't used if there is an error.
-                    return Err(BytecodeError::UnexpectedEOF);
-                }
+            if *ch == 0 {
                 if !aliases.is_empty() {
                     self.unalias(aliases);
                 }
@@ -770,7 +769,8 @@ impl VM {
                 //          `unload`  until  attached  to  global `files', so interrupts are disabled during
                 //          `load_script` - see steer.c
                 // For big dumps this may be too coarse - FIX
-                let new_defs = self.load_defs(&mut byte_iter.by_ref().copied())?;
+                let new_defs =
+                    ConsList::from_ref(self.load_defs(&mut byte_iter.by_ref().copied())?.into());
                 let file_record =
                     FileRecord::new(&mut self.heap, filename, modified_time, sharable, new_defs);
                 files.push(&mut self.heap, file_record);
@@ -840,13 +840,13 @@ impl VM {
         // Parse algebraic show functions
         {
             // scope of new_defs
-            let new_defs = self.load_defs(&mut byte_iter.by_ref().copied())?;
+            let new_defs: RawValue = self.load_defs(&mut byte_iter.by_ref().copied())?.into();
             self.algebraic_show_functions
-                .append(&mut self.heap, new_defs.get_ref());
+                .append(&mut self.heap, new_defs);
         }
 
         // Parse [ND] or [True] (Are there type orphans?)
-        if self.load_defs(&mut byte_iter.by_ref().copied())? == Combinator::True {
+        if self.load_defs(&mut byte_iter.by_ref().copied())? == Combinator::True.into() {
             self.undefined_names = ConsList::EMPTY;
             self.unused_types = true;
         }
@@ -855,19 +855,20 @@ impl VM {
         // Parse sui generis constructors
         // Todo: This does not appear in the binary description
         {
-            let new_defs = self.load_defs(&mut byte_iter.by_ref().copied())?;
+            let new_defs: RawValue = self.load_defs(&mut byte_iter.by_ref().copied())?.into();
             self.sui_generis_constructors
-                .append(&mut self.heap, new_defs.get_ref());
+                .append(&mut self.heap, new_defs);
         }
 
         // Parse DEF_X
         // Parse free_ids
         if is_main_script || self.includees.is_empty() {
-            self.free_ids = self.load_defs(&mut byte_iter.by_ref().copied())?;
+            self.free_ids =
+                ConsList::from_ref(self.load_defs(&mut byte_iter.by_ref().copied())?.into());
         } else {
-            // Todo: Implement bindparams/hdsort path.
-            // For now, consume and discard the defs payload to keep bytecode stream alignment.
-            let _deferred_bindparams_defs = self.load_defs(&mut byte_iter.by_ref().copied())?;
+            let defs = self.load_defs(&mut byte_iter.by_ref().copied())?;
+            let sorted_parameters = self.hdsort(parameters);
+            self.bindparams(defs, sorted_parameters);
         }
 
         // Housekeeping
@@ -879,8 +880,8 @@ impl VM {
         // Parse DEF_X
         // Parse internals
         if is_main_script {
-            let new_defs = self.load_defs(&mut byte_iter.by_ref().copied())?;
-            self.internals = new_defs;
+            self.internals =
+                ConsList::from_ref(self.load_defs(&mut byte_iter.by_ref().copied())?.into());
         }
 
         Ok(files.reversed(&mut self.heap))
@@ -1024,7 +1025,7 @@ impl VM {
             print!("\n\n"); // two lines
             self.println_centered(
                 format!(
-                    "{} Copyright 2022-2023 Robert Jacobson, BSD License",
+                    "{} Copyright 2022-2026 Robert Jacobson, BSD License",
                     style("Randa").red()
                 )
                 .as_str(),
@@ -1038,32 +1039,37 @@ impl VM {
             print!("\n\n\n"); // three lines
 
             if self.options.space_limit != DEFAULT_SPACE {
-                format!("({} cells)\n", self.options.space_limit);
+                println!("({} cells)\n", self.options.space_limit);
             }
             if !self.options.strict_if {
-                format!("(-nostrictif : deprecated!)\n");
+                println!("(-nostrictif : deprecated!)\n");
                 // printf("\t\t\t\t%dbit platform\n",__WORDSIZE);  temporary/
             }
 
             /*
             // Only relevant once .mirarc persists version info.
 
-              if (oldversion < 1999) /* pre-release two */ {
-                  printf("\
-                  WARNING:\n\
-                  a new release of Miranda has been installed since you last used\n\
-                  the system - please read the `CHANGES' section of the /man pages !!!\n\n");
-              } else if (version > oldversion) {
-                  printf("a new version of Miranda has been installed since you last\n"),
-                          printf("used the system - see under `CHANGES' in the /man pages\n\n");
-              }
-              if (version < oldversion) {
-                  printf("warning - this is an older version of Miranda than the one\n"),
-                          printf("you last used on this machine!!\n\n");
-              }
-              if (rc_error) {
-                  printf("warning: \"%s\" contained bad data (ignored)\n", rc_error);
-              }
+            if old_version < 1999 {
+                // pre-release two
+                println!("WARNING:");
+                println!("a new release of Miranda has been installed since you last used");
+                println!("the system - please read the `CHANGES` section of the /man pages !!!");
+                println!();
+            } else if version > old_version {
+                println!("a new version of Miranda has been installed since you last");
+                println!("used the system - see under `CHANGES` in the /man pages");
+                println!();
+            }
+
+            if version < old_version {
+                println!("warning - this is an older version of Miranda than the one");
+                println!("you last used on this machine!!");
+                println!();
+            }
+
+            if let Some(rc_error) = rc_error {
+                println!("warning: \"{}\" contained bad data (ignored)", rc_error);
+            }
             */
         }
     }
@@ -1437,7 +1443,7 @@ impl VM {
     fn load_defs(
         &mut self,
         byte_iter: &mut dyn Iterator<Item = u8>,
-    ) -> Result<ConsList<IdentifierRecord>, BytecodeError> {
+    ) -> Result<Value, BytecodeError> {
         // Holds a list of definitions in cases where multiple definitions are read.
         let mut defs: ConsList = ConsList::EMPTY;
         // Holds the components of an item that have been read so far. When all of the components have been read, the
@@ -1485,22 +1491,23 @@ impl VM {
                 Bytecode::Integer => {
                     // Allow the very first value to be -1.
                     let mut v: RawValue = get_word_raw_value(byte_iter)?;
-                    let mut int_list: RawValue = self.heap.integer_ref(v).into();
+                    let int_list: RawValue = self.heap.integer_ref(v).into();
 
                     item_stack.push(int_list);
 
                     // The list of ints is constructed from the head to the tail, the opposite from if we used `push`.
-                    // The `cursor` always points to the "tail", the next empty slot the next boxed integer will go.
-                    let mut cursor: &mut RawValue = &mut self.heap[int_list].tail;
+                    // `cursor_ref` points to the cell whose tail is the next insertion point.
+                    let mut cursor_ref: RawValue = int_list;
                     v = get_word_raw_value(byte_iter)?;
 
                     while v != -1 {
                         // Construct a boxed integer and store it in the tail of the previous boxed integer
-                        *cursor = self.heap.integer_ref(v).into();
+                        let new_cell_ref: RawValue = self.heap.integer_ref(v).into();
+                        self.heap[cursor_ref].tail = new_cell_ref;
                         // Read the next integer from the byte iterator
                         v = get_word_raw_value(byte_iter)?;
                         // Update the cursor to point to the tail of the newly constructed boxed integer
-                        cursor = &mut self.heap[*cursor].tail;
+                        cursor_ref = new_cell_ref;
                     }
                 }
 
@@ -1577,7 +1584,7 @@ impl VM {
                     match self.heap.symbol_table.get(name.as_str()) {
                         Some(id_ref) => {
                             let id = IdentifierRecord::from_ref((*id_ref).into());
-                            let id_type = id.get_type(&mut self.heap);
+                            let id_type = id.get_type(&self.heap);
 
                             if id_type == Type::New.into() {
                                 // A name collision
@@ -1626,8 +1633,8 @@ impl VM {
                         self.current_file()
                     } else if first != b'/' {
                         // Transform path into absolute path.
-                        let prefix_ref = self.prefix_stack.head(&self.heap);
-                        let prefix = self.heap.resolve_string(prefix_ref.into()).unwrap();
+                        let prefix_ref = self.prefix_stack.value_head(&self.heap).unwrap();
+                        let prefix = self.heap.resolve_string(prefix_ref).unwrap();
 
                         format!(
                             "{}{}{}",
@@ -1674,13 +1681,13 @@ impl VM {
                     match item_stack.len() {
                         0 => {
                             // Case 1: Definition list delimiter, signals the end of a definition list.
-                            return Ok(defs.reversed(&mut self.heap));
+                            return Ok(defs.reversed(&mut self.heap).into());
                         }
 
                         1 => {
                             // Case 2: Object delimiter, signals the end of an identifier record.
                             let item: RawValue = item_stack.pop().unwrap();
-                            return Ok(item);
+                            return Ok(item.into());
                         }
 
                         2 => {
@@ -1715,7 +1722,7 @@ impl VM {
                                 // Todo: Why are we throwing away the who field?
                                 item_stack.pop(); // who field
 
-                                let private_aka = {
+                                let mut private_aka = {
                                     // Scope of temporary
                                     let top_item = item_stack.last().unwrap();
                                     if self.heap[*top_item].tag == Tag::Cons {
@@ -1744,10 +1751,10 @@ impl VM {
                                         // Suppressed typename
                                         // Reverse assoc in ALIASES
                                         let mut aliases = self.aliases;
-                                        let mut alias: RawValue = NIL.into();
                                         let mut id: Option<IdentifierRecord> = None;
-                                        while !aliases.is_empty() {
-                                            alias = aliases.pop_value(&self.heap).unwrap().into();
+                                        while let Some(alias_value) = aliases.pop_value(&self.heap)
+                                        {
+                                            let alias: RawValue = alias_value.into();
                                             let inner =
                                                 IdentifierRecord::from_ref(self.heap[alias].tail); // a temporary
                                             id = Some(inner);
@@ -1782,11 +1789,11 @@ impl VM {
                                         if private_aka == Combinator::NIL.into() {
                                             // Reverse assoc in ALIASES
                                             let mut aliases = self.aliases;
-                                            let mut alias: RawValue = NIL.into();
                                             let mut id: Option<IdentifierRecord> = None;
-                                            while !aliases.is_empty() {
-                                                alias =
-                                                    aliases.pop_value(&self.heap).unwrap().into();
+                                            while let Some(alias_value) =
+                                                aliases.pop_value(&self.heap)
+                                            {
+                                                let alias: RawValue = alias_value.into();
                                                 let inner = IdentifierRecord::from_ref(
                                                     self.heap[alias].tail,
                                                 ); // a temporary
@@ -1944,11 +1951,6 @@ impl VM {
                     let tail = item_stack.pop().unwrap();
                     item_stack.push(self.heap.cons_ref(head.into(), tail.into()).into());
                 }
-
-                _ => {
-                    // This is the case that it's not a Bytecode. We handle it when we try to decode the Bytecode at the top of
-                    // this match, not here.
-                }
             } // end match on bytecode value
         }
 
@@ -1962,6 +1964,6 @@ fn next(byte_iter: &mut dyn Iterator<Item = u8>) -> Result<u8, BytecodeError> {
     match byte_iter.next() {
         Some(ch) => Ok(ch),
 
-        None => Err(BytecodeError::UnexpectedEOF),
+        None => Err(BytecodeError::unexpected_eof()),
     }
 }

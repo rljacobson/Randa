@@ -648,7 +648,7 @@ impl Heap {
 
     /// Boxes a real number (an `f64`).
     fn real(&mut self, number: f64) -> RawValue {
-        let bits = unsafe { std::mem::transmute::<f64, RawValue>(number) };
+        let bits = f64::to_bits(number) as RawValue;
         self.put(Tag::Double, Value::Data(bits).into(), Value::None.into())
     }
 
@@ -869,7 +869,7 @@ mod tests {
         // fileinfo(script,line_no)
 
         let x = heap.strcons(0, who);
-        let id_head = heap.cons(x, Value::Data(Type::Number as RawValue));
+        let id_head = heap.cons(x, Value::Data(Type::Number as RawValue).into());
         let id = heap.put(Tag::Id, id_head, value); // cons(strcons(name,who),type)
 
         let id_record = IdentifierRecord::from_ref(id.into());
