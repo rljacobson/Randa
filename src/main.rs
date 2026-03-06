@@ -20,7 +20,7 @@ fn main() {
 
   vm.announce();
 
-  // println!("\n{}", vm.options);
+  println!("\n{}", vm.options);
 }
 
 /*

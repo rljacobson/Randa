@@ -845,34 +845,32 @@ mod tests {
     #[test]
     fn composition() {
         let mut heap: Heap = Heap::new();
-        heap.strings.push(String::from("noodles"));
-        heap.strings.push(String::from("wontons"));
-        heap.strings.push(String::from("salad.ml"));
+        let noodles_ref = heap.string("noodles");
+        let _wontons_ref = heap.string("wontons");
+        let salad_ref = heap.string("salad.ml");
 
-        let x = heap.cons(
-            2, 1, // "wontons"
+        let x = heap.cons_ref(
+            Value::Data(2),
+            Value::Data(1), // "wontons"
         );
 
         let value_type =
             IdentifierHeapValueType::new(&mut heap, IdentifierValueTypeData::PlaceHolder);
 
-        let y = heap.cons(
-            value_type.get_ref().into(),
-            (Combinator::Nil as RawValue).into(),
-        );
-        let value = heap.cons(x, y); //cons(cons(arity,showfn),cons(placeholder_t,NIL))
+        let y = heap.cons_ref(value_type.get_ref().into(), Combinator::Nil.into());
+        let value = heap.cons_ref(x, y); //cons(cons(arity,showfn),cons(placeholder_t,NIL))
 
-        let aka: RawValue = heap.data_pair_ref(Value::Data(0), Value::Data(0)).into(); // Aliasing noodles.
-        let y: RawValue = heap.file_info_ref(Value::Data(2), Value::Data(328)).into(); // salad.ml
-        let who = heap.cons(aka, y);
+        let aka = heap.data_pair_ref(Value::Reference(noodles_ref), Value::Data(0)); // Aliasing noodles.
+        let y = heap.file_info_ref(Value::Reference(salad_ref), Value::Data(328)); // salad.ml
+        let who = heap.cons_ref(aka, y);
         // cons(aka,hereinfo)
         // fileinfo(script,line_no)
 
-        let x = heap.strcons(0, who);
-        let id_head = heap.cons(x, Value::Data(Type::Number as RawValue).into());
-        let id = heap.put(Tag::Id, id_head, value); // cons(strcons(name,who),type)
+        let x = heap.strcons_ref(Value::Reference(noodles_ref), who);
+        let id_head = heap.cons_ref(x, Value::Data(Type::Number as RawValue).into());
+        let id: RawValue = heap.put_ref(Tag::Id, id_head, value).into(); // cons(strcons(name,who),type)
 
-        let id_record = IdentifierRecord::from_ref(id.into());
+        let id_record = IdentifierRecord::from_ref(id);
 
         match id_record.get_data(&heap) {
             Ok(ident) => {

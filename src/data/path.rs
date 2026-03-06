@@ -29,8 +29,8 @@ pub fn path_prefix(path: &String) -> String {
 
     // Todo: Make this platform independent by using path separator.
     if let Some(idx) = path.rfind('/') {
-        // Take the part of the string up to the last '/'
-        let _ = path.split_off(idx);
+        // Take the part of the string up to and including the last '/'
+        let _ = path.split_off(idx + 1);
         path
     } else {
         "".to_string()
@@ -77,7 +77,7 @@ mod tests {
 
     #[test]
     fn path_prefix_text() {
-        let mut name = String::from("/home/rljacobson/Documents/code/miranda/main.rs");
+        let name = String::from("/home/rljacobson/Documents/code/miranda/main.rs");
         let prefix = String::from("/home/rljacobson/Documents/code/miranda/");
 
         let relative = path_prefix(&name);
