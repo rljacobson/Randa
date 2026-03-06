@@ -4,51 +4,18 @@
 
 */
 
-use std::fmt::{Display, Formatter};
-use std::error::Error;
-use std::rc::Rc;
+use std::error::Error as StdError;
+use thiserror::Error;
 
-#[derive(Clone, Debug)]
-pub enum LexError{
-  EOF,
-  BlankErr,
-  UnknownError(Rc<dyn Error>)
-}
-
-impl LexError {
-
-
-
-}
-
-impl Display for LexError {
-  fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-    match self {
-      LexError::EOF => {
-        write!(f, "encountered EOF\n")
-      }
-
-      LexError::BlankErr => {
-        write!(f, "formal text not delimited by blank line\n")
-      }
-
-      LexError::UnknownError(e) => {
-        write!(f, "unknown error: {}", e)
-      }
-    }
-  }
-}
-
-
-impl Error for LexError {
-
-}
-
-
-#[cfg(test)]
-mod tests {
-  #[test]
-  fn it_works() {
-    assert_eq!(2 + 2, 4);
-  }
+#[derive(Debug, Error)]
+pub enum LexError {
+    #[error("encountered EOF")]
+    EOF,
+    #[error("formal text not delimited by blank line")]
+    BlankErr,
+    #[error("unknown error: {source}")]
+    UnknownError {
+        #[source]
+        source: Box<dyn StdError + 'static>,
+    },
 }

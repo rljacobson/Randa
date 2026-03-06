@@ -4,47 +4,22 @@ This module needs some work.
 
 */
 
-use std::fmt::{Display, Formatter};
-use std::error::Error;
-use std::rc::Rc;
+use std::error::Error as StdError;
+use thiserror::Error;
 
-#[derive(Clone, Debug)]
+#[derive(Debug, Error)]
 pub enum LexerError {
-  EOF,
-  BlankErr,
-  UnknownError(Rc<dyn Error>)
+    #[error("encountered EOF")]
+    EOF,
+    #[error("formal text not delimited by blank line")]
+    BlankErr,
+    #[error("unknown error: {source}")]
+    UnknownError {
+        #[source]
+        source: Box<dyn StdError + 'static>,
+    },
 }
-
-impl LexerError {
-
-
-
-}
-
-impl Display for LexerError {
-  fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-    match self {
-      LexerError::EOF => {
-        write!(f, "encountered EOF\n")
-      }
-
-      LexerError::BlankErr => {
-        write!(f, "formal text not delimited by blank line\n")
-      }
-
-      LexerError::UnknownError(e) => {
-        write!(f, "unknown error: {}", e)
-      }
-    }
-  }
-}
-
-
-impl Error for LexerError {
-
-}
-
 
 pub fn emit_error(e: LexerError) {
-  println!("Error: {}", e);
+    println!("Error: {}", e);
 }

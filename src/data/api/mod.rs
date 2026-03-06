@@ -32,6 +32,7 @@ use crate::data::{RawValue, Value};
 
 pub type HeapString = String;
 pub type LineNumber = isize;
+
 /// A lightweight proxy for an object that lives on the heap.
 pub trait HeapObjectProxy: Copy + Clone {
     /// Constructs a `Self` from an existing object on the heap at `reference`.

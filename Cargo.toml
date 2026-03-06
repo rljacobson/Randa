@@ -27,6 +27,7 @@ argparse   = "0.2.2"  # Command line argument and environment variable parsing o
 gag        = "1.0.0"  # For redirecting stderr to file.
 num-traits = "0.2.15" # Conversion from repr to enum
 enum-primitive-derive = "0.2.2"  # Conversion from repr to enum
+thiserror  = "2.0.17"
 #dirs      = "4.0.0"  # For redirecting stderr to file.
 
 [dependencies.regex]

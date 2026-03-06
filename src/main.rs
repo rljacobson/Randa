@@ -9,7 +9,6 @@ mod compiler;
 mod vm;
 mod options;
 mod constants;
-mod algorithms;
 mod bytecode_parser;
 
 

@@ -44,23 +44,8 @@ for storing in vectors:
 There is a lot of overlap between other "types" (implemented as `#define`s) and `Combinator`. Why isn't `Combinator` 
 used when it could be? Why have multiple versions of "undefined"/"Empty"/"None"/"NIL"?
 
-## My own design errors
+## Implementation Challenges
 
-### Abundance of Value-like Rust types
-
-I have the types `Type`, `Combinator`, etc., that implement `Into<Value>`. Then I have the type `Value`, an enum 
-that has a variant for any data type that can live in the heap. Then there is `RawValue`, a newtype for the numeric 
-type `ValueRepresentationType`, which itself is an alias for `isize`. `RawValue`/`ValueRepresentationType` are meant 
-to be the lowest-level binary representation of data in the heap, and all `Value`s can be serialized as 
-`RawValue`/`ValueRepresentationType`. In practice, everything is convertible to a `Value`, and everything is 
-convertible to a `RawValue` and therefore a `ValueRepresentationType`. 
- 1. `RawValue` isn't enforcing any type safety if you can always just do `.into()` to convert 
-    `RawValue` <--> `ValueRepresentationType`. So `RawValue` isn't doing anything.
- 2. It's not clear which functions should take a `Value` versus a `RawValue`/`ValueRepresentationType`. Consequently,
-    `.into::<Value>()` & `.into::<RawValue>()` are used routinely even in cases where they don't make sense. For 
-    example, it's common to call `heap.cons(thing1.into::<Value>(), thing2.into::<Value>())` even for cases where it 
-    is known that one or both `thing`_j's deserializes to them wrong `Value` variant. Fortunately, it doesn't matter,
-    because `RawValue` -->`Value`-->`RawValue` is always the identity, even if the intermediate `Value` is 
-    nonsensical in context.
- 3. In the case of the higher-level API functions like `Heap::cons` and friends, the `Value` arguments are just 
-    turned right back into `RawValue`/`ValueRepresentationType` anyway. 
+Miranda implements a GC mark-and-sweep strategy that uses a combination of root lists
+and conservative stack memory scanning. Conservative scanning of stack memory is not a
+Rust-friendly implementation strategy. We will need to come up with an alternative scheme.
