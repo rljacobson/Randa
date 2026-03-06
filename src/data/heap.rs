@@ -84,9 +84,9 @@ impl Debug for Heap {
 
 impl Default for Heap {
     /// Setup and initialization of [`Heap`](crate::data::heap::Heap) occurs in
-    /// [`VM::default()`](crate::data::heap::Heap::default()),
-    /// [`VM::setup_constants()`](crate::data::heap::Heap::setup_constants()), and
-    /// [`VM::setup_standard_types()`](crate::data::heap::Heap::setup_standard_types()).
+    /// [`VM::build()`](crate::vm::VM::build()),
+    /// [`VM::setup_constants()`](crate::vm::VM::setup_constants()), and
+    /// [`VM::setup_standard_types()`](crate::vm::VM::setup_standard_types()).
     fn default() -> Self {
         let mut heap = Heap {
             // Heap limits

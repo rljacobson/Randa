@@ -29,6 +29,32 @@ pub enum BytecodeError {
     // BAD_DUMP = 4  should unsetids, possibly not an error?
     #[error("A nonexistent symbol was referenced.")]
     SymbolNotFound, // References a symbol that doesn't exist.
+    #[error("Source file not found: {path}")]
+    MissingSourceFile { path: String },
+    #[error("Unable to open source file: {path}")]
+    UnreadableSourceFile {
+        path: String,
+        #[source]
+        source: io::Error,
+    },
+    #[error("Source parsing is not yet integrated for: {path}")]
+    ParserIntegrationDeferred { path: String },
+    #[error("Source contains syntax errors: {path}")]
+    SyntaxErrorInSource { path: String },
+    #[error("Malformed export file list entry")]
+    MalformedExportFileList,
+    #[error("Illegal fileid in export list (not included in script): {path}")]
+    ExportFileNotIncludedInScript { path: String },
+    #[error("Illegal fileid in export list (ambiguous): {path}")]
+    ExportFileAmbiguous { path: String },
+    #[error("Typecheck phase found undefined names ({count})")]
+    TypecheckUndefinedNames { count: usize },
+    #[error("Export closure blocked by undefined names")]
+    ExportClosureBlockedByUndefinedNames,
+    #[error("Codegen phase requires at least one loaded file")]
+    CodegenWithoutLoadedFiles,
+    #[error("Initialization load contains unresolved errors")]
+    InitializationLoadContainsErrors,
 }
 
 impl BytecodeError {

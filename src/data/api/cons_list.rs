@@ -1,6 +1,6 @@
 /*!
 
-A cons list is a linked list of the form `cons(head, cons(r1, const(r2, ... cons(rn, nil)…)))`. A new item is added
+A cons list is a linked list of the form `cons(head, cons(r1, cons(r2, ... cons(rn, nil)…)))`. A new item is added
 to the list by consing the item with the list and updating the cons list reference to the new list. Therefore,
 `conslist.push(item)` will modify its internal reference. Likewise with `pop()`. For immutable semantics, use `head()`
 and `rest()`.

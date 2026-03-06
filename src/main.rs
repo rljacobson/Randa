@@ -2,72 +2,51 @@
 #![allow(dead_code)]
 #![feature(pattern)]
 
-
-mod errors;
-mod data;
-mod compiler;
-mod vm;
-mod options;
-mod constants;
 mod bytecode_parser;
+mod compiler;
+mod constants;
+mod data;
+mod errors;
+mod options;
+mod vm;
 
-
+use crate::errors::{emit_error, BytecodeError};
 use crate::vm::VM;
+use std::process::ExitCode;
 
-fn main() {
-
-  let mut vm: VM = VM::new();
-
-  vm.announce();
-
-  println!("\n{}", vm.options);
+fn run_startup(vm: &mut VM) -> Result<(), BytecodeError> {
+    vm.announce();
+    println!("\n{}", vm.options);
+    vm.run_startup()
 }
 
-/*
+fn startup_exit_code(result: Result<(), BytecodeError>) -> ExitCode {
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            emit_error(&err);
+            ExitCode::from(1)
+        }
+    }
+}
+
+fn main() -> ExitCode {
+    let mut vm: VM = VM::new();
+    startup_exit_code(run_startup(&mut vm))
+}
+
 #[cfg(test)]
 mod tests {
-  use logos::{Logos, Lexer as LogosLexer};
+    use super::startup_exit_code;
+    use crate::errors::BytecodeError;
+    use std::process::ExitCode;
 
-  use saucepan::Source;
-  use crate::compiler::{Token, Lexer};
-  use crate::compiler::errors::LexerError;
+    #[test]
+    fn startup_exit_code_reports_error_as_failure() {
+        let code = startup_exit_code(Err(BytecodeError::MissingSourceFile {
+            path: "missing.m".to_string(),
+        }));
 
-  #[test]
-  /// Tests the Logos lexer attached to the `Token` enum. Does not test anything in `lex.rs` at all.
-  fn lexer_test() {
-    let path = "examples/hanoi.m";
-
-    println!("Starting...");
-
-    let file_contents = std::fs::read_to_string(path).unwrap();
-    let source = Source::new(path, file_contents.as_str());
-
-    let mut lexer = Lexer::new(&source);
-
-    loop {
-      match lexer.yylex() {
-
-        Ok(Token::Error) => {
-          println!("Error Token.");
-          break;
-        }
-
-        Ok(Token::EOF) => {
-          println!("No next token.");
-          break;
-        }
-
-        Ok(token) => {
-          println!("{}", token);
-        }
-
-        Err(e) => {
-          println!("ERROR: {}", e);
-          break;
-        }
-
-      }
+        assert_eq!(code, ExitCode::from(1));
     }
-  }
 }
-*/

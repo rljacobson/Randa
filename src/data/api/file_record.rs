@@ -17,7 +17,7 @@ The "definienda" is itself a cons list of items (types, identifiers, etc.) that 
 use super::{HeapObjectProxy, HeapString};
 use crate::data::api::{ConsList, IdentifierRecord};
 use crate::data::{Combinator, Heap, RawValue, Value};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 // Todo: What should this be called? Heap file record? ScriptFile? FileWrapper?
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
@@ -43,7 +43,8 @@ impl FileRecord {
             .unwrap_or_default();
 
         let file_name = heap.string(file_name);
-        let h_file_info = heap.file_info_ref(Value::from(file_name), Value::Data(h_last_modified));
+        let h_file_info =
+            heap.file_info_ref(Value::Reference(file_name), Value::Data(h_last_modified));
         let h_share = if share {
             Combinator::True as RawValue
         } else {
@@ -64,8 +65,20 @@ impl FileRecord {
         let file_info = heap[inner_cons_ref].head;
         let file_name_ref = heap[file_info].head;
 
-        heap.resolve_string(file_name_ref.into())
+        heap.resolve_string(Value::from(file_name_ref))
             .expect("FileRecord has no file name. This is a bug.")
+    }
+
+    pub fn get_last_modified(&self, heap: &Heap) -> SystemTime {
+        let inner_cons_ref = heap[self.reference].head;
+        let file_info = heap[inner_cons_ref].head;
+        let modified_seconds = heap[file_info].tail;
+
+        if modified_seconds <= 0 {
+            UNIX_EPOCH
+        } else {
+            UNIX_EPOCH + Duration::from_secs(modified_seconds as u64)
+        }
     }
 
     pub fn get_definienda(&self, heap: &Heap) -> ConsList {
