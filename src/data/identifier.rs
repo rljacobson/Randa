@@ -9,7 +9,7 @@ use num_traits::FromPrimitive;
 
 use super::{RawValue, Type};
 use crate::compiler::HereInfo;
-use crate::data::api::{HeapString, LineNumber};
+use crate::data::api::{DataPair, HeapString, LineNumber};
 use crate::{
     data::heap::Heap,
     data::tag::Tag,
@@ -100,12 +100,12 @@ impl IdentifierDefinition {
                 // is of the form `datapair(oldn,0)`, `oldn` being a string.
                 // hereinfo := `fileinfo(script,line_no)`
                 let h_source = heap.string(source);
-                let h_aka = heap.data_pair_ref(h_source.into(), 0.into());
+                let h_aka = DataPair::new(heap, Value::Reference(h_source), 0.into());
                 let h_script = heap.string(&here_info.script_file);
                 let h_here_info =
                     heap.file_info_ref(h_script.into(), (here_info.line_number as RawValue).into());
 
-                heap.cons_ref(h_aka, h_here_info)
+                heap.cons_ref(h_aka.into(), h_here_info)
             }
         }
     }

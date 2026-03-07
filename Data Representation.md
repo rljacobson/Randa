@@ -2,6 +2,7 @@
 
 The `data` module collects things having to do with representing (encoding/decoding) _values_. Everything is stored
 on a heap. The heap holds `HeapCell`s, which have the form
+
 ```text
   ┌────────────┬──────────────────┬──────────────────┐
   │ Tag[0..31] │ HeadValue[0..63] │ TailValue[0..63] │
@@ -89,6 +90,46 @@ where
 
 <!--  ![diagram](DataRepresentation.png) -->
 
+## Shape-to-Type Map for `src/data/api/identifier_record.rs`
+
+Here’s a direct shape-to-type map for `src/data/api/identifier_record.rs`.
+
+- `ID` cell (`cons( cons(strcons(name, who), type), value )`)
+    - Whole object: `IdentifierRecordRef`
+    - `name`: no dedicated ref type here; exposed as `RawValue` via `get_name_ref`, decoded to `HeapString` via `get_name`
+    - `who`: `IdentifierDefinitionRef`
+    - identifier-level `type`: `Value` (immediate), not a proxy ref
+    - `value` field: `IdentifierValueRef` (wrapped in `Option` at `IdentifierRecordRef::get_value`)
+
+- `who` field variants (inside `IdentifierDefinitionRef`)
+    - `NIL`/undefined sentinel: still represented by `IdentifierDefinitionRef` (semantic undefined)
+    - `hereinfo` (`fileinfo(script,line)`): represented via `IdentifierDefinitionRef`, decoded through `FileInfoRef` internally
+    - `cons(aka, hereinfo)` alias form: represented via `IdentifierDefinitionRef`, with:
+        - `aka` decoded through `DataPair`
+        - `hereinfo` decoded through `FileInfoRef`
+
+- identifier `value` field variants (inside `IdentifierValueRef`)
+    - typed form `cons(cons(arity,showfn), cons(type_tag, info))`: `IdentifierValueRef::get_data` yields `IdentifierValueData::Typed`
+        - `cons(type_tag, info)` is wrapped by `IdentifierValueTypeRef`
+        - `type_tag` discriminator is `IdentifierValueTypeKind`
+        - `info` remains `Value` (constructors / source type / basis / `NIL`)
+    - undefined form (`UNDEF`/`NIL`): decoded as `IdentifierValueData::Undefined`
+    - arbitrary non-cons value: decoded as `IdentifierValueData::Arbitrary(Value)`
+
+- alias hold/core payload (used by aliasing paths, not the base ID shape)
+    - shape: `cons(id_who(old), cons(id_type(old), id_val(old)))`
+    - proxy: `IdentifierCoreRef`
+    - decoded value snapshot: `IdentifierCoreData { definition, datatype, value }`
+
+So the core reference-semantics mapping is:
+
+- `IdentifierRecordRef` ↔ top-level ID object
+- `IdentifierDefinitionRef` ↔ `who` component
+- `IdentifierValueRef` ↔ ID value component
+- `IdentifierValueTypeRef` ↔ typed-value subtype component
+- `IdentifierCoreRef` ↔ alias hold payload component
+
+And the notable non-proxy pieces are `name` and identifier-level `type`, which are exposed as `RawValue/HeapString` and `Value`, respectively.
 
 ## Types
 
@@ -122,8 +163,7 @@ NOTES:
 
 User defined types are represented by Miranda identifiers (of type `type`),
 generic types (e.g. `**`) by Miranda numbers, and compound types are
-built up with `AP` nodes, e.g. `a->b` is represented by `ap2(arrow_t,a,b)`
-Applying `bind_t` to a type variable, thus: `ap(bind_t,tv)`, indicates that
+built up with `AP` nodes, e.g. `a->b` is represented by `ap2(arrow_t,a,b)`. Applying `bind_t` to a type variable, thus: `ap(bind_t,tv)`, indicates that
 it is not to be instantiated. Applying `strict_t` to a type represents the
 '`!`' operator of algebraic type definitions.
 

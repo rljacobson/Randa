@@ -9,7 +9,7 @@ use std::fmt::{Debug, Formatter};
 use std::ops::{Index, IndexMut};
 
 use crate::constants::SIGNBIT;
-use crate::data::api::{HeapObjectProxy, IdentifierDefinitionValue, IdentifierRecord};
+use crate::data::api::{HeapObjectProxy, IdentifierDefinitionRef, IdentifierRecordRef};
 use crate::{
     compiler::Token,
     constants::INIT_SPACE,
@@ -190,14 +190,14 @@ impl Heap {
         name: &str,
         value: Value,
         data_type: T,
-    ) -> IdentifierRecord
+    ) -> IdentifierRecordRef
     where
         T: Into<Value>,
     {
-        let id_ref = IdentifierRecord::new(
+        let id_ref = IdentifierRecordRef::new(
             self,
             name.to_string(),
-            IdentifierDefinitionValue::undefined(),
+            IdentifierDefinitionRef::undefined(),
             data_type.into(),
             None, // Value to be filled in after we get a reference to this identifier.
         );
@@ -216,12 +216,12 @@ impl Heap {
 
     /// Registers `name` in the symbol table and strings list and creates a "bare bones"
     /// identifier structure on the heap for the given name, returning a reference to the heap object.
-    pub fn make_empty_identifier(&mut self, name: &str) -> IdentifierRecord {
+    pub fn make_empty_identifier(&mut self, name: &str) -> IdentifierRecordRef {
         // return self.make(ID, cons(strcons(p1, NIL), undef_t), UNDEF);
-        IdentifierRecord::new(
+        IdentifierRecordRef::new(
             self,
             name.to_string(),
-            IdentifierDefinitionValue::from_ref(0),
+            IdentifierDefinitionRef::from_ref(0),
             Type::Undefined.into(),
             None,
         )
@@ -827,7 +827,7 @@ pub(crate) fn is_capitalized(word: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::api::{IdentifierHeapValueType, IdentifierValueTypeData};
+    use crate::data::api::{IdentifierValueTypeData, IdentifierValueTypeRef};
     use crate::data::types::Type;
 
     #[test]
@@ -855,7 +855,7 @@ mod tests {
         );
 
         let value_type =
-            IdentifierHeapValueType::new(&mut heap, IdentifierValueTypeData::PlaceHolder);
+            IdentifierValueTypeRef::new(&mut heap, IdentifierValueTypeData::PlaceHolder);
 
         let y = heap.cons_ref(value_type.get_ref().into(), Combinator::Nil.into());
         let value = heap.cons_ref(x, y); //cons(cons(arity,showfn),cons(placeholder_t,NIL))
@@ -870,19 +870,10 @@ mod tests {
         let id_head = heap.cons_ref(x, Value::Data(Type::Number as RawValue).into());
         let id: RawValue = heap.put_ref(Tag::Id, id_head, value).into(); // cons(strcons(name,who),type)
 
-        let id_record = IdentifierRecord::from_ref(id);
+        let id_record = IdentifierRecordRef::from_ref(id);
 
-        match id_record.get_data(&heap) {
-            Ok(ident) => {
-                println!("Identifier:\n\t{}", ident.name);
-                // ident
-                assert!(true);
-            }
-
-            Err(_) => {
-                println!("FAILURE!");
-                assert!(false);
-            }
-        };
+        let ident = id_record.get_data(&heap);
+        println!("Identifier:\n\t{}", ident.name);
+        assert!(true);
     }
 }

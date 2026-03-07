@@ -26,10 +26,10 @@ use crate::{
     constants::{DEFAULT_SPACE, WORD_SIZE, XVERSION},
     data::{
         api::{
-            ConsList, FileRecord, HeapObjectProxy, IdentifierDefinitionValue,
-            IdentifierHeapValueData, IdentifierHeapValueType, IdentifierRecord,
-            IdentifierValueReference, IdentifierValueTypeData, IdentifierValueTypeDataSpecifier,
-            OpenFile,
+            AliasEntry, ConsList, DataPair, FileInfoRef, FileRecord, HeapObjectProxy,
+            IdentifierCoreData, IdentifierCoreRef, IdentifierDefinitionRef, IdentifierRecordRef,
+            IdentifierValueData, IdentifierValueRef, IdentifierValueTypeData,
+            IdentifierValueTypeKind, IdentifierValueTypeRef, OpenFile,
         },
         path::*,
         Combinator, Heap, RawValue, Tag, Type, Value,
@@ -103,13 +103,13 @@ pub struct VM {
     exportfiles: Value,
     exports: Value,
     fnts: Value,       // `fnts` is flag indicating %bnf in use. Treated as Value?
-    aliases: ConsList, // Not `IdentifierRecord`, because `hold` is not an `Identifier`.
-    free_ids: ConsList<IdentifierRecord>,
-    internals: ConsList<IdentifierRecord>, // list of names not exported, used by fix/unfixexports
-    idsused: ConsList<IdentifierRecord>,
-    clashes: ConsList<IdentifierRecord>,
-    suppressed: ConsList<IdentifierRecord>, // list of `-id` aliases successfully obeyed, used for error reporting
-    suppressed_t: ConsList<IdentifierRecord>, // list of -typename aliases (illegal just now)
+    aliases: ConsList, // Not `IdentifierRecordRef`, because `hold` is not an `Identifier`.
+    free_ids: ConsList<IdentifierRecordRef>,
+    internals: ConsList<IdentifierRecordRef>, // list of names not exported, used by fix/unfixexports
+    idsused: ConsList<IdentifierRecordRef>,
+    clashes: ConsList<IdentifierRecordRef>,
+    suppressed: ConsList<IdentifierRecordRef>, // list of `-id` aliases successfully obeyed, used for error reporting
+    suppressed_t: ConsList<IdentifierRecordRef>, // list of -typename aliases (illegal just now)
     ihlist: Value,
     includees: ConsList<FileRecord>,
     lasth: Value,
@@ -120,7 +120,7 @@ pub struct VM {
     ntspecmap: Value,
 
     /// A cons list of identifiers in the primitive environment.
-    primitive_environment: ConsList<IdentifierRecord>,
+    primitive_environment: ConsList<IdentifierRecordRef>,
 
     /**
     The cons list `files` is also called the environment in the Miranda source code.
@@ -143,8 +143,8 @@ pub struct VM {
 
     sui_generis_constructors: ConsList, // user defined sui-generis constructors (Miranda's SGC)
     type_abstractions: ConsList,        // cons list of abstype declarations (Miranda's TABSTR)
-    undefined_names: ConsList<IdentifierRecord>, // undefined names used in script (Miranda's ND)
-    new_type_names: ConsList<IdentifierRecord>, // newly declared type names in current code unit (Miranda's `newtyps`)
+    undefined_names: ConsList<IdentifierRecordRef>, // undefined names used in script (Miranda's ND)
+    new_type_names: ConsList<IdentifierRecordRef>, // newly declared type names in current code unit (Miranda's `newtyps`)
     algebraic_show_functions: ConsList, // show functions of algebraic types in scope (Miranda's `algshfns`)
     special_show_forms: ConsList, // all occurrences of special forms (show) encountered during type check
 
@@ -157,28 +157,28 @@ pub struct VM {
     // region Constants
     common_stdin: Value,
     common_stdinb: Value,
-    concat: IdentifierRecord,
+    concat: IdentifierRecordRef,
     cook_stdin: Value,
-    diagonalise: IdentifierRecord,
-    main_id: IdentifierRecord,
-    message: IdentifierRecord,
-    showabstract: IdentifierRecord,
-    showbool: IdentifierRecord,
-    showchar: IdentifierRecord,
-    showfunction: IdentifierRecord,
-    showlist: IdentifierRecord,
-    shownum1: IdentifierRecord,
-    showpair: IdentifierRecord,
-    showparen: IdentifierRecord,
-    showstring: IdentifierRecord,
-    showvoid: IdentifierRecord,
-    showwhat: IdentifierRecord,
+    diagonalise: IdentifierRecordRef,
+    main_id: IdentifierRecordRef,
+    message: IdentifierRecordRef,
+    showabstract: IdentifierRecordRef,
+    showbool: IdentifierRecordRef,
+    showchar: IdentifierRecordRef,
+    showfunction: IdentifierRecordRef,
+    showlist: IdentifierRecordRef,
+    shownum1: IdentifierRecordRef,
+    showpair: IdentifierRecordRef,
+    showparen: IdentifierRecordRef,
+    showstring: IdentifierRecordRef,
+    showvoid: IdentifierRecordRef,
+    showwhat: IdentifierRecordRef,
     stdout: Value,
 
     // These might be constants
-    indent_fn: IdentifierRecord,
-    listdiff_fn: IdentifierRecord,
-    outdent_fn: IdentifierRecord,
+    indent_fn: IdentifierRecordRef,
+    listdiff_fn: IdentifierRecordRef,
+    outdent_fn: IdentifierRecordRef,
 
     // Common compound types.
     numeric_function_type: Value,
@@ -191,7 +191,7 @@ pub struct VM {
     range_step_until_type: Value,
 
     pub(crate) nill: Value,
-    void_: IdentifierRecord,
+    void_: IdentifierRecordRef,
 
     // This is test-only instrumentation that captures load_file phase order so we can verify orchestration
     // branches and sequencing while parser/typecheck/codegen internals are still deferred.
@@ -255,9 +255,9 @@ impl VM {
             // region Flags and other state that lives on the heap.
             file_queue: ConsList::EMPTY,
             prefix_stack: ConsList::EMPTY,
-            listdiff_fn: IdentifierRecord::UNINITIALIZED,
-            indent_fn: IdentifierRecord::UNINITIALIZED,
-            outdent_fn: IdentifierRecord::UNINITIALIZED,
+            listdiff_fn: IdentifierRecordRef::UNINITIALIZED,
+            indent_fn: IdentifierRecordRef::UNINITIALIZED,
+            outdent_fn: IdentifierRecordRef::UNINITIALIZED,
 
             // Common compound types.
             numeric_function_type: Value::Uninitialized,
@@ -270,7 +270,7 @@ impl VM {
             range_step_until_type: Value::Uninitialized,
 
             nill: Value::Uninitialized,
-            void_: IdentifierRecord::UNINITIALIZED,
+            void_: IdentifierRecordRef::UNINITIALIZED,
 
             primitive_environment: ConsList::EMPTY,
 
@@ -310,25 +310,25 @@ impl VM {
 
             // endregion
 
-            // region Constants set to `Value::Uninitialized`/`IdentifierRecord::UNINITIALIZED`
+            // region Constants set to `Value::Uninitialized`/`IdentifierRecordRef::UNINITIALIZED`
             common_stdin: Value::Uninitialized,
             common_stdinb: Value::Uninitialized,
-            concat: IdentifierRecord::UNINITIALIZED,
+            concat: IdentifierRecordRef::UNINITIALIZED,
             cook_stdin: Value::Uninitialized,
-            diagonalise: IdentifierRecord::UNINITIALIZED,
-            main_id: IdentifierRecord::UNINITIALIZED,
-            message: IdentifierRecord::UNINITIALIZED,
-            showabstract: IdentifierRecord::UNINITIALIZED,
-            showbool: IdentifierRecord::UNINITIALIZED,
-            showchar: IdentifierRecord::UNINITIALIZED,
-            showfunction: IdentifierRecord::UNINITIALIZED,
-            showlist: IdentifierRecord::UNINITIALIZED,
-            shownum1: IdentifierRecord::UNINITIALIZED,
-            showpair: IdentifierRecord::UNINITIALIZED,
-            showparen: IdentifierRecord::UNINITIALIZED,
-            showstring: IdentifierRecord::UNINITIALIZED,
-            showvoid: IdentifierRecord::UNINITIALIZED,
-            showwhat: IdentifierRecord::UNINITIALIZED,
+            diagonalise: IdentifierRecordRef::UNINITIALIZED,
+            main_id: IdentifierRecordRef::UNINITIALIZED,
+            message: IdentifierRecordRef::UNINITIALIZED,
+            showabstract: IdentifierRecordRef::UNINITIALIZED,
+            showbool: IdentifierRecordRef::UNINITIALIZED,
+            showchar: IdentifierRecordRef::UNINITIALIZED,
+            showfunction: IdentifierRecordRef::UNINITIALIZED,
+            showlist: IdentifierRecordRef::UNINITIALIZED,
+            shownum1: IdentifierRecordRef::UNINITIALIZED,
+            showpair: IdentifierRecordRef::UNINITIALIZED,
+            showparen: IdentifierRecordRef::UNINITIALIZED,
+            showstring: IdentifierRecordRef::UNINITIALIZED,
+            showvoid: IdentifierRecordRef::UNINITIALIZED,
+            showwhat: IdentifierRecordRef::UNINITIALIZED,
             stdout: Value::Uninitialized,
             #[cfg(test)]
             last_load_phase_trace: vec![],
@@ -1008,8 +1008,11 @@ impl VM {
         })
     }
 
-    fn alfasort(&mut self, mut items: ConsList<IdentifierRecord>) -> ConsList<IdentifierRecord> {
-        let mut identifiers: Vec<IdentifierRecord> = vec![];
+    fn alfasort(
+        &mut self,
+        mut items: ConsList<IdentifierRecordRef>,
+    ) -> ConsList<IdentifierRecordRef> {
+        let mut identifiers: Vec<IdentifierRecordRef> = vec![];
         while let Some(identifier) = items.pop(&self.heap) {
             identifiers.push(identifier);
         }
@@ -1034,7 +1037,7 @@ impl VM {
         sorted
     }
 
-    fn printlist(&self, mut items: ConsList<IdentifierRecord>) -> String {
+    fn printlist(&self, mut items: ConsList<IdentifierRecordRef>) -> String {
         let mut names: Vec<String> = vec![];
         while let Some(identifier) = items.pop(&self.heap) {
             let name = self
@@ -1079,24 +1082,8 @@ impl VM {
         self.internals = ConsList::EMPTY;
     }
 
-    fn identifier_name_for_diagnostics(&self, identifier: IdentifierRecord) -> Option<String> {
-        let id_cell = self
-            .heap
-            .expect(Tag::Id, Value::from(identifier.get_ref()))
-            .ok()?;
-        let id_head_cell = self
-            .heap
-            .expect(Tag::Cons, Value::from(id_cell.head))
-            .ok()?;
-        let strcons_cell = self
-            .heap
-            .expect(Tag::StrCons, Value::from(id_head_cell.head))
-            .ok()?;
-
-        self.heap
-            .resolve_string(Value::from(strcons_cell.head))
-            .or_else(|_| self.heap.resolve_string(Value::Data(strcons_cell.head)))
-            .ok()
+    fn identifier_name_for_diagnostics(&self, identifier: IdentifierRecordRef) -> Option<String> {
+        Some(identifier.get_name(&self.heap))
     }
 
     fn hdsort(&mut self, _params: Value) -> Value {
@@ -1125,56 +1112,46 @@ impl VM {
             let mut alias_iterator = aliases; // Not technically an iterator.
 
             while !alias_iterator.is_empty() {
-                // IdentifierRecord looks like this:
+                // IdentifierRecordRef looks like this:
                 //   cons(
                 //     cons(strcons(name,who),type),
                 //     cons(cons(arity,showfn),cons(free_t,NIL))
                 //   )
                 // Entries in `aliases` look like this:
                 //   cons(new_id, old_id)
-                let alias: RawValue = alias_iterator.pop_value(&self.heap).unwrap().into();
-                let new_ref = self.heap[alias].head;
-                let old = IdentifierRecord::from_ref(self.heap[alias].tail);
-
-                let hold = {
-                    // scope of temporaries
-                    // cons(  id_who(old), cons(  id_type(old), id_val(old))  );
-                    let old_who = old.get_definition(&self.heap).unwrap();
-                    let old_type = old.get_datatype(&self.heap).unwrap();
-                    let old_val = old.get_value(&self.heap).unwrap();
-                    let old_val = match old_val {
-                        Some(value_ref) => value_ref.get_ref().into(),
-                        None => NIL,
-                    };
-                    let tl = self.heap.cons_ref(old_type, old_val);
-                    self.heap.cons_ref(old_who.into(), tl.into()).into()
-                };
+                let alias_ref: RawValue = alias_iterator.pop_value(&self.heap).unwrap().into();
+                let alias_entry = AliasEntry::from_ref(alias_ref);
+                // In Miranda, `new` may be either:
+                // - an identifier (`Tag::Id`), or
+                // - a private name/pname target (not `Tag::Id`).
+                // We always install the diversion old -> new, regardless of which case this is.
+                let new_target = alias_entry.get_new_target(&self.heap);
+                let old: IdentifierRecordRef = alias_entry.get_old_identifier_record(&self.heap);
+                let hold = IdentifierCoreRef::from_old_identifier(&mut self.heap, old);
 
                 old.set_type(&mut self.heap, Type::Alias.into());
                 // We make old an alias of new.
-                old.set_value(&mut self.heap, IdentifierValueReference::from_ref(new_ref));
+                old.set_value(&mut self.heap, new_target);
 
-                // Todo: This check suggests that `new` might not be an Identifier? Correct, `alias` is replaced by
-                //       `cons( old_who, cons(old_type, old_val) )`, the data required to undo the aliasing.
-                if self.heap[new_ref].tag == Tag::Id {
-                    let new = IdentifierRecord::from_ref(new_ref);
-                    let new_datatype = new.get_datatype(&self.heap);
-                    if (new_datatype != Ok(Type::Undefined.into())
-                        || new.get_value(&self.heap).unwrap().is_some())
-                        && new_datatype != Ok(Type::Alias.into())
+                // Name-clash detection only applies when `new` is actually an identifier.
+                if let Some(new_id) = alias_entry.get_new_identifier_record(&self.heap) {
+                    let new_datatype = new_id.get_datatype(&self.heap);
+                    if (new_datatype != Value::from(Type::Undefined)
+                        || new_id.get_value(&self.heap).is_some())
+                        && new_datatype != Value::from(Type::Alias)
                     {
                         // Insert new into self.clashes such that self.clashes remains in ascending address order.
                         // Todo: Why order these?
                         // Todo: Why is this a clash? Isn't it just an alias?
-                        self.clashes.insert_ordered(&mut self.heap, new); //add1(&mut self.heap, new, &mut self.clashes);
+                        self.clashes.insert_ordered(&mut self.heap, new_id); //add1(&mut self.heap, new, &mut self.clashes);
                     }
                 }
 
                 // Replace new_ref with hold
-                // Todo: But `hold` isn't an `IdentifierRecord`...? The alias is replaced with the info required to undo the
+                // Todo: But `hold` isn't an `IdentifierRecordRef`...? The alias is replaced with the info required to undo the
                 //       aliasing. The aliasing is undone in the event of an error. But in that case we are potentially
                 //       overwriting a previous `hold` with a "new" `hold`.
-                self.heap[alias].head = hold;
+                alias_entry.set_hold(&mut self.heap, hold);
             }
 
             if !self.clashes.is_empty() {
@@ -1189,12 +1166,25 @@ impl VM {
             // both name clash and missing aliasee, but without fix the two errors cancel each other out and are unreported
             let mut alias_iterator = aliases; // Not technically an iterator.
             while !alias_iterator.is_empty() {
-                let alias: RawValue = alias_iterator.pop_value(&self.heap).unwrap().into();
-                let ch = self.heap[alias].tail;
-                if self.heap[ch].tag == Tag::Id {
-                    let ch = IdentifierRecord::from_ref(ch);
-                    if ch.get_datatype(&self.heap) != Ok(Type::Alias.into()) {
-                        ch.set_type(&mut self.heap, Type::New.into());
+                let alias_ref: RawValue = alias_iterator.pop_value(&self.heap).unwrap().into();
+                let alias_entry = AliasEntry::from_ref(alias_ref);
+                let old = alias_entry.get_old_identifier_record(&self.heap);
+                let new_target = old.get_value(&self.heap).expect(
+                    "Old identifier is missing alias destination during obey_aliases FIX1.",
+                );
+
+                // Miranda FIX1:
+                //   if(tag[ch=id_val(old)]==ID)
+                //   if(id_type(ch)!=alias_t)
+                //      id_type(ch)=new_t;
+                //
+                // Interpretation: mark the destination identifier as `new` when it is an ID and not
+                // already an alias. This ensures subsequent missing-aliasee reporting is preserved in
+                // the pathological clash+missing case described above.
+                if self.heap[new_target.get_ref()].tag == Tag::Id {
+                    let new_id = IdentifierRecordRef::from_ref(new_target.get_ref());
+                    if new_id.get_datatype(&self.heap) != Type::Alias.into() {
+                        new_id.set_type(&mut self.heap, Type::New.into());
                     }
                 }
             } // FIX1
@@ -1460,96 +1450,110 @@ impl VM {
 
     /// Remove old to new diversions installed in `obey_aliases`. (Miranda's `unscramble()`.)
     fn unalias(&mut self, aliases: ConsList) {
+        // `aliases` contains alias entries created during load, each conceptually `cons(new, old)`.
+        // During `obey_aliases`, we mutate each alias entry so `head` becomes a temporary hold payload:
+        //
+        //   alias_entry = cons(hold, old)
+        //   hold       = cons(new, cons(old_type, old_value))
+        //
+        // where `old_who`/`old_type`/`old_value` are the pre-alias fields of `old`.
+        //
+        // This first pass mirrors C `unscramble`'s first loop:
+        // 1) restore each `old` identifier from `hold`,
+        // 2) write `new` back into `hold.head` (so second pass can inspect alias destination).
         let mut cursor = aliases;
 
         while let Some(alias_ref_value) = cursor.pop_value(&self.heap) {
             let alias_ref: RawValue = alias_ref_value.into();
-            let alias_head_ref = self.heap[alias_ref].head;
-            let old = IdentifierRecord::from_ref(self.heap[alias_head_ref].tail);
-            let old_head_ref = self.heap[old.get_ref()].head;
-            let hold = IdentifierRecord::from_ref(self.heap[old_head_ref].head);
-            let new_value: IdentifierValueReference = match old.get_value(&self.heap) {
-                Ok(Some(v)) => v,
+            let alias_entry = AliasEntry::from_ref(alias_ref);
+            let old = alias_entry.get_old_identifier_record(&self.heap);
+            let hold = alias_entry
+                .get_hold(&self.heap)
+                .expect("Alias entry is missing hold payload during unalias.");
+            // During alias installation, `old.value` was overwritten with the alias destination `new`.
+            // That value can be either an ID reference or a pname/non-ID payload.
+            let new_target: IdentifierValueRef = match old.get_value(&self.heap) {
+                Some(v) => v,
                 _ => {
                     panic! {"Impossible value found in aliases."}
                 }
             };
 
-            // Put `new_value` (which is the _value_ of `old`) where `hold` used to be. For missing check, see below.
-            self.heap[alias_head_ref].head = new_value.get_ref();
+            // C: `hd[hd[aliases]] = new`.
+            // In our representation this means writing `new` into `hold.head`.
+            // We do this before restoring `old` so pass 2 sees the final destination target.
+            alias_entry.set_hold_value(&mut self.heap, new_target);
 
-            let hold_data = hold
-                .get_data(&self.heap)
+            let restored_core = hold.get_data(&self.heap);
+            let restored_value = restored_core
+                .value
                 .expect("Impossible value found in aliases.");
-            // id_who(old)=hd[hold]; hold=tl[hold];
-            old.set_definition(&mut self.heap, hold_data.definition);
-            // id_type(old)=hd[hold];
-            old.set_type(&mut self.heap, hold_data.datatype);
-            {
-                // id_val(old)=tl[hold];
-                let v: IdentifierValueReference =
-                    hold_data.value.expect("Impossible value found in aliases.");
-                old.set_value(&mut self.heap, v);
-            }
+
+            // id_who(old)=hd[hold];
+            old.set_definition(&mut self.heap, restored_core.definition);
+            // id_type(old)=hd[tl[hold]];
+            old.set_type(&mut self.heap, restored_core.datatype);
+            // id_val(old)=tl[tl[hold]];
+            old.set_value(&mut self.heap, restored_value);
         } // end iter over `aliases`
 
-        // Now adjust self.aliases
-
-        // This accumulates missing aliases. We will replace `self.aliases` with `missing_aliases` at the end.
+        // Second pass mirrors C `unscramble`'s ALIASES loop.
+        // We rebuild `self.aliases` to contain only "missing aliasees" (`old` identifiers whose destinations
+        // cannot be resolved after rollback and suppression/clash handling).
+        // This list is consumed later by error-reporting and follow-on load logic.
         let mut missing_aliases: ConsList = ConsList::EMPTY;
 
         cursor = self.aliases;
         while !cursor.is_empty() {
-            let alias: RawValue = cursor.pop_value(&self.heap).unwrap().into();
-            let new_ref = self.heap[alias].head;
-            let old_ref = self.heap[alias].tail;
+            let alias_ref: RawValue = cursor.pop_value(&self.heap).unwrap().into();
+            let alias_entry = AliasEntry::from_ref(alias_ref);
+            let old_id = alias_entry.get_old_identifier_record(&self.heap);
+            let new_target = alias_entry.get_new_target(&self.heap);
 
-            if self.heap[new_ref].tag != Tag::Id {
-                // aka stuff irrelevant to pnames
-                // Todo: This is wrong by definition, because we only get here if tag != Tag:Id.
-                let new_id = IdentifierRecord::from_ref(new_ref);
-                if !self.suppressed.contains(&self.heap, new_id) {
-                    missing_aliases.push(&mut self.heap, new_id.get_ref())
+            if let Some(new_id) = alias_entry.get_new_identifier_record(&self.heap) {
+                // FIX1
+                if new_id.get_type(&self.heap) == Type::New.into() {
+                    new_id.set_type(&mut self.heap, Type::Undefined.into());
                 }
-                continue;
-            }
 
-            // We know `new_ref` points to an `IdentifierRecord` at this point.
-            let new_id: IdentifierRecord = IdentifierRecord::from_ref(new_ref);
+                if new_id.get_type(&self.heap) == Type::Undefined.into() {
+                    missing_aliases.push(&mut self.heap, old_id.get_ref());
+                } else if !self.clashes.contains(&self.heap, new_id) {
+                    let new_def: IdentifierDefinitionRef = new_id.get_definition(&self.heap);
+                    let new_def_data: IdentifierDefinitionData = new_def.get_data(&self.heap);
 
-            // FIX1
-            if new_id.get_type(&self.heap) == Type::New.into() {
-                new_id.set_type(&mut self.heap, Type::Undefined.into());
-            }
+                    // Install aka info in new
+                    match new_def_data {
+                        IdentifierDefinitionData::Alias { .. } => { /* pass */ }
 
-            if new_id.get_type(&self.heap) == Type::Undefined.into() {
-                // Todo: Do we know old_ref is an `IdentifierRecord`?
-                let old_id = IdentifierRecord::from_ref(old_ref);
-                missing_aliases.push(&mut self.heap, old_id.get_ref());
-            } else if !self.clashes.contains(&self.heap, new_id) {
-                let new_def: IdentifierDefinitionValue = new_id.get_definition(&self.heap).unwrap();
-                let new_def_data: IdentifierDefinitionData = new_def.get_data(&self.heap).unwrap();
-
-                // Install aka info in new
-                match new_def_data {
-                    IdentifierDefinitionData::Alias { .. } => { /* pass */ }
-
-                    // If it's not an alias
-                    _ => {
-                        // Todo: This is a complete mess.
-                        let old_head_ref = self.heap[old_ref].head;
-                        let old_tmp = self.heap[old_head_ref].head;
-                        let old_id = self.heap[old_tmp].head;
-                        // Todo: This does not look like the correct format for the who field.
-                        // id_who(new) = cons(datapair(get_id(old), 0), id_who(new));
-                        let datapair = self.heap.data_pair_ref(old_id.into(), Value::None.into());
-                        let new_who = self.heap.cons_ref(datapair, new_def.get_ref().into());
-                        new_id.set_definition(
-                            &mut self.heap,
-                            IdentifierDefinitionValue::from_ref(new_who.into()),
-                        );
+                        // If it's not an alias
+                        _ => {
+                            // C: id_who(new) = cons(datapair(get_id(old), 0), id_who(new));
+                            // The constructor encapsulates this alias-metadata shape.
+                            let aliased_definition = IdentifierDefinitionRef::from_alias_source(
+                                &mut self.heap,
+                                old_id,
+                                new_def,
+                            );
+                            new_id.set_definition(&mut self.heap, aliased_definition);
+                        }
                     }
                 }
+            } else {
+                // C: `if(tag[new] != ID) { if(!member(SUPPRESSED,new)) missing_aliases=cons(old,...); continue; }`
+                //
+                // Interpretation:
+                // - `new` is not an identifier object (typically a pname/private-name target), so we cannot
+                //   attach aka/who metadata to it.
+                // - If this non-ID target was not intentionally suppressed, the missing aliasee is `old`.
+                //
+                // `self.suppressed` currently stores these non-ID targets using `IdentifierRecordRef` wrappers,
+                // so membership checks are by raw reference equality on the wrapped `RawValue`.
+                let new_target_as_id = IdentifierRecordRef::from_ref(new_target.get_ref());
+                if !self.suppressed.contains(&self.heap, new_target_as_id) {
+                    missing_aliases.push(&mut self.heap, old_id.get_ref())
+                }
+                continue;
             }
         }
 
@@ -1664,20 +1668,18 @@ impl VM {
         // Referenced below
         // Nil lives in `Heap` (`Heap::nill`) because some `Heap` functions use it
         self.void_ = self.heap.make_empty_identifier("()");
-        IdentifierRecord::new(
+        IdentifierRecordRef::new(
             &mut self.heap,
             "()".to_string(),
-            IdentifierDefinitionValue::undefined(),
+            IdentifierDefinitionRef::undefined(),
             Type::Void.into(),
             None,
         );
         // *self.heap.id_type(self.void_) = Type::Void as RawValue;
         // *self.heap.id_val(self.void_)  = self.heap.constructor(0, self.void_).into();
         let value: Value = self.heap.constructor_ref(0, self.void_.into());
-        self.void_.set_value(
-            &mut self.heap,
-            IdentifierValueReference::from_ref(value.into()),
-        );
+        self.void_
+            .set_value(&mut self.heap, IdentifierValueRef::from_ref(value.into()));
 
         self.common_stdin = self.heap.apply_ref(Combinator::Read.into(), Value::from(0));
         self.common_stdinb = self
@@ -1751,20 +1753,20 @@ impl VM {
     /// The primdef function just creates an identifier on the heap and appends it to the primitive environment.
     fn primitive_synonym_definition(&mut self, name: &str, type_: Type) {
         // self.primdef("num"  , make_typ(0, 0, IdentifierValueType::Synonym, Type::Number), Type::Type);
-        let h_id_value_type = IdentifierHeapValueType::new(
+        let h_id_value_type = IdentifierValueTypeRef::new(
             &mut self.heap,
             IdentifierValueTypeData::Synonym { source_type: type_ },
         );
-        let h_id_value_data = IdentifierHeapValueData::Typed {
+        let h_id_value_data = IdentifierValueData::Typed {
             arity: 0,
             show_function: Value::None,
             value_type: h_id_value_type,
         };
-        let h_id_value = IdentifierValueReference::new(&mut self.heap, h_id_value_data);
-        let h_id = IdentifierRecord::new(
+        let h_id_value = IdentifierValueRef::new(&mut self.heap, h_id_value_data);
+        let h_id = IdentifierRecordRef::new(
             &mut self.heap,
             name.to_string(),
-            IdentifierDefinitionValue::undefined(),
+            IdentifierDefinitionRef::undefined(),
             Type::Type.into(),
             Some(h_id_value),
         );
@@ -1776,12 +1778,12 @@ impl VM {
     fn primitive_bool_definition(&mut self, name: &str, tv: RawValue) {
         // self.primdef("True" , Value::Data(1), Type::Bool); // accessible only to 'finger'
 
-        let h_value_data = IdentifierHeapValueData::Arbitrary(Value::Data(tv));
-        let h_value = IdentifierValueReference::new(&mut self.heap, h_value_data);
-        let h_bool_constant = IdentifierRecord::new(
+        let h_value_data = IdentifierValueData::Arbitrary(Value::Data(tv));
+        let h_value = IdentifierValueRef::new(&mut self.heap, h_value_data);
+        let h_bool_constant = IdentifierRecordRef::new(
             &mut self.heap,
             name.to_string(),
-            IdentifierDefinitionValue::undefined(),
+            IdentifierDefinitionRef::undefined(),
             Type::Bool.into(),
             Some(h_value),
         );
@@ -1840,7 +1842,7 @@ impl VM {
 
     /// Adds the item (type, identifier, etc.) to the environment, i.e. cons it onto the definienda of the first
     /// item in the `files` cons list.
-    fn add_to_environment(&mut self, item: IdentifierRecord) {
+    fn add_to_environment(&mut self, item: IdentifierRecordRef) {
         // The thread of pointers goes like this:
         //     self.files == cons(first, rest);
         //     head(self.files) == first
@@ -1970,7 +1972,9 @@ impl VM {
 
             let definienda = file.get_definienda(&self.heap);
             if !definienda.is_empty() {
-                self.unset_ids(ConsList::<IdentifierRecord>::from_ref(definienda.get_ref()))
+                self.unset_ids(ConsList::<IdentifierRecordRef>::from_ref(
+                    definienda.get_ref(),
+                ))
                 // unsetids(fil_defs(hd[files]));
             }
             file.clear_definienda(&mut self.heap); // fil_defs(hd[files]) = NIL;
@@ -1987,18 +1991,20 @@ impl VM {
                 if !definienda.is_empty() {
                     // Todo: Miranda checks that the item has Tag::Id and just continues if not.
                     //       Do we expect everything in `id_list` to be an identifier?
-                    self.unset_ids(ConsList::<IdentifierRecord>::from_ref(definienda.get_ref()))
+                    self.unset_ids(ConsList::<IdentifierRecordRef>::from_ref(
+                        definienda.get_ref(),
+                    ))
                     // unsetids(fil_defs(hd[files]));
                 }
             }
         }
     }
 
-    fn unset_ids(&mut self, mut id_list: ConsList<IdentifierRecord>) {
+    fn unset_ids(&mut self, mut id_list: ConsList<IdentifierRecordRef>) {
         while !id_list.is_empty() {
             // Todo: Miranda checks that the item has Tag::Id and just continues if not.
             //       Do we expect everything in `id_list` to be an identifier?
-            let id_record: IdentifierRecord = id_list.pop(&mut self.heap).unwrap();
+            let id_record: IdentifierRecordRef = id_list.pop(&mut self.heap).unwrap();
             id_record.unset_id(&mut self.heap);
             // should we remove from namebucket ?
         }
@@ -2008,7 +2014,7 @@ impl VM {
     /// by `DEF_X`, from the byte stream `byte_iter`.
     ///
     /// The type of the returned value has to be an opaque type, because any serializable object can be returned.
-    // Todo: Some calls to `load_defs()` assume that a cons list, or even a `ConsList<IdentifierRecord>`, is returned,
+    // Todo: Some calls to `load_defs()` assume that a cons list, or even a `ConsList<IdentifierRecordRef>`, is returned,
     //       but it's clear that there are times when the return value is not a cons list.
     //       The code in Miranda for this is a complete and total mess.
     fn load_defs(
@@ -2154,7 +2160,7 @@ impl VM {
 
                     match self.heap.symbol_table.get(name.as_str()) {
                         Some(id_ref) => {
-                            let id = IdentifierRecord::from_ref((*id_ref).into());
+                            let id = IdentifierRecordRef::from_ref((*id_ref).into());
                             let id_type = id.get_type(&self.heap);
 
                             if id_type == Type::New.into() {
@@ -2162,10 +2168,7 @@ impl VM {
                                 self.clashes.insert_ordered(&mut self.heap, id);
                             } else if id_type == Type::Alias.into() {
                                 // Follow the alias.
-                                match id
-                                    .get_value(&self.heap)
-                                    .map_err(|_| BytecodeError::MalformedDef)?
-                                {
+                                match id.get_value(&self.heap) {
                                     None => return Err(BytecodeError::MalformedDef),
                                     Some(id_value) => {
                                         item_stack.push(id_value.get_ref());
@@ -2187,14 +2190,14 @@ impl VM {
 
                 Bytecode::AKA => {
                     let name = parse_string(byte_iter)?;
-                    let id = self
+                    let id_ref = *self
                         .heap
                         .symbol_table
                         .get(name.as_str())
                         .ok_or(BytecodeError::SymbolNotFound)?;
-                    let pair = self.heap.data_pair_ref((*id).into(), Value::None.into());
+                    let pair = DataPair::new(&mut self.heap, id_ref.into(), Value::None.into());
 
-                    item_stack.push(pair.into());
+                    item_stack.push(pair.get_ref());
                 }
 
                 Bytecode::Here => {
@@ -2227,11 +2230,13 @@ impl VM {
                         }
                     };
                     let line_number = get_u16_le(byte_iter)? as usize;
-                    let file_info = self
-                        .heap
-                        .file_info_ref(file_id.into(), (line_number as RawValue).into());
+                    let file_info = FileInfoRef::new(
+                        &mut self.heap,
+                        file_id.into(),
+                        (line_number as RawValue).into(),
+                    );
 
-                    item_stack.push(file_info.into());
+                    item_stack.push(file_info.get_ref());
                 }
 
                 Bytecode::Definition => {
@@ -2285,9 +2290,9 @@ impl VM {
                                 item_stack.pop(); // Value already in top_item
                                                   // let top_item = item_stack.pop().unwrap();
 
-                                // Todo: Check that `top_item` is a reference to an `IdentifierRecord`.
-                                //       But it is gauranteed not to be an `IdentifierRecord`...
-                                let new_id = IdentifierRecord::from_ref(top_item);
+                                // Todo: Check that `top_item` is a reference to an `IdentifierRecordRef`.
+                                //       But it is gauranteed not to be an `IdentifierRecordRef`...
+                                let new_id = IdentifierRecordRef::from_ref(top_item);
                                 self.suppressed.push(&mut self.heap, new_id);
 
                                 // Todo: Why are we throwing away the who field?
@@ -2308,34 +2313,34 @@ impl VM {
 
                                 // The value of the private name
                                 let new_id_value =
-                                    IdentifierValueReference::from_ref(item_stack.pop().unwrap());
+                                    IdentifierValueRef::from_ref(item_stack.pop().unwrap());
                                 new_id.set_value(&mut self.heap, new_id_value);
 
                                 // let new_id_value_data = new_id_value.get_data(&self.heap);
-                                if let IdentifierHeapValueData::Typed { value_type, .. } =
+                                if let IdentifierValueData::Typed { value_type, .. } =
                                     new_id_value.get_data(&self.heap)
                                 {
                                     if new_id_type == Type::Type.into()
-                                        && value_type.get_numeric_type_specifier(&self.heap)
-                                            != Ok(IdentifierValueTypeDataSpecifier::Synonym)
+                                        && value_type.get_identifier_value_type_kind(&self.heap)
+                                            != IdentifierValueTypeKind::Synonym
                                     {
                                         // Suppressed typename
                                         // Reverse assoc in ALIASES
                                         let mut aliases = self.aliases;
-                                        let mut id: Option<IdentifierRecord> = None;
+                                        let mut id: Option<IdentifierRecordRef> = None;
                                         while let Some(alias_value) = aliases.pop_value(&self.heap)
                                         {
                                             let alias: RawValue = alias_value.into();
+                                            let alias_entry = AliasEntry::from_ref(alias);
                                             let inner =
-                                                IdentifierRecord::from_ref(self.heap[alias].tail); // a temporary
+                                                alias_entry.get_old_identifier_record(&self.heap); // a temporary
                                             id = Some(inner);
                                             // It's not clear if "get_value" is meant to be a get_value or if it is just a `tl[ref]`
                                             // operation.
-                                            if let Ok(Some(found_val)) = inner.get_value(&self.heap)
-                                            {
+                                            if let Some(found_val) = inner.get_value(&self.heap) {
                                                 if matches!(
                                                     found_val.get_data(&self.heap),
-                                                    IdentifierHeapValueData::Arbitrary(v)
+                                                    IdentifierValueData::Arbitrary(v)
                                                         if v == Value::from(top_item)
                                                 ) {
                                                     break;
@@ -2349,10 +2354,10 @@ impl VM {
                                         }
                                     } else if matches!(
                                         new_id.get_value(&self.heap),
-                                        Ok(Some(v))
+                                        Some(v)
                                             if matches!(
                                                 v.get_data(&self.heap),
-                                                IdentifierHeapValueData::Undefined
+                                                IdentifierValueData::Undefined
                                             )
                                     ) {
                                         // Special kludge for undefined names, necessary only if we allow names specified
@@ -2360,23 +2365,22 @@ impl VM {
                                         if private_aka == Combinator::NIL.into() {
                                             // Reverse assoc in ALIASES
                                             let mut aliases = self.aliases;
-                                            let mut id: Option<IdentifierRecord> = None;
+                                            let mut id: Option<IdentifierRecordRef> = None;
                                             while let Some(alias_value) =
                                                 aliases.pop_value(&self.heap)
                                             {
                                                 let alias: RawValue = alias_value.into();
-                                                let inner = IdentifierRecord::from_ref(
-                                                    self.heap[alias].tail,
-                                                ); // a temporary
+                                                let alias_entry = AliasEntry::from_ref(alias);
+                                                let inner = alias_entry
+                                                    .get_old_identifier_record(&self.heap); // a temporary
                                                 id = Some(inner);
                                                 // It's not clear if "get_value" is meant to be a get_value or if it is just a `tl[ref]`
                                                 // operation.
-                                                if let Ok(Some(found_val)) =
-                                                    inner.get_value(&self.heap)
+                                                if let Some(found_val) = inner.get_value(&self.heap)
                                                 {
                                                     if matches!(
                                                         found_val.get_data(&self.heap),
-                                                        IdentifierHeapValueData::Arbitrary(v)
+                                                        IdentifierValueData::Arbitrary(v)
                                                             if v == Value::from(top_item)
                                                     ) {
                                                         break;
@@ -2386,35 +2390,36 @@ impl VM {
                                             }
                                             if let Some(found_id) = id {
                                                 // Todo: Untangle what Miranda is doing here. What's the difference between `id_val` and `get_id`?
-                                                private_aka = self
-                                                    .heap
-                                                    .data_pair_ref(
-                                                        found_id.get_ref().into(),
-                                                        0.into(),
-                                                    )
-                                                    .into();
+                                                private_aka = DataPair::new(
+                                                    &mut self.heap,
+                                                    found_id.get_ref().into(),
+                                                    0.into(),
+                                                )
+                                                .get_ref();
                                             }
                                         }
                                         // this will generate sensible error message
                                         // see reduction rule for DATAPAIR
-                                        let file_info_ref = {
+                                        let file_info_ref: RawValue = {
                                             let current_file_ref =
                                                 self.heap.string(self.current_file());
-                                            self.heap
-                                                .file_info_ref(current_file_ref.into(), 0.into())
-                                                .into()
+                                            FileInfoRef::new(
+                                                &mut self.heap,
+                                                current_file_ref.into(),
+                                                0.into(),
+                                            )
+                                            .get_ref()
                                         };
                                         let applied_value: RawValue = self
                                             .heap
                                             .apply_ref(
                                                 private_aka.into(),
-                                                IdentifierValueReference::from_ref(file_info_ref)
-                                                    .into(),
+                                                IdentifierValueRef::from_ref(file_info_ref).into(),
                                             )
                                             .into();
                                         new_id.set_value(
                                             &mut self.heap,
-                                            IdentifierValueReference::from_ref(applied_value),
+                                            IdentifierValueRef::from_ref(applied_value),
                                         );
                                     }
                                     defs.push(&mut self.heap, top_item.into());
@@ -2425,7 +2430,7 @@ impl VM {
                             // Previous if gaurantees top_item is an identifier.
                             // Todo: does it?
                             top_item = *item_stack.last().unwrap();
-                            let new_id = IdentifierRecord::from_ref(top_item);
+                            let new_id = IdentifierRecordRef::from_ref(top_item);
                             let new_id_type = new_id.get_type(&self.heap);
                             // The id's type will be an immediate value (not a reference) in the cases in the if condition below.
                             // Likewise for the id's value.
@@ -2438,12 +2443,17 @@ impl VM {
                                     // cyclic aliasing
                                     let mut aliases = self.aliases;
                                     let mut alias: RawValue = NIL.into();
-                                    let mut id: Option<IdentifierRecord> = None;
+                                    let mut id: Option<IdentifierRecordRef> = None;
                                     while !aliases.is_empty() {
                                         alias = aliases.pop_value(&self.heap).unwrap().into();
-                                        id = Some(IdentifierRecord::from_ref(alias));
+                                        let alias_entry = AliasEntry::from_ref(alias);
+                                        id =
+                                            Some(alias_entry.get_old_identifier_record(&self.heap));
 
-                                        if self.heap[alias].tail == top_item {
+                                        if alias_entry.old_identifier_matches(
+                                            &self.heap,
+                                            IdentifierRecordRef::from_ref(top_item),
+                                        ) {
                                             break;
                                         }
 
@@ -2461,11 +2471,23 @@ impl VM {
                                     defs.push(&mut self.heap, top_item);
 
                                     // Manipulating the alias, not an id.
-                                    let alias_head = self.heap[alias].head;
-                                    self.heap[alias_head].head = item_stack.pop().unwrap(); // who
-                                    let alias_type_value = self.heap[alias_head].tail;
-                                    self.heap[alias_type_value].head = item_stack.pop().unwrap(); // type
-                                    self.heap[alias_type_value].tail = item_stack.pop().unwrap(); // value
+                                    let alias_entry = AliasEntry::from_ref(alias);
+                                    let definition = IdentifierDefinitionRef::from_ref(
+                                        item_stack.pop().unwrap(),
+                                    );
+                                    let datatype: Value = item_stack.pop().unwrap().into();
+                                    let value_ref = item_stack.pop().unwrap();
+                                    let value = if value_ref == Combinator::Nil.into() {
+                                        None
+                                    } else {
+                                        Some(IdentifierValueRef::from_ref(value_ref))
+                                    };
+                                    let restored_core = IdentifierCoreData {
+                                        definition,
+                                        datatype,
+                                        value,
+                                    };
+                                    alias_entry.set_cyclic_hold_data(&mut self.heap, restored_core);
                                     continue;
                                 }
 
@@ -2481,14 +2503,14 @@ impl VM {
                                                   // who
                                 new_id.set_definition(
                                     &mut self.heap,
-                                    IdentifierDefinitionValue::from_ref(item_stack.pop().unwrap()),
+                                    IdentifierDefinitionRef::from_ref(item_stack.pop().unwrap()),
                                 );
                                 // type
                                 new_id.set_type(&mut self.heap, item_stack.pop().unwrap().into());
                                 // value
                                 new_id.set_value(
                                     &mut self.heap,
-                                    IdentifierValueReference::from_ref(item_stack.pop().unwrap()),
+                                    IdentifierValueRef::from_ref(item_stack.pop().unwrap()),
                                 );
                             }
                         }
@@ -3222,24 +3244,24 @@ mod tests {
     fn alfasort_is_deterministic_for_diagnostic_identifier_lists() {
         let mut vm = VM::new_for_tests();
 
-        let zeta = IdentifierRecord::new(
+        let zeta = IdentifierRecordRef::new(
             &mut vm.heap,
             "zeta".to_string(),
-            IdentifierDefinitionValue::undefined(),
+            IdentifierDefinitionRef::undefined(),
             Type::Undefined.into(),
             None,
         );
-        let alpha = IdentifierRecord::new(
+        let alpha = IdentifierRecordRef::new(
             &mut vm.heap,
             "alpha".to_string(),
-            IdentifierDefinitionValue::undefined(),
+            IdentifierDefinitionRef::undefined(),
             Type::Undefined.into(),
             None,
         );
-        let mu = IdentifierRecord::new(
+        let mu = IdentifierRecordRef::new(
             &mut vm.heap,
             "mu".to_string(),
-            IdentifierDefinitionValue::undefined(),
+            IdentifierDefinitionRef::undefined(),
             Type::Undefined.into(),
             None,
         );
@@ -3261,24 +3283,24 @@ mod tests {
     fn printlist_formats_identifier_names_for_diagnostics() {
         let mut vm = VM::new_for_tests();
 
-        let alpha = IdentifierRecord::new(
+        let alpha = IdentifierRecordRef::new(
             &mut vm.heap,
             "alpha".to_string(),
-            IdentifierDefinitionValue::undefined(),
+            IdentifierDefinitionRef::undefined(),
             Type::Undefined.into(),
             None,
         );
-        let beta = IdentifierRecord::new(
+        let beta = IdentifierRecordRef::new(
             &mut vm.heap,
             "beta".to_string(),
-            IdentifierDefinitionValue::undefined(),
+            IdentifierDefinitionRef::undefined(),
             Type::Undefined.into(),
             None,
         );
-        let gamma = IdentifierRecord::new(
+        let gamma = IdentifierRecordRef::new(
             &mut vm.heap,
             "gamma".to_string(),
-            IdentifierDefinitionValue::undefined(),
+            IdentifierDefinitionRef::undefined(),
             Type::Undefined.into(),
             None,
         );

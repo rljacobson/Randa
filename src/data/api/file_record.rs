@@ -14,8 +14,8 @@ The "definienda" is itself a cons list of items (types, identifiers, etc.) that 
 
 */
 
-use super::{HeapObjectProxy, HeapString};
-use crate::data::api::{ConsList, IdentifierRecord};
+use super::{FileInfoRef, HeapObjectProxy, HeapString};
+use crate::data::api::{ConsList, IdentifierRecordRef};
 use crate::data::{Combinator, Heap, RawValue, Value};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -34,7 +34,7 @@ impl FileRecord {
         file_name: HeapString,
         last_modified: SystemTime,
         share: bool,
-        definienda: ConsList<IdentifierRecord>,
+        definienda: ConsList<IdentifierRecordRef>,
     ) -> Self {
         // Todo: How is mtime stored on the heap?
         let h_last_modified: RawValue = last_modified
@@ -43,15 +43,18 @@ impl FileRecord {
             .unwrap_or_default();
 
         let file_name = heap.string(file_name);
-        let h_file_info =
-            heap.file_info_ref(Value::Reference(file_name), Value::Data(h_last_modified));
+        let h_file_info = FileInfoRef::new(
+            heap,
+            Value::Reference(file_name),
+            Value::Data(h_last_modified),
+        );
         let h_share = if share {
             Combinator::True as RawValue
         } else {
             Combinator::False as RawValue
         };
 
-        let inner_cons = heap.cons_ref(h_file_info, h_share.into());
+        let inner_cons = heap.cons_ref(h_file_info.into(), h_share.into());
         let outer_cons = heap.cons_ref(inner_cons, definienda.get_ref().into());
 
         FileRecord {
@@ -60,19 +63,31 @@ impl FileRecord {
         }
     }
 
-    pub fn get_file_name(&self, heap: &Heap) -> String {
-        let inner_cons_ref = heap[self.reference].head;
-        let file_info = heap[inner_cons_ref].head;
-        let file_name_ref = heap[file_info].head;
+    /// Returns the inner header cell `cons(fileinfo, share)` for this file record.
+    fn header_cons_ref(&self, heap: &Heap) -> RawValue {
+        heap[self.reference].head
+    }
 
-        heap.resolve_string(Value::from(file_name_ref))
-            .expect("FileRecord has no file name. This is a bug.")
+    /// Returns the `fileinfo(filename, mtime)` payload for this file record.
+    pub fn get_file_info(&self, heap: &Heap) -> FileInfoRef {
+        let header_cons_ref = self.header_cons_ref(heap);
+        FileInfoRef::from_ref(heap[header_cons_ref].head)
+    }
+
+    fn definienda_value(&self, heap: &Heap) -> Value {
+        heap[self.reference].tail.into()
+    }
+
+    fn set_definienda_value(&self, heap: &mut Heap, value: Value) {
+        heap[self.reference].tail = value.into();
+    }
+
+    pub fn get_file_name(&self, heap: &Heap) -> String {
+        self.get_file_info(heap).script_file(heap)
     }
 
     pub fn get_last_modified(&self, heap: &Heap) -> SystemTime {
-        let inner_cons_ref = heap[self.reference].head;
-        let file_info = heap[inner_cons_ref].head;
-        let modified_seconds = heap[file_info].tail;
+        let modified_seconds: RawValue = self.get_file_info(heap).line_number(heap);
 
         if modified_seconds <= 0 {
             UNIX_EPOCH
@@ -83,26 +98,21 @@ impl FileRecord {
 
     pub fn get_definienda(&self, heap: &Heap) -> ConsList {
         // cons(  cons(  fileinfo(filename,mtime),  share),    definienda)
-        ConsList::from_ref(heap[self.reference].tail)
-    }
-
-    #[inline(always)]
-    pub fn set_definienda(&self, heap: &mut Heap, value: Value) {
-        heap[self.reference].tail = value.into();
+        ConsList::from_ref(self.definienda_value(heap).into())
     }
 
     /// Sets definienda to NIL
     #[inline(always)]
     pub fn clear_definienda(&self, heap: &mut Heap) {
-        heap[self.reference].tail = Combinator::Nil.into();
+        self.set_definienda_value(heap, Combinator::Nil.into());
     }
 
     #[inline(always)]
     pub fn push_item(&self, heap: &mut Heap, item: Value) {
         // Works even if definienda is NIL.
-        let definienda_tail: Value = Value::from(heap[self.reference].tail);
+        let definienda_tail: Value = self.definienda_value(heap);
         let new_list: Value = Value::from(heap.cons_ref(item, definienda_tail));
-        self.set_definienda(heap, new_list);
+        self.set_definienda_value(heap, new_list);
     }
 }
 

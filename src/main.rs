@@ -43,6 +43,7 @@ mod tests {
 
     #[test]
     fn startup_exit_code_reports_error_as_failure() {
+        println!("The following error message is expected for a passing test.");
         let code = startup_exit_code(Err(BytecodeError::MissingSourceFile {
             path: "missing.m".to_string(),
         }));

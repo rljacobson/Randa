@@ -1,29 +1,39 @@
 /*!
+This module provides a high-level API for working with heap-resident objects. It defines
+lightweight wrapper types that implement HeapObjectProxy and provide lazy accessors along with
+utilities for manipulating the underlying object on the heap. Because a proxy does not retain
+a mutable reference to the heap, most methods take such a reference as an explicit parameter.
 
-This module provides a high-level API for working with heap-resident objects. The
-API consists of wrapper structures for heap objects that provide lazy accessors and
-facilities for manipulating the object on the heap. These wrappers implement `HeapObjectProxy`.
+A HeapObjectProxy is intended to behave like a pointer to a heap object, with its methods acting like
+object->accessor() calls in C++. Proxies must therefore be lightweight and implement Copy. In general,
+implementations should avoid caching field values and instead retrieve them from the heap on each
+access. It is possible for the underlying heap object to change independently, which could silently
+invalidate a proxy. Client code must ensure that such mutations do not occur while the proxy is in use.
 
-There's a tricky issue with what data can be cached and what data needs to be looked up. The underlying data could
-conceivably be completely changed, silently invalidating a wrapper. It is up to the client code to ensure
-this doesn't happen. Think of a wrapper as a pointer to an object and the accessors as `object->accessor()` functions
-as in C++. In general, implementations should NOT cache values of members but rather look them up in the heap for
-every access.
+Within the runtime, the fallibility of proxy field accessors follows the system’s trust boundaries. Objects
+constructed through the runtime’s typed public APIs are assumed to satisfy internal invariants, so proxy accessors
+in these trusted paths should be infallible and may index directly into the heap shape. This is analogous to field
+access in a language like Rust: once a value has been constructed correctly, accessing its fields should not fail.
 
-A `HeapObjectProxy` is meant to be lightweight and must implement `Copy`.
-
-Because a wrapper does not keep a mutable reference to the heap, most methods take such a reference as a
-parameter.
-
+Heap-shape validation should instead occur at boundary ingress points—such as bytecode or input decoding—where
+untrusted data first enters the system. Within trusted runtime code, Option should represent only true
+semantic optionality (a value may legitimately be absent), not validation failures. Similarly, patterns
+like Result<_, ()> should be reserved for boundary checks rather than used in trusted proxy getters.
 */
 
+mod alias_entry;
 mod cons_list;
+mod data_pair;
+mod file_info;
 mod file_record;
 mod identifier_record;
 mod open_file;
 
 // Implementors of HeapObjectProxy (defined below)
+pub(crate) use alias_entry::AliasEntry;
 pub(crate) use cons_list::ConsList;
+pub(crate) use data_pair::DataPair;
+pub(crate) use file_info::FileInfoRef;
 pub(crate) use file_record::FileRecord;
 pub(crate) use identifier_record::*;
 pub(crate) use open_file::OpenFile;
