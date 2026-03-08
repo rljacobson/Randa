@@ -37,7 +37,7 @@ impl VM {
                     .modified()
                     // If we can't determine the time the binary was modified, be conservative and assume it
                     // was in the 1970s.
-                    .unwrap_or_else(|_| SystemTime::UNIX_EPOCH);
+                    .unwrap_or(SystemTime::UNIX_EPOCH);
 
                 if binary_modified_time < source_modified_time {
                     // Can't use the binary.
@@ -481,7 +481,7 @@ impl VM {
     /// This implementation is intentionally partial: full production of these
     /// diagnostics remains deferred to parser/type integration.
     pub(super) fn emit_unused_definition_diagnostics_partial(&mut self) {
-        if self.eprodnts != Value::from(NIL) && (self.options.verbose || self.making) {
+        if self.eprodnts != NIL && (self.options.verbose || self.making) {
             println!("warning, script contains deferred unused-definition diagnostics");
         }
 

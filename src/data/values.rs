@@ -59,13 +59,14 @@ impl From<Value> for RawValue {
 //   }
 // }
 
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Default)]
 pub enum Value {
     /// Required by parser.
     None,
     /// Required by parser.
     Uninitialized,
     /// Required by parser.
+    #[default]
     Stolen,
 
     Tag(RawValue), // 0..23, distinguished from context.
@@ -99,12 +100,6 @@ impl From<RawValue> for Value {
         } else {
             Value::Reference(v - ATOM_LIMIT)
         }
-    }
-}
-
-impl Default for Value {
-    fn default() -> Self {
-        Self::Stolen
     }
 }
 

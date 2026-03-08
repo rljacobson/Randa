@@ -12,27 +12,25 @@ space delimited value file of the form HDVE: heap space, dict size, version, edi
 //    Todo: Persist `space_limit`, `dict_space`, `version`, and `editor` in the `.mirarc` file.
 //    Todo: Figure out what `mirahdr`/`lmirahdr` is.
 
-
-
 use std::{
-  process::exit,
-  io::{BufRead, BufReader},
-  fs::OpenOptions,
   fmt::{Display, Formatter},
-  fs::File
+  fs::File,
+  fs::OpenOptions,
+  io::{BufRead, BufReader},
+  process::exit,
 };
 
 use atty::Stream;
 use gag::Redirect;
 // use dirs::data_local_dir;
 
-use argparse::{ArgumentParser, Store, StoreTrue, StoreFalse, List as StoreList, Print};
+use argparse::{ArgumentParser, List as StoreList, Print, Store, StoreFalse, StoreTrue};
 
-use crate::constants::{COMPILER_HOST_TARGET, BUILD_DATE, VERSION, XVERSION, DICT_SPACE, SPACE_LIMIT, LOG_FILE_PATH};
+use crate::constants::{
+  BUILD_DATE, COMPILER_HOST_TARGET, DICT_SPACE, LOG_FILE_PATH, SPACE_LIMIT, VERSION, XVERSION,
+};
 
 // use crate::data::heap::{DICT_SPACE, SPACE_LIMIT};
-
-
 
 pub type List = Vec<String>;
 
@@ -86,7 +84,7 @@ impl Default for Options {
       strict_if     : true,
       at_gc         : false,
       at_object     : false,
-      miralib       : std::env::var("MIRALIB").unwrap_or(String::new()),
+      miralib       : std::env::var("MIRALIB").unwrap_or_default(),
       dict_space    : DICT_SPACE,
       space_limit   : SPACE_LIMIT,
       editor        : std::env::var("EDITOR").unwrap_or("vi".to_string()),
@@ -172,7 +170,6 @@ impl Display for Options {
   }
 }
 
-
 /// Returns true iff `m` is directory with version containing our version number. If the directory contains a
 /// different version, we record it in `found_versions`.
 fn check_version(m: &str, version: i32, found_versions: &mut Vec<(String, i32)>) -> bool {
@@ -185,7 +182,7 @@ fn check_version(m: &str, version: i32, found_versions: &mut Vec<(String, i32)>)
   let mut reader = BufReader::new(f);
   let mut line: String = String::new();
 
-  if let Err(_) = reader.read_line(&mut line) {
+  if reader.read_line(&mut line).is_err() {
     return false;
   }
 
@@ -201,7 +198,7 @@ fn check_version(m: &str, version: i32, found_versions: &mut Vec<(String, i32)>)
     found_versions.push((m.to_string(), v1));
   }
 
-  return r;
+  r
 }
 
 fn find_miralib() -> String {
@@ -244,7 +241,7 @@ fn detect_utf8() -> bool {
 /// version is out of range, returns the string "???".
 pub fn make_version_string(version_number: i32) -> String {
   // Sanity check.
-  if version_number < 0 || version_number > 999999 {
+  if !(0..=999999).contains(&version_number) {
     return "???".to_string();
   }
   format!("{:.3}", version_number as f32 / 1000.0)
@@ -256,7 +253,8 @@ fn log_stderr() -> Result<Redirect<File>, ()> {
       .read(true)
       .create(true)
       .write(true)
-      .open(LOG_FILE_PATH).map_err(|_| ())?;
+      .open(LOG_FILE_PATH)
+      .map_err(|_| ())?;
   let stderr_redirect: Redirect<File> = Redirect::stderr(log).map_err(|_| ())?;
 
   Ok(stderr_redirect)
@@ -286,7 +284,6 @@ fn fixup_editor(editor: &mut String) {
         editor.push_str(" +!");
       }
     }
-
   } // end match
 
   // It is possible that a `!` was not originally or inserted in the editor name. Miranda checks to make sure the
@@ -296,7 +293,6 @@ fn fixup_editor(editor: &mut String) {
   // if editor.contains('&') {
   //   rechecking = 2;
   // }
-
 }
 
 /**
@@ -354,55 +350,58 @@ The basic action of the Miranda system is to evaluate expressions in the environ
     // endregion
     // region Standard Options
     ap.refer(&mut ops.miralib)
-        .add_option(&["--lib"], Store, "Specifies location of the miralib directory. For default see FILES. Can also \
+      .add_option(&["--lib"], Store, "Specifies location of the miralib directory. For default see FILES. Can also \
         be done by setting environment variable MIRALIB. The location of the miralib directory can be interrogated (but not changed) from within the miranda session by the command `/miralib'.")
-        .metavar("pathname");
+      .metavar("pathname");
 
     ap.refer(&mut ops.at_gc)
-        .add_option(&["--gc"], StoreTrue, "Switches on a flag causing the garbage collector to print information each\
+      .add_option(&["--gc"], StoreTrue, "Switches on a flag causing the garbage collector to print information each\
          time a garbage collection takes place. This flag can also be switched on and off from within the miranda session by the commands `/gc', `/nogc'.");
     ap.refer(&mut ops.at_count)
-        .add_option(&["--count"], StoreTrue, "Switches on a flag causing statistics to be printed after each \
+      .add_option(&["--count"], StoreTrue, "Switches on a flag causing statistics to be printed after each \
         expression evaluation. This flag can also be switched on and off from within the miranda session by the commands `/count', `/nocount'.");
     ap.refer(&mut ops.listing)
-        .add_option(&["--list"], StoreTrue, "Switches on (off) a flag causing Miranda scripts to be listed to the \
+      .add_option(&["--list"], StoreTrue, "Switches on (off) a flag causing Miranda scripts to be listed to the \
         screen during compilation. This flag can also be switched on and off from within the miranda session by the commands `/list', `/nolist'.")
-        .add_option(&["--nolist"], StoreFalse, "Switches on (off) a flag causing Miranda scripts to be listed to the \
+      .add_option(&["--nolist"], StoreFalse, "Switches on (off) a flag causing Miranda scripts to be listed to the \
         screen during compilation. This flag can also be switched on and off from within the miranda session by the commands `/list', `/nolist'.");
-    ap.refer(&mut ops.strict_if)
-        .add_option(&["--nostrictif"], StoreFalse, "Enables the compiler to accept old Miranda scripts with no `if' \
-        after the guard comma.");
+    ap.refer(&mut ops.strict_if).add_option(
+      &["--nostrictif"],
+      StoreFalse,
+      "Enables the compiler to accept old Miranda scripts with no `if' \
+        after the guard comma.",
+    );
     ap.refer(&mut ops.verbose)
-        .add_option(&["--hush"], StoreFalse, "The miranda system decides whether or not to give prompts and other \
+      .add_option(&["--hush"], StoreFalse, "The miranda system decides whether or not to give prompts and other \
         feedback by testing its standard input with `isatty'. If the standard input does not appear to be a terminal it assumes that prompts would be inappropriate, otherwise it gives them. In either case this behaviour can be overriden by an explicit flag (\"-hush\" for silence, \"-nohush\" for prompts etc). This switch is also available from within a miranda session by the commands `/hush', `/nohush'.")
-        .add_option(&["--nohush"], StoreTrue, "The miranda system decides whether or not to give prompts and other \
+      .add_option(&["--nohush"], StoreTrue, "The miranda system decides whether or not to give prompts and other \
         feedback by testing its standard input with `isatty'. If the standard input does not appear to be a terminal it assumes that prompts would be inappropriate, otherwise it gives them. In either case this behaviour can be overriden by an explicit flag (\"-hush\" for silence, \"-nohush\" for prompts etc). This switch is also available from within a miranda session by the commands `/hush', `/nohush'.");
     // endregion
     // region Memory Management and locale
     ap.refer(&mut ops.dict_space)
-        .add_option(&["--dic"], Store, "Causes the dictionary, used by the compiler to store identifiers etc., to be \
+      .add_option(&["--dic"], Store, "Causes the dictionary, used by the compiler to store identifiers etc., to be \
         SIZE bytes (default 100k). This can be interrogated (but not changed) from within the miranda session by the command `/dic'.")
-        .metavar("SIZE");
+      .metavar("SIZE");
     ap.refer(&mut ops.space_limit)
-        .add_option(&["--heap"], Store, "Causes the heap to be SIZE cells (default 2500k). This can changed within \
+      .add_option(&["--heap"], Store, "Causes the heap to be SIZE cells (default 2500k). This can changed within \
         the miranda session by the command `/heap SIZE'. A cell is 9 bytes (2 words of 32 bits, and a tag field).")
-        .metavar("SIZE");
+      .metavar("SIZE");
     ap.refer(&mut ops.editor)
-        .add_option(&["--editor"], Store, "Causes the resident editor (usual default `vi') to be prog instead. This \
+      .add_option(&["--editor"], Store, "Causes the resident editor (usual default `vi') to be prog instead. This \
         can also be done from within the miranda session by the command /editor prog. Any occurrences of ! and % in prog will be replaced by the line number and the name of the file to be edited, respectively. For more detailed discussion see online manual subsection 31/5.")
-        .metavar("program");
+      .metavar("program");
     ap.refer(&mut ops.use_utf8)
-        .add_option(&["--UTF-8"], StoreTrue,
-                    "Assume the current locale is (is not) UTF-8 overriding environment vars (version 2.044 and later).")
-        .add_option(&["--noUTF-8"], StoreFalse,
-                    "Assume the current locale is (is not) UTF-8 overriding environment vars (version 2.044 and later).");
+      .add_option(&["--UTF-8"], StoreTrue,
+                  "Assume the current locale is (is not) UTF-8 overriding environment vars (version 2.044 and later).")
+      .add_option(&["--noUTF-8"], StoreFalse,
+                  "Assume the current locale is (is not) UTF-8 overriding environment vars (version 2.044 and later).");
     // endregion
     //region Standard Environment and compiler debuging.
     ap.refer(&mut ops.no_stdenv)
-        .add_option(&["--stdenv"], StoreTrue, "Run mira without loading the standard environment. Any script needing \
+      .add_option(&["--stdenv"], StoreTrue, "Run mira without loading the standard environment. Any script needing \
         functions from <stdenv> will then have to explicitly %include <stdenv>, or define the required functions itself. Not recommended as normal practise and may have unexpected consequences.");
     ap.refer(&mut ops.at_object)
-        .add_option(&["--object"], StoreTrue, "Used for debugging the compiler. Modifies the behaviour of ?identifier\
+      .add_option(&["--object"], StoreTrue, "Used for debugging the compiler. Modifies the behaviour of ?identifier\
         (s) to show the associated combinator code, which may or may not be comprehensible as there is no documentation other than the source code.");
     // endregion
 
@@ -410,21 +409,24 @@ The basic action of the Miranda system is to evaluate expressions in the environ
     // # SPECIAL CALLS
     // "The following special calls to mira do not start a Miranda session but accomplish another purpose."
 
-    ap.refer(&mut ops.manual_only)
-        .add_option(&["--man"], StoreTrue, "Enter Miranda online manual from the UNIX shell. From within a Miranda \
-        session this is done by the command `/man' or `/m'.");
+    ap.refer(&mut ops.manual_only).add_option(
+      &["--man"],
+      StoreTrue,
+      "Enter Miranda online manual from the UNIX shell. From within a Miranda \
+        session this is done by the command `/man' or `/m'.",
+    );
     ap.refer(&mut print_version)
       .add_option(
         &["--version"],
         StoreTrue,
         "Prints version information. This information can be obtained within a Miranda session by the command `/version' or `/v'."
-    );
+      );
     ap.refer(&mut print_full_version)
       .add_option(
         &["-V"],
         StoreTrue,
         "More detailed version information. Can be obtained within a Miranda session by the command `/V'."
-    );
+      );
     // Help is supplied automagically by the `argparse` library.
     // ap.refer(&mut print_help)
     //   .add_option(
@@ -437,45 +439,52 @@ The basic action of the Miranda system is to evaluate expressions in the environ
     // region Script execution and source files
     // "The remaining special calls are discussed in more detail in the online manual - we list them here for completeness."
 
-    ap.refer(&mut ops.exec)
-        .add_option(&["--exec", "--exp"], StoreTrue, "Special call permitting the use of miranda script as a \
-        stand-alone program. See online manual subsection 31/4 for details.");
+    ap.refer(&mut ops.exec).add_option(
+      &["--exec", "--exp"],
+      StoreTrue,
+      "Special call permitting the use of miranda script as a \
+        stand-alone program. See online manual subsection 31/4 for details.",
+    );
     ap.refer(&mut exec2)
-        .add_option(&["--exec2", "--log"], StoreTrue, "As `--exec` except that it redirects stderr to a file \
+      .add_option(&["--exec2", "--log"], StoreTrue, "As `--exec` except that it redirects stderr to a file \
          log/mira.errors, if log directory exists in the current directory and mira has write permission to it.");
 
     // "These three relate to separate compilation and Miranda's built in `make' facility. See online manual section 27 (the library mechanism):-"
 
     ap.refer(&mut ops.make_file_list)
-        .add_option(&["--make"], StoreList,
-                    "Checks that all the miranda source files listed have up-to-date .x \
+      .add_option(&["--make"], StoreList,
+                  "Checks that all the miranda source files listed have up-to-date .x \
                           (intermediate code) files, triggering compilation processes if necessary.")
-        .metavar("files");
+      .metavar("files");
 
     ap.refer(&mut ops.make_exports)
-        .add_option(&["--exports"], StoreList, "Sends to stdout a list of the identifiers exported from the given \
-        miranda source files, together with their types (may force compilation if needed).")
-        .metavar("files");
+      .add_option(
+        &["--exports"],
+        StoreList,
+        "Sends to stdout a list of the identifiers exported from the given \
+        miranda source files, together with their types (may force compilation if needed).",
+      )
+      .metavar("files");
     ap.refer(&mut ops.make_sources)
-        .add_option(&["--sources"], StoreList, "Send to stdout a list of all the Miranda source files on which the \
+      .add_option(&["--sources"], StoreList, "Send to stdout a list of all the Miranda source files on which the \
         given source files directly or indirectly depend (via %include or %insert statements), excluding the standard environment <stdenv>.")
-        .metavar("files");
+      .metavar("files");
     // endregion
     // region Recheck sourcefiles, shell, and prompt
     ap.refer(&mut ops.recheck_mira)
         // .add_option(&[], StoreTrue, "If this is set to any non-empty string the Miranda system checks to see if any relevant source file has been updated, and performs any necessary recompilation, before each interaction with the user. This is the appropriate behaviour if an editor window is being kept open during the Miranda session. By default the check is performed only after `/e' commands and `!' escapes. This can also be controlled from within a Miranda session by the commands `/recheck', `/norecheck'.")
-        .envvar("RECHECKMIRA");
+      .envvar("RECHECKMIRA");
 
     ap.refer(&mut ops.shell)
         // .add_option(&[], Store,
         //             "Determines what shell is used in `!' escapes. This will normally contain the name of the user's \
         //             login shell. If no SHELL is present in the environment, /bin/sh is assumed.")
-        .envvar("SHELL");
+      .envvar("SHELL");
 
     ap.refer(&mut ops.mira_prompt)
         // .add_option(&[], Store,
         //             "Sets a string to be used as session prompt instead of the default prompt \"Miranda \" (version 2.044 and later).")
-        .envvar("MIRAPROMPT");
+      .envvar("MIRAPROMPT");
 
     // ap.refer(&mut nostrictif)
     //   .add_option(&[], Store,
@@ -490,31 +499,34 @@ The basic action of the Miranda system is to evaluate expressions in the environ
         // .add_option(&[], Store,
         //             "The program used for displaying pages of the online manual. If this variable is not set the default is normally `more -d' or (roughly equivalent) `less -EX'. If you set VIEWER to something, you may also need to set an environment variable RETURNTOMENU."
         // )
-        .envvar("VIEWER");
+      .envvar("VIEWER");
     ap.refer(&mut return_to_menu)
-       // .add_option(&[], Store, "Prevents another prompt being given after displaying each section, causing \
-       // instead an immediate return to contents page. Appropriate if VIEWER is a program that pauses for input at end of \
-       // file (e.g. `less'). It should be `NO' if VIEWER is a program that quits silently at end of file (e.g. `more -d', `less -EX').")
-       .envvar("RETURNTOMENU");
+        // .add_option(&[], Store, "Prevents another prompt being given after displaying each section, causing \
+        // instead an immediate return to contents page. Appropriate if VIEWER is a program that pauses for input at end of \
+        // file (e.g. `less'). It should be `NO' if VIEWER is a program that quits silently at end of file (e.g. `more -d', `less -EX').")
+      .envvar("RETURNTOMENU");
     ap.refer(&mut ops.menu_viewer)
         // .add_option(&[], Store,
         //             "Can be used to specify the program used to display manual contents pages (default is usually `cat' or `more')."
         // )
-        .envvar("MENUVIEWER");
+      .envvar("MENUVIEWER");
 
     // "To find the current settings of the online manual enter ??? to the "next selection" prompt of the manual system."
     // endregion
 
     // region Obsolete
-    ap.add_option(&["--log", "--exp"],
-                  Print(
-                    "mira: obsolete flag \"-exp\"/\"-log\"\nuse \"-exec\" or \"-exec2\", see manual\n".to_string()
-                  ),
-                  "Obsolete");
+    ap.add_option(
+      &["--log", "--exp"],
+      Print(
+        "mira: obsolete flag \"-exp\"/\"-log\"\nuse \"-exec\" or \"-exec2\", see manual\n"
+            .to_string(),
+      ),
+      "Obsolete",
+    );
     // endregion
 
     ap.refer(&mut ops.script)
-        .add_argument("script", Store, "The mira program takes a single argument which is the name of a file of \
+      .add_argument("script", Store, "The mira program takes a single argument which is the name of a file of \
         definitions (called a \"script\"). If no argument is given a default name \"script.m\" is assumed. The names of files containing miranda scripts must end in \".m\" and mira will add this if missing. The specified file need not yet exist - in this case you will be starting a Miranda session with an empty current script.");
 
     ap.parse_args_or_exit();
@@ -526,12 +538,17 @@ The basic action of the Miranda system is to evaluate expressions in the environ
     // }
   }
 
-
   // region Print and exit if a relevant argument was given.
   if print_version {
     println!("Version {}.", make_version_string(VERSION));
   } else if print_full_version {
-    println!("{} last revised {}\n{}\n{}", make_version_string(VERSION), BUILD_DATE, COMPILER_HOST_TARGET, XVERSION);
+    println!(
+      "{} last revised {}\n{}\n{}",
+      make_version_string(VERSION),
+      BUILD_DATE,
+      COMPILER_HOST_TARGET,
+      XVERSION
+    );
   }
 
   if print_version || print_full_version {
@@ -544,15 +561,14 @@ The basic action of the Miranda system is to evaluate expressions in the environ
   // `exec2` iff `exec` and `log_errors`
   if exec2 {
     ops.exec = true;
-    ops.stderr_redirect =
-      match log_stderr() {
-        Ok(stderr_redirect) => Some(stderr_redirect),
-        Err(_) => {
-          eprintln!("Could not redirect stderr to {}. Check that the directory exists with the correct \
+    ops.stderr_redirect = match log_stderr() {
+      Ok(stderr_redirect) => Some(stderr_redirect),
+      Err(_) => {
+        eprintln!("Could not redirect stderr to {}. Check that the directory exists with the correct \
         permissions.", LOG_FILE_PATH);
-          None
-        }
-      };
+        None
+      }
+    };
   }
 
   // region Now do any validation, default values, or whatever else is needed to form the result.
@@ -581,7 +597,10 @@ The basic action of the Miranda system is to evaluate expressions in the environ
   }
 
   // Not verbose if we are making.
-  if !ops.make_sources.is_empty() || !ops.make_exports.is_empty() || !ops.make_file_list.is_empty() {
+  if !ops.make_sources.is_empty()
+      || !ops.make_exports.is_empty()
+      || !ops.make_file_list.is_empty()
+  {
     ops.verbose = false;
   }
 
@@ -592,6 +611,4 @@ The basic action of the Miranda system is to evaluate expressions in the environ
   // Some options are acted upon immediately.
 
   ops
-
 }
-

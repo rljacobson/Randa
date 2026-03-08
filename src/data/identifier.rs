@@ -122,9 +122,9 @@ impl IdentifierDefinition {
      * `NIL` (for a name that is totally undefined)
      * `hereinfo` for a name that has been defined or specified, where `hereinfo` is `fileinfo(script,line_no)`
      * `cons(aka,hereinfo)` for a name that has been aliased, where `aka`
-         is of the form `datapair(oldn,0)`, `oldn` being a string.
+       is of the form `datapair(oldn,0)`, `oldn` being a string.
 
-     */
+    */
     pub fn get(reference: Value, heap: &Heap) -> Result<IdentifierDefinition, ()> {
         if reference == Value::Combinator(Combinator::Nil) {
             // It's not a reference but a Nil combinator, which means the variable is undefined.

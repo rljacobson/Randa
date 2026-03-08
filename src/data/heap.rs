@@ -676,7 +676,7 @@ impl Heap {
 
     /// Creates a (boxed) Unicode character.
     fn unicode(&mut self, code_point: RawValue) -> RawValue {
-        self.put(Tag::Unicode, code_point.into(), Value::None.into())
+        self.put(Tag::Unicode, code_point, Value::None.into())
     }
 
     pub fn unicode_ref(&mut self, code_point: isize) -> Value {
@@ -727,7 +727,7 @@ impl Heap {
             Err(_) => return false,
         };
 
-        return head_cell.head == type_required as RawValue;
+        head_cell.head == type_required as RawValue
     }
 
     /// Is the type referenced by reference a list type? Not only checks the type but also that the correct
@@ -738,7 +738,7 @@ impl Heap {
             Err(_) => return false,
         };
 
-        return type_cell.head == Type::List as RawValue;
+        type_cell.head == Type::List as RawValue
     }
 
     pub fn is_type_variable(&self, reference: Value) -> bool {
@@ -757,7 +757,7 @@ impl Heap {
             Err(_) => return false,
         };
 
-        return type_cell.head == Type::Bind as RawValue;
+        type_cell.head == Type::Bind as RawValue
     }
 
     fn arrow_type(&mut self, arg1: Value, arg2: Value) -> RawValue {

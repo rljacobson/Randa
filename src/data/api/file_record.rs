@@ -106,7 +106,7 @@ impl FileRecord {
     pub fn push_item(&self, heap: &mut Heap, item: Value) {
         // Works even if definienda is NIL.
         let definienda_tail: Value = self.definienda_value(heap);
-        let new_list: Value = Value::from(heap.cons_ref(item, definienda_tail));
+        let new_list: Value = heap.cons_ref(item, definienda_tail);
         self.set_definienda_value(heap, new_list);
     }
 }

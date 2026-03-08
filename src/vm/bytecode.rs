@@ -69,7 +69,7 @@ impl VM {
         private_aka: Option<DataPair>,
     ) -> IdentifierValueRef {
         let file_info_ref = self.current_file_hereinfo_zero();
-        let private_aka_value = private_aka.map_or(Combinator::NIL.into(), Value::from);
+        let private_aka_value = private_aka.map_or(Combinator::NIL, Value::from);
         let applied_ref: RawValue = self
             .heap
             .apply_ref(private_aka_value, file_info_ref.into())
@@ -416,7 +416,7 @@ impl VM {
                 } else {
                     ch as RawValue
                 };
-                item_stack.push(v.into());
+                item_stack.push(v);
                 continue;
             };
 
@@ -428,9 +428,7 @@ impl VM {
 
                 Bytecode::TypeVariable => {
                     let v = next(byte_iter)?;
-                    let type_var = self
-                        .heap
-                        .type_var_ref(Value::None.into(), (v as RawValue).into());
+                    let type_var = self.heap.type_var_ref(Value::None, (v as RawValue).into());
                     item_stack.push(type_var.into());
                 }
 
@@ -438,7 +436,7 @@ impl VM {
                 Bytecode::Short => {
                     let mut v = next(byte_iter)?;
                     if (v & 128u8) != 0 {
-                        v = v | (!127u8);
+                        v |= !127u8;
                     }
                     item_stack.push(self.heap.small_int_ref(v as RawValue).into());
                 }
@@ -527,7 +525,7 @@ impl VM {
                     let previous_value = item_stack.pop().unwrap_or(Combinator::Nil.into());
                     let new_value = self
                         .heap
-                        .start_read_vals_ref(Value::None.into(), previous_value.into());
+                        .start_read_vals_ref(Value::None, previous_value.into());
                     item_stack.push(new_value.into());
 
                     self.rv_script = true;
@@ -699,7 +697,7 @@ impl VM {
                                         );
                                     }
 
-                                    defs.push(&mut self.heap, top_item.into());
+                                    defs.push(&mut self.heap, top_item);
                                     continue;
                                 }
                             }
@@ -809,7 +807,7 @@ impl VM {
         }
 
         // Miranda returns `defs`, too.
-        return Err(BytecodeError::MalformedDef); // Miranda: "should unsetids"
+        Err(BytecodeError::MalformedDef) // Miranda: "should unsetids"
     }
 }
 

@@ -6,19 +6,18 @@ use crate::data::RawValue;
 /// bytecode-backwards-incompatible release, we are in trouble.
 pub const XVERSION: i32 = 84;
 /// Corresponds to the latest Miranda version that this version of Randa is language-level compatible with.
-pub const VERSION : i32 = 2066;
+pub const VERSION: i32 = 2066;
 
 /// The serialized bytecode representation depends on `XVERSION` and the size of a machine word on the architecture on
 /// which it was created.
-pub const WORD_SIZE: usize    = size_of::<RawValue>();
-pub const SIGNBIT  : RawValue = 1isize << (RawValue::BITS - 1);
+pub const WORD_SIZE: usize = size_of::<RawValue>();
+pub const SIGNBIT: RawValue = 1isize << (RawValue::BITS - 1);
 
 // Constants generated as compile time. They are used in `Options.rs` and reported via `/v`, `/V`, `-v`,
 // and `-V`. They are:
 //    * `COMPILER_HOST_TARGET`
 //    * `BUILD_DATE`
 include!(concat!(env!("OUT_DIR"), "/constants.rs"));
-
 
 // region Constants for heap size and GC
 
@@ -29,10 +28,10 @@ pub(crate) static DEFAULT_SPACE: usize = 2_500_000;
 /// about 6000.
 ///
 /// This value can be set manually with the `--heap` command line argument.
-pub(crate) static SPACE_LIMIT  : usize = DEFAULT_SPACE;
+pub(crate) static SPACE_LIMIT: usize = DEFAULT_SPACE;
 /// False ceiling in heap to improve paging behaviour during compilation
-pub(crate) static INIT_SPACE   : usize = 1_250_000;
-pub(crate) static BIG_TOP      : usize = SPACE_LIMIT; //+ (ATOM_LIMIT as usize);   // 2500000 + 477 = 2500477
+pub(crate) static INIT_SPACE: usize = 1_250_000;
+pub(crate) static BIG_TOP: usize = SPACE_LIMIT; //+ (ATOM_LIMIT as usize);   // 2500000 + 477 = 2500477
 
 // Todo: Is this the right home for this?
 /// Unused: Space allocated for the symbol table. Instead we grow dynamically as needed.
@@ -45,7 +44,6 @@ pub(crate) static DEFAULT_DICT_SPACE: usize = 100_000;
 pub(crate) static DICT_SPACE: usize = DEFAULT_DICT_SPACE;
 // endregion
 
-
 // region Paths
-pub(crate) static LOG_FILE_PATH: &'static str = "log/mira.errors";
+pub(crate) static LOG_FILE_PATH: &str = "log/mira.errors";
 // endregion

@@ -18,6 +18,7 @@ use crate::data::{RawValue, Value};
 
 #[derive(Copy, Clone, PartialOrd, Eq, PartialEq, Hash, Debug, Default, Primitive)]
 #[repr(isize)]
+#[allow(clippy::enum_variant_names)]
 pub enum Type {
     #[default]
     Undefined = 0, // Or Atom

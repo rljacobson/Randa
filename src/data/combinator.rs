@@ -1,7 +1,5 @@
-/*!
-
-
-
+/*
+Combinator tags and name-table mapping.
 */
 #![allow(dead_code)]
 

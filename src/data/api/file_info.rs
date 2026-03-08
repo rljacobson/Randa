@@ -38,7 +38,7 @@ impl FileInfoRef {
     pub fn line_number(&self, heap: &Heap) -> LineNumber {
         let file_info = heap[self.reference];
         debug_assert_eq!(file_info.tag, Tag::FileInfo);
-        file_info.tail.into()
+        file_info.tail
     }
 }
 

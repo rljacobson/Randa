@@ -8,7 +8,7 @@ The `name` is a reference to a heap string (see Strings below). The `who` field 
 * `NIL` (the combinator literal) for a name that is totally undefined
 * `hereinfo` for a name that has been defined or specified, where `hereinfo` is `fileinfo(script,line_no)`
 * `cons(aka,hereinfo)` for a name that has been aliased, where `aka`
-     is of the form `datapair(oldn,0)`, `oldn` being a string.
+  is of the form `datapair(oldn,0)`, `oldn` being a string.
 
 The value field (tail) of type identifier takes one of the following forms:
  * `cons(cons(arity,showfn),cons(algebraic_t,constructors)`
@@ -237,7 +237,7 @@ impl IdentifierRecordRef {
         let cons_cell = heap[id_cell.head];
         let strcons_cell = heap[cons_cell.head];
 
-        IdentifierDefinitionRef::from_ref(strcons_cell.tail.into())
+        IdentifierDefinitionRef::from_ref(strcons_cell.tail)
     }
 
     /// Fetches the identifier's data type from the heap resident structure. Note: This is not the data type in the
@@ -255,7 +255,7 @@ impl IdentifierRecordRef {
         if id_cell.tail == Combinator::Nil.into() {
             None
         } else {
-            Some(IdentifierValueRef::from_ref(id_cell.tail.into()))
+            Some(IdentifierValueRef::from_ref(id_cell.tail))
         }
     }
 
@@ -327,7 +327,7 @@ impl IdentifierRecordRef {
 
     /// An IdentifierRecordRef is "unset" if its `value` is `UNDEF`, its `who` is `NIL`, and its `type` is `undef_t`
     pub fn unset_id(&self, heap: &mut Heap) {
-        assert_eq!(heap[self.reference].tag, Tag::Id.into());
+        assert_eq!(heap[self.reference].tag, Tag::Id);
 
         self.set_value(heap, IdentifierValueRef::from_ref(Combinator::Undef.into()));
         self.set_definition(heap, IdentifierDefinitionRef::undefined());
@@ -516,30 +516,30 @@ impl HeapObjectProxy for IdentifierDefinitionRef {
 }
 
 /**
-  Miranda:
-    The value field of type identifier takes one of the following forms
+Miranda:
+The value field of type identifier takes one of the following forms
 
-  |              | Arity    | Show Functions |            | Type             | Info             |
-  | :----------- | :------- | :------------- | :--------- | :--------------- | :--------------- |
-  | `cons(cons(` | `arity,` | `showfn`       | `), cons(` | `algebraic_t,`   | `constructors )` |
-  | `cons(cons(` | `arity,` | `showfn`       | `), cons(` | `synonym_t,`     | `rhs  ))`        |
-  | `cons(cons(` | `arity,` | `showfn`       | `), cons(` | `abstract_t,`    | `basis ))`       |
-  | `cons(cons(` | `arity,` | `showfn`       | `), cons(` | `placeholder_t,` | `NIL ))`         |
-  | `cons(cons(` | `arity,` | `showfn`       | `), cons(` | `free_t,`        | `NIL ))`         |
-  | `UNDEF` |
+|              | Arity    | Show Functions |            | Type             | Info             |
+| :----------- | :------- | :------------- | :--------- | :--------------- | :--------------- |
+| `cons(cons(` | `arity,` | `showfn`       | `), cons(` | `algebraic_t,`   | `constructors )` |
+| `cons(cons(` | `arity,` | `showfn`       | `), cons(` | `synonym_t,`     | `rhs  ))`        |
+| `cons(cons(` | `arity,` | `showfn`       | `), cons(` | `abstract_t,`    | `basis ))`       |
+| `cons(cons(` | `arity,` | `showfn`       | `), cons(` | `placeholder_t,` | `NIL ))`         |
+| `cons(cons(` | `arity,` | `showfn`       | `), cons(` | `free_t,`        | `NIL ))`         |
+| `UNDEF` |
 
 
-  Note that:
+Note that:
 ```c
-    #define algebraic_t   0
-    #define synonym_t     1
-    #define abstract_t    2
-    #define placeholder_t 3
-    #define free_t        4
+#define algebraic_t   0
+#define synonym_t     1
+#define abstract_t    2
+#define placeholder_t 3
+#define free_t        4
 ```
- */
+*/
 
-// #[derive(Copy, Clone, Eq, PartialEq, Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum IdentifierValueData {
     Undefined,
     Typed {

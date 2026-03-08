@@ -8,6 +8,7 @@ use std::error::Error as StdError;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
+#[allow(clippy::upper_case_acronyms)]
 pub enum LexerError {
     #[error("encountered EOF")]
     EOF,

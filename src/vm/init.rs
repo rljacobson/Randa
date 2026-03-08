@@ -202,7 +202,7 @@ impl VM {
             Combinator::Append.into(),
             Combinator::Nil.into_value(),
         );
-        self.predefine_identifier("concat", concat.into(), Type::Undefined);
+        self.predefine_identifier("concat", concat, Type::Undefined);
         self.predefine_identifier("decode", Combinator::Decode.into(), Type::Undefined);
         self.predefine_identifier("drop", Combinator::Drop.into(), Type::Undefined);
         self.predefine_identifier("error", Combinator::Error_.into(), Type::Undefined);

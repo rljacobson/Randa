@@ -63,7 +63,7 @@ impl VM {
         while !id_list.is_empty() {
             // Todo: Miranda checks that the item has Tag::Id and just continues if not.
             //       Do we expect everything in `id_list` to be an identifier?
-            let id_record: IdentifierRecordRef = id_list.pop(&mut self.heap).unwrap();
+            let id_record: IdentifierRecordRef = id_list.pop(&self.heap).unwrap();
             id_record.unset_id(&mut self.heap);
             // should we remove from namebucket ?
         }

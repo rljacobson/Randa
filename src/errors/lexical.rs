@@ -1,13 +1,12 @@
-/*!
-
-
-
+/*
+Lexical error types.
 */
 
 use std::error::Error as StdError;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
+#[allow(clippy::upper_case_acronyms)]
 pub enum LexError {
     #[error("encountered EOF")]
     EOF,

@@ -99,7 +99,7 @@ pub(crate) fn parse_string(byte_iter: &mut dyn Iterator<Item = u8>) -> PResult<S
 
     char_vec.extend(byte_iter.take_while(|c| *c != 0));
 
-    Ok(String::from_utf8_lossy(&*char_vec).into())
+    Ok(String::from_utf8_lossy(&char_vec).into())
 }
 
 /// Interprets the next byte as a boolean value, consuming the byte.

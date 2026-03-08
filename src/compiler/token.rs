@@ -101,6 +101,7 @@ static TOKEN_STRINGS: [&str; 80] = [
 // Equivalent to `#define`s in y.tab.h
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, Logos, Primitive)]
 #[repr(i32)]
+#[allow(clippy::upper_case_acronyms)]
 pub enum Token {
     Value = 256, // = 0 + TOKEN_BASE,  // VALUE
     Eval = 257,  // = 1 + TOKEN_BASE,  // EVAL

@@ -31,10 +31,7 @@ where
     T: Clone,
 {
     fn clone(&self) -> Self {
-        Self {
-            reference: self.reference.clone(),
-            phantom_data: PhantomData,
-        }
+        *self
     }
 }
 
@@ -100,7 +97,7 @@ where
             self.reference = new_list.into();
         } else {
             // Walk to the last cons, which will be cons(last_item, NIL).
-            let mut cursor = (*self).clone();
+            let mut cursor = *self;
             let mut rest = cursor.rest_unchecked(heap);
             while !rest.is_empty() {
                 cursor = rest;
@@ -108,7 +105,7 @@ where
             }
 
             // Place item in the tail
-            let new_cons = heap.cons_ref(item.into(), Combinator::NIL.into());
+            let new_cons = heap.cons_ref(item.into(), Combinator::NIL);
             heap[cursor.reference].tail = new_cons.into();
         }
     }
@@ -157,14 +154,14 @@ where
         let item_address: RawValue = item.into();
 
         // If the list is empty, then `self == NIL`.
-        if self.is_empty() || item_address < self.raw_head_unchecked(heap).into() {
+        if self.is_empty() || item_address < self.raw_head_unchecked(heap) {
             let new_cons = heap.cons_ref(item, self.reference.into());
             self.reference = new_cons.into();
             return;
         }
 
         // First position is a special case, because the logic below only considers the next link in the list.
-        if item_address == self.raw_head_unchecked(heap).into() {
+        if item_address == self.raw_head_unchecked(heap) {
             // Item is already in the list. No duplicates allowed.
             return;
         }
@@ -172,18 +169,18 @@ where
         // Henceforth the invariant is item_address > cursor.head().
 
         // Move forward until we're at the last (nonempty) cons or at the position at which `item` should be inserted.
-        let mut cursor = (*self).clone();
+        let mut cursor = *self;
         while !cursor.rest_unchecked(heap).is_empty()
-            && item_address > cursor.rest_unchecked(heap).raw_head_unchecked(heap).into()
+            && item_address > cursor.rest_unchecked(heap).raw_head_unchecked(heap)
         {
             cursor = cursor.rest_unchecked(heap);
         }
 
         if cursor.rest_unchecked(heap).is_empty() {
-            let new_cons = heap.cons_ref(item, Combinator::NIL.into());
+            let new_cons = heap.cons_ref(item, Combinator::NIL);
             // `item` goes on the end
             heap[cursor.reference].tail = new_cons.into();
-        } else if item_address != cursor.rest_unchecked(heap).raw_head_unchecked(heap).into() {
+        } else if item_address != cursor.rest_unchecked(heap).raw_head_unchecked(heap) {
             // Item is not already in the list.
             let new_cons = heap.cons_ref(item, cursor.rest_unchecked(heap).into());
             heap[cursor.reference].tail = new_cons.into();
@@ -195,7 +192,7 @@ where
     /// Returns a shallow copy of the `ConsList` with items in reverse order.
     pub fn reversed(&self, heap: &mut Heap) -> Self {
         let mut new_list = Self::EMPTY;
-        let mut cursor: ConsList<T> = (*self).clone();
+        let mut cursor: ConsList<T> = *self;
         while let Some(hd) = cursor.raw_head(heap) {
             new_list.push_raw(heap, hd);
             cursor = cursor.rest_unchecked(heap);

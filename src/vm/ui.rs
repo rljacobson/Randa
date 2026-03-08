@@ -83,6 +83,6 @@ fn println_centered(terminal: &Option<Term>, text: &str) {
         // println!("width: {}", terminal_width);
         let centered = pad_str(text, terminal_width as usize, Alignment::Center, Some("…"));
 
-        term.write_line(&*centered).ok();
+        term.write_line(&centered).ok();
     }
 }

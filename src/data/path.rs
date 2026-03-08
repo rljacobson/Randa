@@ -24,8 +24,8 @@ Returns a string containing the part of `path` up to but excluding the final '/'
 Before calling `dump_script` or `load_script`, must `setprefix()` to that of current path name of file being
 dumped/loaded to get correct translation between internal path names (relative to dump script) and external path names.
 */
-pub fn path_prefix(path: &String) -> String {
-    let mut path = path.clone();
+pub fn path_prefix(path: &str) -> String {
+    let mut path = path.to_owned();
 
     // Todo: Make this platform independent by using path separator.
     if let Some(idx) = path.rfind('/') {
