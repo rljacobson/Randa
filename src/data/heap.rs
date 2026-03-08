@@ -57,10 +57,13 @@ pub struct Heap {
 
     data: Vec<HeapCell>,
     strings: Vec<String>,
-    /// A map from an identifier name to (a reference to) its identifier structure on the heap.
+    /// String interning map: text -> `Tag::String` heap reference.
     // Todo: Could we use the string's index in `heap.strings` for the symbol table key instead of having a second copy
     //       of the string?
     pub(crate) symbol_table: HashMap<String, Value>,
+
+    /// Identifier lookup map: name -> `Tag::Id` heap reference.
+    pub(crate) identifier_table: HashMap<String, RawValue>,
 
     /// The private environment is represented as a vector of references to items of the form `strcons(index, value)`,
     /// where `index` is the index of the item in `private_symbols`, and `value` is (a reference to) the item. This is
@@ -95,6 +98,7 @@ impl Default for Heap {
             data: Vec::with_capacity(INIT_SPACE),
             strings: vec![],
             symbol_table: HashMap::new(),
+            identifier_table: HashMap::new(),
             private_symbols: Vec::with_capacity(200), // This is the initial capacity in Miranda.
 
             nill: Value::Uninitialized,
@@ -217,6 +221,10 @@ impl Heap {
     /// Registers `name` in the symbol table and strings list and creates a "bare bones"
     /// identifier structure on the heap for the given name, returning a reference to the heap object.
     pub fn make_empty_identifier(&mut self, name: &str) -> IdentifierRecordRef {
+        if let Some(existing) = self.identifier_table.get(name) {
+            return IdentifierRecordRef::from_ref(*existing);
+        }
+
         // return self.make(ID, cons(strcons(p1, NIL), undef_t), UNDEF);
         IdentifierRecordRef::new(
             self,
@@ -225,6 +233,16 @@ impl Heap {
             Type::Undefined.into(),
             None,
         )
+    }
+
+    pub fn get_identifier(&self, name: &str) -> Option<IdentifierRecordRef> {
+        self.identifier_table
+            .get(name)
+            .map(|reference| IdentifierRecordRef::from_ref(*reference))
+    }
+
+    pub(crate) fn register_identifier_name(&mut self, name: &str, reference: RawValue) {
+        self.identifier_table.insert(name.to_string(), reference);
     }
 
     /*

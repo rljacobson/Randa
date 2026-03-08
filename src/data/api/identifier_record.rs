@@ -197,7 +197,7 @@ impl IdentifierRecordRef {
         data_type: Value,
         value: Option<IdentifierValueRef>,
     ) -> IdentifierRecordRef {
-        let h_name = heap.string(name);
+        let h_name = heap.string(name.as_str());
 
         let mut h_id_head = heap.strcons_ref(Value::Reference(h_name), definition.get_ref().into());
         h_id_head = heap.cons_ref(h_id_head, data_type);
@@ -208,6 +208,7 @@ impl IdentifierRecordRef {
         };
 
         let reference: RawValue = heap.put_ref(Tag::Id, h_id_head, h_id_tail).into();
+        heap.register_identifier_name(name.as_str(), reference);
 
         IdentifierRecordRef { reference }
     }

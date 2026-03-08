@@ -108,7 +108,7 @@ pub struct VM {
     internals: ConsList<IdentifierRecordRef>, // list of names not exported, used by fix/unfixexports
     idsused: ConsList<IdentifierRecordRef>,
     clashes: ConsList<IdentifierRecordRef>,
-    suppressed: ConsList<IdentifierRecordRef>, // list of `-id` aliases successfully obeyed, used for error reporting
+    suppressed: ConsList<IdentifierValueRef>, // list of `-id` aliases successfully obeyed (raw targets; may be non-ID)
     suppressed_t: ConsList<IdentifierRecordRef>, // list of -typename aliases (illegal just now)
     ihlist: Value,
     includees: ConsList<FileRecord>,
@@ -1099,26 +1099,30 @@ impl VM {
         self.heap.resolve_string(str_ref)
     }
 
-    /// Replace aliases with their referent
+    /// Installs load-time alias diversions (`old -> new`) before bytecode body parsing.
+    ///
+    /// C parity reference: `miralib/data.c` `load_script` alias prologue.
+    ///
+    /// High-level phases:
+    /// 1) For each alias entry `cons(new, old)`, save `old` core payload into hold,
+    ///    then mutate `old` to alias type with value `new`.
+    /// 2) Detect destination-name clashes.
+    ///    If clashes exist, rollback immediately (`unalias`) and return `NameClash`.
+    /// 3) Apply Miranda FIX1 (`new_t` marking) so the later missing-aliasee pass
+    ///    in `unalias` preserves the intended diagnostics in clash+missing edge cases.
     fn obey_aliases(&mut self, aliases: ConsList) -> Result<(), BytecodeError> {
         if !aliases.is_empty() {
             // For each `old' install diversion to `new', i.e. make the `old` identifier an alias for the `new` identifier.
             // If alias is of form `-old`, `new' is a `pname` (private name).
 
-            // ToDo: The uppercase `ALIASES` is a global in Miranda. We aren't mutating `aliases`, so the value of
-            //       `ALIASES` *should* just be the value we passed into `load_script`. Is that enough, or do we need to
-            //       make a new member `VM::aliases`? Unfortunately, I think we need a new member.
+            // C uses global `ALIASES` for follow-on paths (`unscramble`, missing-aliasee reporting,
+            // and reverse-association checks during load-def decoding). We mirror that behavior by
+            // retaining the list on `self.aliases` for later phases.
             self.aliases = aliases;
-            let mut alias_iterator = aliases; // Not technically an iterator.
+            let mut alias_iterator = aliases;
 
             while !alias_iterator.is_empty() {
-                // IdentifierRecordRef looks like this:
-                //   cons(
-                //     cons(strcons(name,who),type),
-                //     cons(cons(arity,showfn),cons(free_t,NIL))
-                //   )
-                // Entries in `aliases` look like this:
-                //   cons(new_id, old_id)
+                // Alias-list entry shape at install time: `cons(new, old)`.
                 let alias_ref: RawValue = alias_iterator.pop_value(&self.heap).unwrap().into();
                 let alias_entry = AliasEntry::from_ref(alias_ref);
                 // In Miranda, `new` may be either:
@@ -1134,30 +1138,38 @@ impl VM {
                 old.set_value(&mut self.heap, new_target);
 
                 // Name-clash detection only applies when `new` is actually an identifier.
+                // C predicate:
+                //   if (tag[new] == ID)
+                //     if ((id_type(new) != undef_t || id_val(new) != UNDEF) && id_type(new) != alias_t)
+                //       CLASHES = add1(new, CLASHES);
                 if let Some(new_id) = alias_entry.get_new_identifier_record(&self.heap) {
-                    let new_datatype = new_id.get_datatype(&self.heap);
+                    let new_datatype = new_id.get_type(&self.heap);
+                    let new_value_field = new_id.get_value_field(&self.heap);
                     if (new_datatype != Value::from(Type::Undefined)
-                        || new_id.get_value(&self.heap).is_some())
+                        || new_value_field != Combinator::Undef.into())
                         && new_datatype != Value::from(Type::Alias)
                     {
-                        // Insert new into self.clashes such that self.clashes remains in ascending address order.
-                        // Todo: Why order these?
-                        // Todo: Why is this a clash? Isn't it just an alias?
+                        // This is a clash because alias installation requires the destination to be
+                        // "not already defined" in the sense above. A defined/non-undef destination
+                        // would conflict with diverting another name to it during load.
+                        //
+                        // C uses `add1` (set-like insertion without sorted-order guarantees).
+                        // We keep stable ascending order in Rust for deterministic traversal/output;
+                        // membership semantics remain set-like.
                         self.clashes.insert_ordered(&mut self.heap, new_id); //add1(&mut self.heap, new, &mut self.clashes);
                     }
                 }
 
-                // Replace new_ref with hold
-                // Todo: But `hold` isn't an `IdentifierRecordRef`...? The alias is replaced with the info required to undo the
-                //       aliasing. The aliasing is undone in the event of an error. But in that case we are potentially
-                //       overwriting a previous `hold` with a "new" `hold`.
+                // Replace alias head (`new`) with hold payload, yielding `cons(hold, old)`.
+                // This is the write `hd[hd[a]] = hold`, used later by rollback (`unalias`/`unscramble`).
+                // `hold` is intentionally not an identifier; it is the saved pre-alias core tuple.
                 alias_entry.set_hold(&mut self.heap, hold);
             }
 
             if !self.clashes.is_empty() {
-                // Todo: I don't think `unalias` is necessary here.
+                // We unalias to restore all `old` identifiers and keep subsequent
+                // reporting/state transitions coherent.
                 self.unalias(aliases);
-                // return (NIL);
                 return Err(BytecodeError::NameClash); // BAD_DUMP = -2;
             }
 
@@ -1169,9 +1181,9 @@ impl VM {
                 let alias_ref: RawValue = alias_iterator.pop_value(&self.heap).unwrap().into();
                 let alias_entry = AliasEntry::from_ref(alias_ref);
                 let old = alias_entry.get_old_identifier_record(&self.heap);
-                let new_target = old.get_value(&self.heap).expect(
-                    "Old identifier is missing alias destination during obey_aliases FIX1.",
-                );
+                // In this phase, `old` has already been rewritten as an alias, so `id_val(old)` is
+                // the alias destination raw word (`new`) and can be ID or non-ID.
+                let new_target: RawValue = old.get_value_field(&self.heap).into();
 
                 // Miranda FIX1:
                 //   if(tag[ch=id_val(old)]==ID)
@@ -1181,8 +1193,8 @@ impl VM {
                 // Interpretation: mark the destination identifier as `new` when it is an ID and not
                 // already an alias. This ensures subsequent missing-aliasee reporting is preserved in
                 // the pathological clash+missing case described above.
-                if self.heap[new_target.get_ref()].tag == Tag::Id {
-                    let new_id = IdentifierRecordRef::from_ref(new_target.get_ref());
+                if self.heap[new_target].tag == Tag::Id {
+                    let new_id = IdentifierRecordRef::from_ref(new_target);
                     if new_id.get_datatype(&self.heap) != Type::Alias.into() {
                         new_id.set_type(&mut self.heap, Type::New.into());
                     }
@@ -1454,13 +1466,13 @@ impl VM {
         // During `obey_aliases`, we mutate each alias entry so `head` becomes a temporary hold payload:
         //
         //   alias_entry = cons(hold, old)
-        //   hold       = cons(new, cons(old_type, old_value))
+        //   hold       = cons(old_who, cons(old_type, old_value))
         //
         // where `old_who`/`old_type`/`old_value` are the pre-alias fields of `old`.
         //
         // This first pass mirrors C `unscramble`'s first loop:
         // 1) restore each `old` identifier from `hold`,
-        // 2) write `new` back into `hold.head` (so second pass can inspect alias destination).
+        // 2) write `new` back into `alias_entry.head` (so second pass sees `cons(new, old)`).
         let mut cursor = aliases;
 
         while let Some(alias_ref_value) = cursor.pop_value(&self.heap) {
@@ -1480,21 +1492,14 @@ impl VM {
             };
 
             // C: `hd[hd[aliases]] = new`.
-            // In our representation this means writing `new` into `hold.head`.
-            // We do this before restoring `old` so pass 2 sees the final destination target.
+            // In our representation this writes `new` back into `alias_entry.head`, restoring
+            // the pair shape `cons(new, old)` for pass 2 missing-target checks.
             alias_entry.set_hold_value(&mut self.heap, new_target);
 
             let restored_core = hold.get_data(&self.heap);
-            let restored_value = restored_core
-                .value
-                .expect("Impossible value found in aliases.");
 
-            // id_who(old)=hd[hold];
-            old.set_definition(&mut self.heap, restored_core.definition);
-            // id_type(old)=hd[tl[hold]];
-            old.set_type(&mut self.heap, restored_core.datatype);
-            // id_val(old)=tl[tl[hold]];
-            old.set_value(&mut self.heap, restored_value);
+            // id_who(old)=hd[hold], id_type(old)=hd[tl[hold]], id_val(old)=tl[tl[hold]]
+            old.set_core_data(&mut self.heap, restored_core);
         } // end iter over `aliases`
 
         // Second pass mirrors C `unscramble`'s ALIASES loop.
@@ -1547,10 +1552,10 @@ impl VM {
                 //   attach aka/who metadata to it.
                 // - If this non-ID target was not intentionally suppressed, the missing aliasee is `old`.
                 //
-                // `self.suppressed` currently stores these non-ID targets using `IdentifierRecordRef` wrappers,
-                // so membership checks are by raw reference equality on the wrapped `RawValue`.
-                let new_target_as_id = IdentifierRecordRef::from_ref(new_target.get_ref());
-                if !self.suppressed.contains(&self.heap, new_target_as_id) {
+                // `self.suppressed` stores destination targets as identifier-value refs because
+                // this branch is specifically `tag[new] != ID`.
+                let new_target_ref = IdentifierValueRef::from_ref(new_target.get_ref());
+                if !self.suppressed.contains(&self.heap, new_target_ref) {
                     missing_aliases.push(&mut self.heap, old_id.get_ref())
                 }
                 continue;
@@ -2158,44 +2163,36 @@ impl VM {
                 Bytecode::ID => {
                     let name: String = parse_string(byte_iter)?;
 
-                    match self.heap.symbol_table.get(name.as_str()) {
-                        Some(id_ref) => {
-                            let id = IdentifierRecordRef::from_ref((*id_ref).into());
-                            let id_type = id.get_type(&self.heap);
+                    // C `name()` behavior: look up an identifier by text, creating it if absent.
+                    let id = self
+                        .heap
+                        .get_identifier(name.as_str())
+                        .unwrap_or_else(|| self.heap.make_empty_identifier(name.as_str()));
+                    let id_type = id.get_type(&self.heap);
 
-                            if id_type == Type::New.into() {
-                                // A name collision
-                                self.clashes.insert_ordered(&mut self.heap, id);
-                            } else if id_type == Type::Alias.into() {
-                                // Follow the alias.
-                                match id.get_value(&self.heap) {
-                                    None => return Err(BytecodeError::MalformedDef),
-                                    Some(id_value) => {
-                                        item_stack.push(id_value.get_ref());
-                                    }
-                                }
-                            } else {
-                                // Can this happen?
-                                item_stack.push((*id_ref).into());
-                            }
+                    if id_type == Type::New.into() {
+                        // C FIX1 path: `new_t` marks a name-clash destination.
+                        self.clashes.insert_ordered(&mut self.heap, id);
+                        item_stack.push(NIL.into());
+                    } else if id_type == Type::Alias.into() {
+                        // Follow alias diversion (`id_val(id)`).
+                        match id.get_value(&self.heap) {
+                            None => return Err(BytecodeError::MalformedDef),
+                            Some(id_value) => item_stack.push(id_value.get_ref()),
                         }
-
-                        None => {
-                            // Create the ID
-                            let id = self.heap.make_empty_identifier(name.as_str());
-                            item_stack.push(id.get_ref())
-                        }
+                    } else {
+                        item_stack.push(id.get_ref());
                     }
                 }
 
                 Bytecode::AKA => {
                     let name = parse_string(byte_iter)?;
-                    let id_ref = *self
-                        .heap
-                        .symbol_table
-                        .get(name.as_str())
-                        .ok_or(BytecodeError::SymbolNotFound)?;
-                    let pair = DataPair::new(&mut self.heap, id_ref.into(), Value::None.into());
+                    // C: `datapair(get_id(name()), 0)`.
+                    // `name()` creates an identifier when missing, and `get_id(...)` extracts its
+                    // canonical string pointer.
+                    let _ = self.heap.make_empty_identifier(name.as_str());
+                    let name_ref = self.heap.string(name);
+                    let pair = DataPair::new(&mut self.heap, name_ref.into(), Value::None.into());
 
                     item_stack.push(pair.get_ref());
                 }
@@ -2219,20 +2216,15 @@ impl VM {
                     } else {
                         format!("/{}", parse_string(byte_iter)?)
                     };
-                    let file_id = match self.heap.symbol_table.get(file_path.as_str()) {
-                        Some(value) => value.clone(),
-                        None => {
-                            // Todo: What is the right thing to do here?
-                            self.heap
-                                .make_empty_identifier(file_path.as_str())
-                                .get_ref()
-                                .into()
-                        }
-                    };
+                    // C: `fileinfo(get_id(name()), line)`.
+                    // Keep name-table side effects (`name()`) by ensuring an identifier exists,
+                    // but store the file path as a canonical string in `FILEINFO.head`.
+                    let _ = self.heap.make_empty_identifier(file_path.as_str());
+                    let file_name_ref = self.heap.string(file_path);
                     let line_number = get_u16_le(byte_iter)? as usize;
                     let file_info = FileInfoRef::new(
                         &mut self.heap,
-                        file_id.into(),
+                        file_name_ref.into(),
                         (line_number as RawValue).into(),
                     );
 
@@ -2290,10 +2282,11 @@ impl VM {
                                 item_stack.pop(); // Value already in top_item
                                                   // let top_item = item_stack.pop().unwrap();
 
-                                // Todo: Check that `top_item` is a reference to an `IdentifierRecordRef`.
-                                //       But it is gauranteed not to be an `IdentifierRecordRef`...
-                                let new_id = IdentifierRecordRef::from_ref(top_item);
-                                self.suppressed.push(&mut self.heap, new_id);
+                                // This is the "id aliased to pname" branch (non-ID destination).
+                                // Store the raw alias target for later `SUPPRESSED` membership checks.
+                                let pname_ref = top_item;
+                                let suppressed_target = IdentifierValueRef::from_ref(top_item);
+                                self.suppressed.push(&mut self.heap, suppressed_target);
 
                                 // Todo: Why are we throwing away the who field?
                                 item_stack.pop(); // who field
@@ -2314,7 +2307,7 @@ impl VM {
                                 // The value of the private name
                                 let new_id_value =
                                     IdentifierValueRef::from_ref(item_stack.pop().unwrap());
-                                new_id.set_value(&mut self.heap, new_id_value);
+                                self.heap[pname_ref].tail = new_id_value.get_ref();
 
                                 // let new_id_value_data = new_id_value.get_data(&self.heap);
                                 if let IdentifierValueData::Typed { value_type, .. } =
@@ -2353,12 +2346,8 @@ impl VM {
                                             self.suppressed_t.push(&mut self.heap, found_id);
                                         }
                                     } else if matches!(
-                                        new_id.get_value(&self.heap),
-                                        Some(v)
-                                            if matches!(
-                                                v.get_data(&self.heap),
-                                                IdentifierValueData::Undefined
-                                            )
+                                        new_id_value.get_data(&self.heap),
+                                        IdentifierValueData::Undefined
                                     ) {
                                         // Special kludge for undefined names, necessary only if we allow names specified
                                         // but not defined to be %included.
@@ -2417,19 +2406,17 @@ impl VM {
                                                 IdentifierValueRef::from_ref(file_info_ref).into(),
                                             )
                                             .into();
-                                        new_id.set_value(
-                                            &mut self.heap,
-                                            IdentifierValueRef::from_ref(applied_value),
-                                        );
+                                        self.heap[pname_ref].tail = applied_value;
                                     }
                                     defs.push(&mut self.heap, top_item.into());
                                     continue;
                                 }
                             }
 
-                            // Previous if gaurantees top_item is an identifier.
-                            // Todo: does it?
+                            // Control reaches here only when `top_item` is `Tag::Id`:
+                            // the immediately preceding branch handles non-ID cases and `continue`s.
                             top_item = *item_stack.last().unwrap();
+                            debug_assert_eq!(self.heap[top_item].tag, Tag::Id);
                             let new_id = IdentifierRecordRef::from_ref(top_item);
                             let new_id_type = new_id.get_type(&self.heap);
                             // The id's type will be an immediate value (not a reference) in the cases in the if condition below.
