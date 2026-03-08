@@ -28,8 +28,8 @@ pub(super) fn alfasort(
 pub(super) fn printlist(heap: &Heap, mut items: ConsList<IdentifierRecordRef>) -> String {
     let mut names: Vec<String> = vec![];
     while let Some(identifier) = items.pop(heap) {
-        let name =
-            identifier_name_for_diagnostics(heap, identifier).unwrap_or_else(|| "<invalid-id>".to_string());
+        let name = identifier_name_for_diagnostics(heap, identifier)
+            .unwrap_or_else(|| "<invalid-id>".to_string());
         names.push(name);
     }
 

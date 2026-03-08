@@ -5,6 +5,13 @@ it's tempting to put all of this in `Heap`. We separate concerns by factoring ou
 manipulation, environment initialization, and compilation from generic heap functions, accessors, etc.
 
  */
+mod aliases;
+mod bytecode;
+mod diagnostics;
+mod init;
+mod load;
+mod state_reset;
+mod ui;
 
 use std::{
     fs::File,
@@ -29,7 +36,7 @@ use crate::{
             AliasEntry, ConsList, DataPair, FileInfoRef, FileRecord, HeapObjectProxy,
             IdentifierCoreData, IdentifierCoreRef, IdentifierDefinitionRef, IdentifierRecordRef,
             IdentifierValueData, IdentifierValueRef, IdentifierValueTypeData,
-            IdentifierValueTypeKind, IdentifierValueTypeRef, OpenFile,
+            IdentifierValueTypeRef, OpenFile,
         },
         path::*,
         Combinator, Heap, RawValue, Tag, Type, Value,
@@ -219,14 +226,6 @@ impl Default for VM {
 }
 
 
-mod aliases;
-mod bytecode;
-mod diagnostics;
-mod init;
-mod load;
-mod state_reset;
-mod ui;
-
 #[cfg(test)]
 mod tests;
 
@@ -358,22 +357,18 @@ impl VM {
         vm
     }
 
-
     pub fn new() -> Self {
         Self::default()
     }
-
 
     #[cfg(test)]
     pub(crate) fn new_for_tests() -> Self {
         Self::build(Options::default())
     }
 
-
     pub(crate) fn run_startup(&mut self) -> Result<(), BytecodeError> {
         self.initializing = false;
         let script = self.options.script.clone();
         self.undump(&script)
     }
-
 }

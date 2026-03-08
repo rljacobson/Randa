@@ -14,6 +14,20 @@ impl FileInfoRef {
         FileInfoRef { reference }
     }
 
+    /// Constructs `fileinfo(script_file, line_number)` from semantic parts.
+    pub fn from_script_file(
+        heap: &mut Heap,
+        script_file: HeapString,
+        line_number: LineNumber,
+    ) -> Self {
+        let script_file_ref = heap.string(script_file);
+        FileInfoRef::new(
+            heap,
+            Value::Reference(script_file_ref),
+            Value::Data(line_number as RawValue),
+        )
+    }
+
     pub fn script_file(&self, heap: &Heap) -> HeapString {
         let file_info = heap[self.reference];
         debug_assert_eq!(file_info.tag, Tag::FileInfo);

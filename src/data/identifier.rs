@@ -7,9 +7,9 @@ See [Data Representation.md](Data%20Representation.md) for details about how Ide
 // use saucepan::LineNumber;
 use num_traits::FromPrimitive;
 
-use super::{RawValue, Type};
+use super::Type;
 use crate::compiler::HereInfo;
-use crate::data::api::{DataPair, HeapString, LineNumber};
+use crate::data::api::{DataPair, FileInfoRef, HeapString, LineNumber};
 use crate::{
     data::heap::Heap,
     data::tag::Tag,
@@ -90,22 +90,26 @@ impl IdentifierDefinition {
         match self {
             IdentifierDefinition::Undefined => Combinator::Nil.into(),
 
-            IdentifierDefinition::HereInfo(here_info) => {
-                let script = heap.string(&here_info.script_file);
-                heap.file_info_ref(script.into(), (here_info.line_number as RawValue).into())
-            }
+            IdentifierDefinition::HereInfo(here_info) => FileInfoRef::from_script_file(
+                heap,
+                here_info.script_file.clone(),
+                here_info.line_number,
+            )
+            .into(),
 
             IdentifierDefinition::Alias { here_info, source } => {
                 // `cons(aka,hereinfo)` for a name that has been aliased, where `aka`
                 // is of the form `datapair(oldn,0)`, `oldn` being a string.
                 // hereinfo := `fileinfo(script,line_no)`
                 let h_source = heap.string(source);
-                let h_aka = DataPair::new(heap, Value::Reference(h_source), 0.into());
-                let h_script = heap.string(&here_info.script_file);
-                let h_here_info =
-                    heap.file_info_ref(h_script.into(), (here_info.line_number as RawValue).into());
+                let h_aka = DataPair::new(heap, Value::Reference(h_source), Value::None);
+                let h_here_info = FileInfoRef::from_script_file(
+                    heap,
+                    here_info.script_file.clone(),
+                    here_info.line_number,
+                );
 
-                heap.cons_ref(h_aka.into(), h_here_info)
+                heap.cons_ref(h_aka.into(), h_here_info.into())
             }
         }
     }

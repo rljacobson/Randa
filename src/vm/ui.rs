@@ -18,9 +18,11 @@ impl VM {
                 )
                 .as_str(),
             );
-            print!("
+            print!(
+                "
 
-"); // two lines
+"
+            ); // two lines
             println_centered(
                 &self.terminal,
                 format!(
@@ -30,9 +32,11 @@ impl VM {
                 )
                 .as_str(),
             );
-            print!("
+            print!(
+                "
 
-"); // two lines
+"
+            ); // two lines
             println_centered(
                 &self.terminal,
                 format!(
@@ -45,19 +49,29 @@ impl VM {
                 &self.terminal,
                 "The Original Miranda System Copyright Research Software Ltd 1985-2020",
             );
-            println_centered(&self.terminal, "Original Miranda System: http://miranda.org.uk");
-            print!("
+            println_centered(
+                &self.terminal,
+                "Original Miranda System: http://miranda.org.uk",
+            );
+            print!(
+                "
 
 
-"); // three lines
+"
+            ); // three lines
 
             if self.options.space_limit != DEFAULT_SPACE {
-                println!("({} cells)
-", self.options.space_limit);
+                println!(
+                    "({} cells)
+",
+                    self.options.space_limit
+                );
             }
             if !self.options.strict_if {
-                println!("(-nostrictif : deprecated!)
-");
+                println!(
+                    "(-nostrictif : deprecated!)
+"
+                );
             }
         }
     }

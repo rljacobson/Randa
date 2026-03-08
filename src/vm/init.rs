@@ -1,7 +1,6 @@
 use super::*;
 
 impl VM {
-
     pub(super) fn mira_setup(&mut self) {
         self.setup_constants();
         self.setup_standard_types();
@@ -10,7 +9,6 @@ impl VM {
         // Enters the primitive identifiers into the primitive environment. Called by "mira_setup".
         self.primlib()
     }
-
 
     /// Most of Miranda's `mira_setup()` is here.
     ///
@@ -67,7 +65,6 @@ impl VM {
         self.stdout = self.heap.constructor_ref(0, stdout_.into());
     }
 
-
     /// This is tsetup() in Miranda.
     ///
     /// Setup and initialization of [`Heap`](crate::data::heap::Heap) occurs in
@@ -105,7 +102,6 @@ impl VM {
             .arrow_type_ref(Type::Number.into(), self.range_step_type);
     }
 
-
     /// The primdef function just creates an identifier on the heap and appends it to the primitive environment.
     pub(super) fn primitive_synonym_definition(&mut self, name: &str, type_: Type) {
         // self.primdef("num"  , make_typ(0, 0, IdentifierValueType::Synonym, Type::Number), Type::Type);
@@ -130,7 +126,6 @@ impl VM {
         self.primitive_environment.push(&mut self.heap, h_id);
     }
 
-
     /// The analog of `primitive_synonym_definition` for the constants `True` and `False`
     pub(super) fn primitive_bool_definition(&mut self, name: &str, tv: RawValue) {
         // self.primdef("True" , Value::Data(1), Type::Bool); // accessible only to 'finger'
@@ -148,7 +143,6 @@ impl VM {
         self.primitive_environment
             .push(&mut self.heap, h_bool_constant);
     }
-
 
     /// Enters the primitive identifiers into the primitive environment, sets up predefined ids not referred to by
     /// `parser.y`. Called by [VM::mira_setup()].
@@ -168,7 +162,6 @@ impl VM {
         // self.primdef("False", Value::Data(0), Type::Bool);
     }
 
-
     /// Adds the item (type, identifier, etc.) to the environment, i.e. cons it onto the definienda of the first
     /// item in the `files` cons list.
     pub(super) fn add_to_environment(&mut self, item: IdentifierRecordRef) {
@@ -182,7 +175,6 @@ impl VM {
         }
     }
 
-
     /// A convenience method used by `privlib(..)` and `stdlib(..)`, see below. It creates an identifier
     /// with the given name, value, and datatype, constructing the value according to whether the name is
     /// that of a constructor (capitalized) or not, and then it adds the identifier to the environment.
@@ -194,7 +186,6 @@ impl VM {
 
         self.add_to_environment(id_ref);
     }
-
 
     // Todo: Why aren't privlib, primlib, and stdlib combined into one and/or all called at once?
     // Todo: Is it ok that some of these are identical to the ones in `stdlib(..)`?
@@ -223,7 +214,6 @@ impl VM {
         self.predefine_identifier("take", Combinator::Take.into(), Type::Undefined);
         self.predefine_identifier("tl", Combinator::Tl.into(), Type::Undefined);
     }
-
 
     /// Called when compiling `<stdenv>`. Adds some internally defined identifiers to the environment
     pub(super) fn stdlib(&mut self) {
@@ -273,5 +263,4 @@ impl VM {
         self.predefine_identifier("zip2", Combinator::Zip.into(), Type::Undefined);
         // New at release 2
     }
-
 }

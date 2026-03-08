@@ -1,16 +1,137 @@
 use super::*;
 
 impl VM {
+    /// Reverse-association lookup over active alias entries by destination payload.
+    ///
+    /// Returns the source identifier (`old`) whose current value payload matches `target`.
+    /// This mirrors Miranda's ALIASES scans used in the non-ID alias/pname load branch,
+    /// where we need to recover an originating identifier name from a destination value.
+    fn find_alias_source_id_for_target(
+        &self,
+        target: IdentifierValueRef,
+    ) -> Option<IdentifierRecordRef> {
+        let mut aliases = self.aliases;
+        while let Some(alias_value) = aliases.pop_value(&self.heap) {
+            let alias_ref: RawValue = alias_value.into();
+            let alias_entry = AliasEntry::from_ref(alias_ref);
+            let source_id = alias_entry.get_old_identifier_record(&self.heap);
+
+            if let Some(found_val) = source_id.get_value(&self.heap) {
+                if matches!(
+                    found_val.get_data(&self.heap),
+                    IdentifierValueData::Arbitrary(v) if v == Value::from(target.get_ref())
+                ) {
+                    return Some(source_id);
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Finds the alias entry whose `old` identifier is `old_identifier`.
+    ///
+    /// Used by cyclic-alias handling in `load_defs` to locate and rewrite the hold payload
+    /// for the exact alias record associated with the currently decoded identifier.
+    fn find_alias_entry_for_old_identifier(
+        &self,
+        old_identifier: IdentifierRecordRef,
+    ) -> Option<AliasEntry> {
+        let mut aliases = self.aliases;
+        while let Some(alias_value) = aliases.pop_value(&self.heap) {
+            let alias_ref: RawValue = alias_value.into();
+            let alias_entry = AliasEntry::from_ref(alias_ref);
+            if alias_entry.old_identifier_matches(&self.heap, old_identifier) {
+                return Some(alias_entry);
+            }
+        }
+
+        None
+    }
+
+    /// Builds `fileinfo(current_file, 0)` for alias-error fallback application payloads.
+    ///
+    /// In the non-ID alias/pname load path, when an aliased destination remains undefined,
+    /// Miranda applies the alias metadata to a neutral location marker so downstream DATAPAIR/
+    /// application reduction can still produce a sensible diagnostic anchored to the current
+    /// script, even when no precise source line is available at this decode stage.
+    fn current_file_hereinfo_zero(&mut self) -> FileInfoRef {
+        let current_file = self.current_file();
+        FileInfoRef::from_script_file(&mut self.heap, current_file, 0)
+    }
+
+    /// Applies alias metadata to a neutral current-file location marker.
+    ///
+    /// Used in the non-ID alias/pname undefined-name fallback so reduction can report
+    /// a coherent DATAPAIR/application diagnostic even when decode-time line precision is unavailable.
+    fn apply_alias_fallback_hereinfo(
+        &mut self,
+        private_aka: Option<DataPair>,
+    ) -> IdentifierValueRef {
+        let file_info_ref = self.current_file_hereinfo_zero();
+        let private_aka_value = private_aka.map_or(Combinator::NIL.into(), Value::from);
+        let applied_ref: RawValue = self
+            .heap
+            .apply_ref(private_aka_value, file_info_ref.into())
+            .into();
+        IdentifierValueRef::from_ref(applied_ref)
+    }
+
+    /// Builds `datapair(source_id, 0)` from reverse-associated alias source lookup.
+    ///
+    /// In the undefined-name non-ID alias/pname path, Miranda derives private-aka metadata
+    /// from the source identifier associated with the destination payload, when available.
+    fn private_aka_from_alias_source(&mut self, target: IdentifierValueRef) -> Option<DataPair> {
+        self.find_alias_source_id_for_target(target)
+            .map(|source_id| {
+                IdentifierDefinitionRef::alias_metadata_from_source_identifier(
+                    &mut self.heap,
+                    source_id,
+                )
+            })
+    }
+
+    /// Ensures alias metadata exists for undefined non-ID alias fallback payloads.
+    ///
+    /// If `current_private_aka` is absent, this performs the same reverse ALIASES search Miranda
+    /// uses to recover source metadata (`datapair(source_id, 0)`) from the alias destination.
+    fn ensure_private_aka_for_undefined_target(
+        &mut self,
+        current_private_aka: Option<DataPair>,
+        target: IdentifierValueRef,
+    ) -> Option<DataPair> {
+        if current_private_aka.is_none() {
+            // Miranda derives fallback alias metadata by reverse-scanning ALIASES for a source
+            // identifier whose current value payload equals this destination alias target.
+            if let Some(found_private_aka) = self.private_aka_from_alias_source(target) {
+                return Some(found_private_aka);
+            }
+        }
+
+        current_private_aka
+    }
+
+    /// Writes undefined-name fallback payload to a private-name alias destination.
+    ///
+    /// The written value has form `apply(private_aka_or_nil, fileinfo(current_file, 0))` so
+    /// downstream DATAPAIR/application reduction keeps a meaningful source anchor.
+    // Todo: Promote `pname_ref` to a typed private-name wrapper once that proxy exists.
+    fn write_pname_undefined_fallback_application(
+        &mut self,
+        pname_ref: RawValue,
+        private_aka: Option<DataPair>,
+    ) {
+        let applied_value = self.apply_alias_fallback_hereinfo(private_aka);
+        applied_value.store_in_private_name(&mut self.heap, pname_ref);
+    }
 
     pub(super) fn hdsort(&mut self, _params: Value) -> Value {
         unimplemented!()
     }
 
-
     pub(super) fn bindparams(&mut self, _formal: Value, _actual: Value) {
         unimplemented!()
     }
-
 
     /// Gets the file name for the topmost file in the `vm.files` cons list, which _should_ be the current file.
     pub(super) fn current_file(&self) -> String {
@@ -19,7 +140,6 @@ impl VM {
 
         f.get_file_name(&self.heap)
     }
-
 
     /// Loads a compiled script from `in_file` for the `source_file`.
     pub(super) fn load_script(
@@ -268,7 +388,6 @@ impl VM {
         Ok(files.reversed(&mut self.heap))
     }
 
-
     /// load a sequence of definitions terminated by `DEF_X`, or a single object terminated
     /// by `DEF_X`, from the byte stream `byte_iter`.
     ///
@@ -444,9 +563,11 @@ impl VM {
                     // C: `datapair(get_id(name()), 0)`.
                     // `name()` creates an identifier when missing, and `get_id(...)` extracts its
                     // canonical string pointer.
-                    let _ = self.heap.make_empty_identifier(name.as_str());
-                    let name_ref = self.heap.string(name);
-                    let pair = DataPair::new(&mut self.heap, name_ref.into(), Value::None.into());
+                    let source_id = self.heap.make_empty_identifier(name.as_str());
+                    let pair = IdentifierDefinitionRef::alias_metadata_from_source_identifier(
+                        &mut self.heap,
+                        source_id,
+                    );
 
                     item_stack.push(pair.get_ref());
                 }
@@ -474,12 +595,11 @@ impl VM {
                     // Keep name-table side effects (`name()`) by ensuring an identifier exists,
                     // but store the file path as a canonical string in `FILEINFO.head`.
                     let _ = self.heap.make_empty_identifier(file_path.as_str());
-                    let file_name_ref = self.heap.string(file_path);
                     let line_number = get_u16_le(byte_iter)? as usize;
-                    let file_info = FileInfoRef::new(
+                    let file_info = FileInfoRef::from_script_file(
                         &mut self.heap,
-                        file_name_ref.into(),
-                        (line_number as RawValue).into(),
+                        file_path,
+                        line_number as isize,
                     );
 
                     item_stack.push(file_info.get_ref());
@@ -515,7 +635,8 @@ impl VM {
                         2 => {
                             // Case 3: Private name delimiter, signals end of a private name.
                             let item = item_stack.pop().unwrap();
-                            self.heap[item].tail = item_stack.pop().unwrap();
+                            let value = IdentifierValueRef::from_ref(item_stack.pop().unwrap());
+                            value.store_in_private_name(&mut self.heap, item);
                             defs.push(&mut self.heap, item);
                         }
 
@@ -534,134 +655,50 @@ impl VM {
                                 // where value (I think) is an Identifier Record.
 
                                 item_stack.pop(); // Value already in top_item
-                                                  // let top_item = item_stack.pop().unwrap();
 
                                 // This is the "id aliased to pname" branch (non-ID destination).
                                 // Store the raw alias target for later `SUPPRESSED` membership checks.
                                 let pname_ref = top_item;
                                 let suppressed_target = IdentifierValueRef::from_ref(top_item);
+                                let alias_target = suppressed_target;
                                 self.suppressed.push(&mut self.heap, suppressed_target);
 
                                 // Todo: Why are we throwing away the who field?
-                                item_stack.pop(); // who field
-
-                                let mut private_aka = {
-                                    // Scope of temporary
-                                    let top_item = item_stack.last().unwrap();
-                                    if self.heap[*top_item].tag == Tag::Cons {
-                                        self.heap[*top_item].head
-                                    } else {
-                                        NIL.into()
-                                    }
-                                };
+                                let who_field =
+                                    IdentifierDefinitionRef::from_ref(item_stack.pop().unwrap());
+                                let mut private_aka = who_field.alias_metadata_pair(&self.heap);
 
                                 // Todo: Why are we throwing away the type field?
-                                let new_id_type = item_stack.pop().unwrap(); // type
+                                let new_id_type = item_stack.pop().unwrap();
 
-                                // The value of the private name
+                                // The value of the private name.
                                 let new_id_value =
                                     IdentifierValueRef::from_ref(item_stack.pop().unwrap());
-                                self.heap[pname_ref].tail = new_id_value.get_ref();
+                                new_id_value.store_in_private_name(&mut self.heap, pname_ref);
 
-                                // let new_id_value_data = new_id_value.get_data(&self.heap);
-                                if let IdentifierValueData::Typed { value_type, .. } =
-                                    new_id_value.get_data(&self.heap)
-                                {
-                                    if new_id_type == Type::Type.into()
-                                        && value_type.get_identifier_value_type_kind(&self.heap)
-                                            != IdentifierValueTypeKind::Synonym
+                                if new_id_value.typed_kind(&self.heap).is_some() {
+                                    if new_id_value
+                                        .is_non_synonym_typed_name(&self.heap, new_id_type)
                                     {
                                         // Suppressed typename
-                                        // Reverse assoc in ALIASES
-                                        let mut aliases = self.aliases;
-                                        let mut id: Option<IdentifierRecordRef> = None;
-                                        while let Some(alias_value) = aliases.pop_value(&self.heap)
+                                        if let Some(found_id) =
+                                            self.find_alias_source_id_for_target(alias_target)
                                         {
-                                            let alias: RawValue = alias_value.into();
-                                            let alias_entry = AliasEntry::from_ref(alias);
-                                            let inner =
-                                                alias_entry.get_old_identifier_record(&self.heap); // a temporary
-                                            id = Some(inner);
-                                            // It's not clear if "get_value" is meant to be a get_value or if it is just a `tl[ref]`
-                                            // operation.
-                                            if let Some(found_val) = inner.get_value(&self.heap) {
-                                                if matches!(
-                                                    found_val.get_data(&self.heap),
-                                                    IdentifierValueData::Arbitrary(v)
-                                                        if v == Value::from(top_item)
-                                                ) {
-                                                    break;
-                                                }
-                                            }
-                                            id = None;
-                                        }
-                                        if let Some(found_id) = id {
-                                            // Surely must hold ??
                                             self.suppressed_t.push(&mut self.heap, found_id);
                                         }
-                                    } else if matches!(
-                                        new_id_value.get_data(&self.heap),
-                                        IdentifierValueData::Undefined
-                                    ) {
+                                    } else if new_id_value.is_undefined() {
                                         // Special kludge for undefined names, necessary only if we allow names specified
                                         // but not defined to be %included.
-                                        if private_aka == Combinator::NIL.into() {
-                                            // Reverse assoc in ALIASES
-                                            let mut aliases = self.aliases;
-                                            let mut id: Option<IdentifierRecordRef> = None;
-                                            while let Some(alias_value) =
-                                                aliases.pop_value(&self.heap)
-                                            {
-                                                let alias: RawValue = alias_value.into();
-                                                let alias_entry = AliasEntry::from_ref(alias);
-                                                let inner = alias_entry
-                                                    .get_old_identifier_record(&self.heap); // a temporary
-                                                id = Some(inner);
-                                                // It's not clear if "get_value" is meant to be a get_value or if it is just a `tl[ref]`
-                                                // operation.
-                                                if let Some(found_val) = inner.get_value(&self.heap)
-                                                {
-                                                    if matches!(
-                                                        found_val.get_data(&self.heap),
-                                                        IdentifierValueData::Arbitrary(v)
-                                                            if v == Value::from(top_item)
-                                                    ) {
-                                                        break;
-                                                    }
-                                                }
-                                                id = None;
-                                            }
-                                            if let Some(found_id) = id {
-                                                // Todo: Untangle what Miranda is doing here. What's the difference between `id_val` and `get_id`?
-                                                private_aka = DataPair::new(
-                                                    &mut self.heap,
-                                                    found_id.get_ref().into(),
-                                                    0.into(),
-                                                )
-                                                .get_ref();
-                                            }
-                                        }
-                                        // this will generate sensible error message
-                                        // see reduction rule for DATAPAIR
-                                        let file_info_ref: RawValue = {
-                                            let current_file_ref =
-                                                self.heap.string(self.current_file());
-                                            FileInfoRef::new(
-                                                &mut self.heap,
-                                                current_file_ref.into(),
-                                                0.into(),
-                                            )
-                                            .get_ref()
-                                        };
-                                        let applied_value: RawValue = self
-                                            .heap
-                                            .apply_ref(
-                                                private_aka.into(),
-                                                IdentifierValueRef::from_ref(file_info_ref).into(),
-                                            )
-                                            .into();
-                                        self.heap[pname_ref].tail = applied_value;
+                                        private_aka = self.ensure_private_aka_for_undefined_target(
+                                            private_aka,
+                                            alias_target,
+                                        );
+                                        self.write_pname_undefined_fallback_application(
+                                            pname_ref,
+                                            private_aka,
+                                        );
                                     }
+
                                     defs.push(&mut self.heap, top_item.into());
                                     continue;
                                 }
@@ -682,25 +719,9 @@ impl VM {
                             {
                                 if new_id_type == Type::Alias.into() {
                                     // cyclic aliasing
-                                    let mut aliases = self.aliases;
-                                    let mut alias: RawValue = NIL.into();
-                                    let mut id: Option<IdentifierRecordRef> = None;
-                                    while !aliases.is_empty() {
-                                        alias = aliases.pop_value(&self.heap).unwrap().into();
-                                        let alias_entry = AliasEntry::from_ref(alias);
-                                        id =
-                                            Some(alias_entry.get_old_identifier_record(&self.heap));
-
-                                        if alias_entry.old_identifier_matches(
-                                            &self.heap,
-                                            IdentifierRecordRef::from_ref(top_item),
-                                        ) {
-                                            break;
-                                        }
-
-                                        id = None;
-                                    }
-                                    if id.is_none() {
+                                    let Some(alias_entry) =
+                                        self.find_alias_entry_for_old_identifier(new_id)
+                                    else {
                                         // Todo: Make infrastructure for nonfatal errors.
                                         eprintln!(
                                             "impossible event in cyclic alias ({:?})",
@@ -708,11 +729,10 @@ impl VM {
                                         );
                                         item_stack.clear();
                                         continue;
-                                    }
+                                    };
                                     defs.push(&mut self.heap, top_item);
 
                                     // Manipulating the alias, not an id.
-                                    let alias_entry = AliasEntry::from_ref(alias);
                                     let definition = IdentifierDefinitionRef::from_ref(
                                         item_stack.pop().unwrap(),
                                     );
@@ -791,7 +811,6 @@ impl VM {
         // Miranda returns `defs`, too.
         return Err(BytecodeError::MalformedDef); // Miranda: "should unsetids"
     }
-
 }
 
 fn prefix(heap: &Heap, prefix_stack: ConsList) -> Result<String, ()> {

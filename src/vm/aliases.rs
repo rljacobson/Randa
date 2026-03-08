@@ -1,7 +1,6 @@
 use super::*;
 
 impl VM {
-
     /// Installs load-time alias diversions (`old -> new`) before bytecode body parsing.
     ///
     /// C parity reference: `miralib/data.c` `load_script` alias prologue.
@@ -24,10 +23,8 @@ impl VM {
             self.aliases = aliases;
             let mut alias_iterator = aliases;
 
-            while !alias_iterator.is_empty() {
+            while let Some(alias_entry) = pop_alias_entry(&self.heap, &mut alias_iterator) {
                 // Alias-list entry shape at install time: `cons(new, old)`.
-                let alias_ref: RawValue = alias_iterator.pop_value(&self.heap).unwrap().into();
-                let alias_entry = AliasEntry::from_ref(alias_ref);
                 // In Miranda, `new` may be either:
                 // - an identifier (`Tag::Id`), or
                 // - a private name/pname target (not `Tag::Id`).
@@ -80,9 +77,7 @@ impl VM {
             // part of a cyclic alias) has a direct definition in the file and the aliasee is missing from the file - this is
             // both name clash and missing aliasee, but without fix the two errors cancel each other out and are unreported
             let mut alias_iterator = aliases; // Not technically an iterator.
-            while !alias_iterator.is_empty() {
-                let alias_ref: RawValue = alias_iterator.pop_value(&self.heap).unwrap().into();
-                let alias_entry = AliasEntry::from_ref(alias_ref);
+            while let Some(alias_entry) = pop_alias_entry(&self.heap, &mut alias_iterator) {
                 let old = alias_entry.get_old_identifier_record(&self.heap);
                 // In this phase, `old` has already been rewritten as an alias, so `id_val(old)` is
                 // the alias destination raw word (`new`) and can be ID or non-ID.
@@ -107,7 +102,6 @@ impl VM {
 
         Ok(())
     }
-
 
     /// Remove old to new diversions installed in `obey_aliases`. (Miranda's `unscramble()`.)
     pub(super) fn unalias(&mut self, aliases: ConsList) {
@@ -158,9 +152,7 @@ impl VM {
         let mut missing_aliases: ConsList = ConsList::EMPTY;
 
         cursor = self.aliases;
-        while !cursor.is_empty() {
-            let alias_ref: RawValue = cursor.pop_value(&self.heap).unwrap().into();
-            let alias_entry = AliasEntry::from_ref(alias_ref);
+        while let Some(alias_entry) = pop_alias_entry(&self.heap, &mut cursor) {
             let old_id = alias_entry.get_old_identifier_record(&self.heap);
             let new_target = alias_entry.get_new_target(&self.heap);
 
@@ -203,8 +195,7 @@ impl VM {
                 //
                 // `self.suppressed` stores destination targets as identifier-value refs because
                 // this branch is specifically `tag[new] != ID`.
-                let new_target_ref = IdentifierValueRef::from_ref(new_target.get_ref());
-                if !self.suppressed.contains(&self.heap, new_target_ref) {
+                if !self.suppressed.contains(&self.heap, new_target) {
                     missing_aliases.push(&mut self.heap, old_id.get_ref())
                 }
                 continue;
@@ -214,5 +205,18 @@ impl VM {
         // Transmits info about missing aliasees
         self.aliases = missing_aliases;
     }
+}
 
+/// Pops one alias entry from `cursor` and projects it as `AliasEntry`.
+///
+/// Alias lists are represented as cons-list payloads containing raw references to
+/// `cons(new_target, old_identifier)` tuples. This helper keeps the raw extraction and
+/// proxy projection at one boundary point for alias-phase loops.
+// Todo: Introduce a typed alias-list iterator/adaptor so alias-phase loops no longer
+//       consume raw cons payloads directly at this boundary.
+fn pop_alias_entry(heap: &Heap, cursor: &mut ConsList) -> Option<AliasEntry> {
+    cursor
+        .pop_value(heap)
+        .map(Into::into)
+        .map(AliasEntry::from_ref)
 }

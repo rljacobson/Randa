@@ -1,7 +1,6 @@
 use super::*;
 
 impl VM {
-
     /// Clear out current script in preparation for reloading
     pub(super) fn unload(&mut self) {
         self.sorted = false;
@@ -60,7 +59,6 @@ impl VM {
         }
     }
 
-
     pub(super) fn unset_ids(&mut self, mut id_list: ConsList<IdentifierRecordRef>) {
         while !id_list.is_empty() {
             // Todo: Miranda checks that the item has Tag::Id and just continues if not.
@@ -70,5 +68,4 @@ impl VM {
             // should we remove from namebucket ?
         }
     }
-
 }

@@ -42,12 +42,7 @@ impl FileRecord {
             .map(|duration| duration.as_secs() as RawValue)
             .unwrap_or_default();
 
-        let file_name = heap.string(file_name);
-        let h_file_info = FileInfoRef::new(
-            heap,
-            Value::Reference(file_name),
-            Value::Data(h_last_modified),
-        );
+        let h_file_info = FileInfoRef::from_script_file(heap, file_name, h_last_modified);
         let h_share = if share {
             Combinator::True as RawValue
         } else {

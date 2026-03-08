@@ -1,8 +1,7 @@
-use super::*;
 use super::diagnostics::{alfasort, printlist, source_update_check};
+use super::*;
 
 impl VM {
-
     /// Loads the object file for `source_path` if it exists and is modified after `source_path`. Otherwise calls
     /// `load_file` for `source_path`.
     pub(super) fn undump(&mut self, source_path: &str) -> Result<(), BytecodeError> {
@@ -179,7 +178,6 @@ impl VM {
         Ok(())
     }
 
-
     pub(super) fn load_file(&mut self, source_path: &str) -> Result<(), BytecodeError> {
         #[cfg(test)]
         self.last_load_phase_trace.clear();
@@ -268,7 +266,6 @@ impl VM {
         result
     }
 
-
     // This is test-only instrumentation that captures load_file phase order so we can verify orchestration
     // branches and sequencing while parser/typecheck/codegen internals are still deferred.
     #[cfg(test)]
@@ -276,10 +273,8 @@ impl VM {
         self.last_load_phase_trace.push(phase);
     }
 
-
     #[cfg(not(test))]
     pub(super) fn record_load_phase(&mut self, _phase: &'static str) {}
-
 
     pub(super) fn reset_load_phase_state(&mut self) {
         // These parse/load accumulators are rebuilt by each load attempt.
@@ -289,7 +284,6 @@ impl VM {
         self.exports = NIL;
         self.eprodnts = NIL;
     }
-
 
     pub(super) fn empty_environment_for_source(
         &mut self,
@@ -307,8 +301,10 @@ impl VM {
         ConsList::new(&mut self.heap, source_record)
     }
 
-
-    pub(super) fn apply_syntax_error_fallback(&mut self, source_path: &str) -> Result<(), BytecodeError> {
+    pub(super) fn apply_syntax_error_fallback(
+        &mut self,
+        source_path: &str,
+    ) -> Result<(), BytecodeError> {
         if self.initializing {
             return Err(BytecodeError::SyntaxErrorInSource {
                 path: source_path.to_string(),
@@ -330,7 +326,6 @@ impl VM {
         Ok(())
     }
 
-
     /// Applies success-branch finalization after all load phases succeed.
     ///
     /// C parity target: final success-branch housekeeping before returning from `loadfile`.
@@ -341,12 +336,10 @@ impl VM {
         self.old_files = self.files;
     }
 
-
     pub(super) fn reset_syntax_error_state_for_load(&mut self) {
         self.error_line = 0;
         self.errs.clear();
     }
-
 
     /// Validates `%export` file-id bindings against the currently tracked include set.
     ///
@@ -395,7 +388,6 @@ impl VM {
         Ok(())
     }
 
-
     /// Applies the include-expansion phase for the current load cycle.
     ///
     /// C parity target: `files=append1(files,mkincludes(includees)),includees=NIL; ld_stuff=NIL;`
@@ -422,7 +414,6 @@ impl VM {
         Ok(())
     }
 
-
     /// Executes the typecheck gate for the current load cycle.
     ///
     /// C parity target: `if(!SYNERR) ... checktypes();`
@@ -439,7 +430,6 @@ impl VM {
 
         Ok(())
     }
-
 
     /// Applies export-closure gating after typecheck.
     ///
@@ -464,7 +454,6 @@ impl VM {
         Ok(())
     }
 
-
     /// Emits post-export warnings for potentially bereaved/orphaned type information.
     ///
     /// C parity target: the `bereaved` warning block in `loadfile`.
@@ -480,7 +469,6 @@ impl VM {
             println!("warning, export list may be incomplete - missing typenames");
         }
     }
-
 
     /// Emits diagnostics for parser-collected unused definitions/nonterminals.
     ///
@@ -499,7 +487,6 @@ impl VM {
 
         self.eprodnts = NIL;
     }
-
 
     /// Executes the codegen gate across loaded file definitions.
     ///
@@ -520,7 +507,6 @@ impl VM {
         Ok(())
     }
 
-
     /// Applies dump-writing and export-visibility orchestration for the load cycle.
     ///
     /// C parity target: `fixexports(); makedump(); unfixexports();` on success paths.
@@ -531,7 +517,10 @@ impl VM {
     ///
     /// This keeps orchestration concrete while deferring full dump serialization
     /// and deep export-visibility rewriting semantics.
-    pub(super) fn run_dump_visibility_phase(&mut self, source_path: &str) -> Result<(), BytecodeError> {
+    pub(super) fn run_dump_visibility_phase(
+        &mut self,
+        source_path: &str,
+    ) -> Result<(), BytecodeError> {
         // C parity: initialization always writes a dump; otherwise only "normal" scripts
         // (ending in `.m`) run through fixexports/makedump/unfixexports.
         let should_run_dump_visibility = self.initializing || source_path.ends_with(".m");
@@ -549,7 +538,6 @@ impl VM {
         Ok(())
     }
 
-
     /// `fixexports` visibility boundary.
     ///
     /// C parity target: `fixexports();` before dump serialization.
@@ -566,7 +554,6 @@ impl VM {
         }
     }
 
-
     /// Deferred success/syntax dump-write boundary.
     ///
     /// C parity target: `makedump();` after visibility fixups.
@@ -575,10 +562,12 @@ impl VM {
     /// - intentionally preserves `source_path` in the boundary contract for
     ///   future serializer output/diagnostic context,
     /// - defers actual dump serialization to later integration.
-    pub(super) fn run_makedump_boundary(&mut self, _source_path: &str) -> Result<(), BytecodeError> {
+    pub(super) fn run_makedump_boundary(
+        &mut self,
+        _source_path: &str,
+    ) -> Result<(), BytecodeError> {
         Ok(())
     }
-
 
     /// Captures syntax-dump boundary bookkeeping for syntax-error load exits.
     ///
@@ -589,7 +578,10 @@ impl VM {
     ///   syntax-error state remains attributable,
     /// - routes through the same `makedump` boundary used by success-path dump flow,
     ///   while leaving actual dump serialization deferred.
-    pub(super) fn maybe_write_syntax_dump(&mut self, source_path: &str) -> Result<(), BytecodeError> {
+    pub(super) fn maybe_write_syntax_dump(
+        &mut self,
+        source_path: &str,
+    ) -> Result<(), BytecodeError> {
         if !source_path.ends_with(".m") {
             return Ok(());
         }
@@ -603,7 +595,6 @@ impl VM {
 
         Ok(())
     }
-
 
     /// Parser/openfile load boundary.
     ///
@@ -652,7 +643,6 @@ impl VM {
         })
     }
 
-
     /// `unfixexports` state restoration used by undump and load-tail paths.
     ///
     /// Current concrete behavior:
@@ -666,7 +656,6 @@ impl VM {
         self.in_export_list = false;
         self.internals = ConsList::EMPTY;
     }
-
 }
 
 fn normalize_source_path_for_load(initializing: bool, source_path: &str) -> String {

@@ -387,12 +387,11 @@ impl IdentifierDefinitionRef {
         here_info: HereInfo,
         source: Option<String>,
     ) -> IdentifierDefinitionRef {
-        let h_script_file = heap.string(here_info.script_file);
         let h_here_info =
-            FileInfoRef::new(heap, h_script_file.into(), here_info.line_number.into());
+            FileInfoRef::from_script_file(heap, here_info.script_file, here_info.line_number);
         if let Some(source_name) = source {
             let h_source = heap.string(source_name);
-            let h_data_pair = DataPair::new(heap, h_source.into(), 0.into());
+            let h_data_pair = DataPair::new(heap, h_source.into(), Value::None);
             let h_who = heap.cons_ref(h_data_pair.into(), h_here_info.into());
             IdentifierDefinitionRef {
                 reference: h_who.into(),
@@ -414,11 +413,18 @@ impl IdentifierDefinitionRef {
         source_identifier: IdentifierRecordRef,
         destination_definition: IdentifierDefinitionRef,
     ) -> IdentifierDefinitionRef {
-        let source_name = source_identifier.name_value(heap);
-        let alias_source = DataPair::new(heap, source_name, Value::None.into());
+        let alias_source = Self::alias_metadata_from_source_identifier(heap, source_identifier);
         let who = heap.cons_ref(alias_source.into(), destination_definition.get_ref().into());
 
         IdentifierDefinitionRef::from_ref(who.into())
+    }
+
+    /// Constructs alias metadata payload `datapair(source_name, 0)` from an identifier source.
+    pub fn alias_metadata_from_source_identifier(
+        heap: &mut Heap,
+        source_identifier: IdentifierRecordRef,
+    ) -> DataPair {
+        DataPair::new(heap, source_identifier.name_value(heap), Value::None)
     }
 
     /// An undefined identifier has `who = NIL`.
@@ -441,6 +447,17 @@ impl IdentifierDefinitionRef {
         } else {
             Some(FileInfoRef::from_ref(self.reference))
         }
+    }
+
+    /// Returns alias metadata when this definition has alias shape
+    /// `cons(datapair(source, 0), here_info)`.
+    pub fn alias_metadata_pair(&self, heap: &Heap) -> Option<DataPair> {
+        if self.is_undefined() {
+            return None;
+        }
+
+        let who_cell = heap[self.reference];
+        (who_cell.tag == Tag::Cons).then(|| DataPair::from_ref(who_cell.head))
     }
 
     /// Retrieves the `script_file` and `line_number` for this FileDefinition in the form of a `HereInfo`.
@@ -466,22 +483,10 @@ impl IdentifierDefinitionRef {
     }
 
     pub fn get_source(&self, heap: &Heap) -> Option<HeapString> {
-        if self.is_undefined() {
-            return None;
-        }
-
-        let who_cell = heap[self.reference];
-
-        // Check if the alias info is cons'ed on to the here info cell.
-        if who_cell.tag == Tag::Cons {
-            let alias_source = DataPair::from_ref(who_cell.head).left_value(heap);
-            Some(
-                heap.resolve_string(alias_source)
-                    .expect("Identifier alias source does not resolve to a heap string."),
-            )
-        } else {
-            None
-        }
+        self.alias_metadata_pair(heap).map(|alias_metadata| {
+            heap.resolve_string(alias_metadata.left_value(heap))
+                .expect("Identifier alias source does not resolve to a heap string.")
+        })
     }
 
     pub fn get_data(&self, heap: &Heap) -> IdentifierDefinitionData {
@@ -604,6 +609,39 @@ impl IdentifierValueRef {
         } else {
             IdentifierValueData::Arbitrary(self.0.into())
         }
+    }
+
+    pub fn is_undefined(&self) -> bool {
+        self.0 == Combinator::Nil.into() || self.0 == Combinator::Undef.into()
+    }
+
+    pub fn typed_kind(&self, heap: &Heap) -> Option<IdentifierValueTypeKind> {
+        match self.get_data(heap) {
+            IdentifierValueData::Typed { value_type, .. } => {
+                Some(value_type.get_identifier_value_type_kind(heap))
+            }
+            _ => None,
+        }
+    }
+
+    /// Returns true when this value is a typed, non-synonym type name.
+    // Todo: Lift `new_id_type: RawValue` to a semantic decoded-type wrapper when DEF_X stack
+    // fields are represented by typed decode structures.
+    pub fn is_non_synonym_typed_name(&self, heap: &Heap, new_id_type: RawValue) -> bool {
+        if new_id_type != Type::Type.into() {
+            return false;
+        }
+
+        match self.typed_kind(heap) {
+            Some(kind) => kind != IdentifierValueTypeKind::Synonym,
+            None => false,
+        }
+    }
+
+    /// Writes this value into a private-name cell (`strcons(index, value)`).
+    // Todo: Replace `pname_ref` with a typed private-name proxy when available.
+    pub fn store_in_private_name(&self, heap: &mut Heap, pname_ref: RawValue) {
+        heap[pname_ref].tail = self.get_ref();
     }
 }
 
