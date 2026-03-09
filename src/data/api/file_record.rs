@@ -19,7 +19,9 @@ use crate::data::api::{ConsList, IdentifierRecordRef};
 use crate::data::{Combinator, Heap, RawValue, Value};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-// Todo: What should this be called? Heap file record? ScriptFile? FileWrapper?
+// Todo: Rename `FileRecord` if a clearer semantic name is selected.
+//       Blocker: naming depends on broader runtime naming decisions beyond this tranche.
+//       Migration target: post-tranche naming pass coordinated with `llm/project-map.md`.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub(crate) struct FileRecord {
     reference: RawValue,
@@ -36,7 +38,8 @@ impl FileRecord {
         share: bool,
         definienda: ConsList<IdentifierRecordRef>,
     ) -> Self {
-        // Todo: How is mtime stored on the heap?
+        // `mtime` is stored in `fileinfo(...).line_number` as UNIX-epoch seconds,
+        // matching the existing file-record projection contract in this runtime.
         let h_last_modified: RawValue = last_modified
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_secs() as RawValue)

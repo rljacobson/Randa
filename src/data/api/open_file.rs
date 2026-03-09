@@ -1,4 +1,4 @@
-use crate::data::api::{FileRecord, HeapObjectProxy};
+use crate::data::api::{FileRecord, HeapObjectProxy, StrConsRef};
 use crate::data::{Heap, RawValue, Value};
 
 /**
@@ -26,12 +26,16 @@ impl OpenFile {
         OpenFile { reference }
     }
 
-    pub fn get_stream(&self, heap: &mut Heap) -> Value {
-        heap[self.reference].head.into()
+    fn as_str_cons(&self) -> StrConsRef {
+        StrConsRef::from_ref(self.reference)
     }
 
-    pub fn get_file_record(&self, heap: &mut Heap) -> FileRecord {
-        let reference = heap[self.reference].tail;
+    pub fn get_stream(&self, heap: &Heap) -> Value {
+        self.as_str_cons().head_value(heap)
+    }
+
+    pub fn get_file_record(&self, heap: &Heap) -> FileRecord {
+        let reference = self.as_str_cons().tail_raw(heap);
         FileRecord::from_ref(reference)
     }
 }

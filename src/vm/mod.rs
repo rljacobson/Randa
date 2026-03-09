@@ -33,10 +33,10 @@ use crate::{
     constants::{DEFAULT_SPACE, WORD_SIZE, XVERSION},
     data::{
         api::{
-            AliasEntry, ConsList, DataPair, FileInfoRef, FileRecord, HeapObjectProxy,
-            IdentifierCoreData, IdentifierCoreRef, IdentifierDefinitionRef, IdentifierRecordRef,
-            IdentifierValueData, IdentifierValueRef, IdentifierValueTypeData,
-            IdentifierValueTypeRef, OpenFile,
+            AliasEntry, ConsList, ConstructorRef, DataPair, FileInfoRef, FileRecord,
+            HeapObjectProxy, IdentifierCoreData, IdentifierCoreRef, IdentifierDefinitionRef,
+            IdentifierRecordRef, IdentifierValueData, IdentifierValueRef, IdentifierValueTypeData,
+            IdentifierValueTypeRef, OpenFile, PrivateNameRef,
         },
         path::*,
         Combinator, Heap, RawValue, Tag, Type, Value,
@@ -224,7 +224,6 @@ impl Default for VM {
         VM::build(setup_argument_parser())
     }
 }
-
 
 #[cfg(test)]
 mod tests;

@@ -9,7 +9,9 @@ use std::fmt::{Debug, Formatter};
 use std::ops::{Index, IndexMut};
 
 use crate::constants::SIGNBIT;
-use crate::data::api::{HeapObjectProxy, IdentifierDefinitionRef, IdentifierRecordRef};
+use crate::data::api::{
+    ConstructorRef, HeapObjectProxy, IdentifierDefinitionRef, IdentifierRecordRef,
+};
 use crate::{
     compiler::Token,
     constants::INIT_SPACE,
@@ -208,7 +210,7 @@ impl Heap {
 
         let id_value: Value = if is_capitalized(name) {
             let constructor_index: i16 = Into::<RawValue>::into(value) as i16;
-            self.constructor_ref(constructor_index, id_ref.get_ref().into())
+            ConstructorRef::new(self, constructor_index, id_ref.get_ref().into()).into()
         } else {
             value
         };

@@ -115,14 +115,13 @@ impl VM {
     ///
     /// The written value has form `apply(private_aka_or_nil, fileinfo(current_file, 0))` so
     /// downstream DATAPAIR/application reduction keeps a meaningful source anchor.
-    // Todo: Promote `pname_ref` to a typed private-name wrapper once that proxy exists.
     fn write_pname_undefined_fallback_application(
         &mut self,
-        pname_ref: RawValue,
+        private_name: PrivateNameRef,
         private_aka: Option<DataPair>,
     ) {
         let applied_value = self.apply_alias_fallback_hereinfo(private_aka);
-        applied_value.store_in_private_name(&mut self.heap, pname_ref);
+        applied_value.store_in_private_name(&mut self.heap, private_name);
     }
 
     pub(super) fn hdsort(&mut self, _params: Value) -> Value {
@@ -191,7 +190,9 @@ impl VM {
             return Err(BytecodeError::WrongBytecodeVersion);
         }
 
-        // Todo: Why is this even here? It doesn't depend on the contents of the file!
+        // Todo: Re-evaluate placement of alias installation relative to bytecode parsing.
+        //       Blocker: load paths currently assume aliases are obeyed before any DEF decoding.
+        //       Migration target: load-phase sequencing review in `src/vm/load.rs` + `src/vm/aliases.rs`.
         self.obey_aliases(aliases)?;
 
         // PNBASE = nextpn; // base for relocation of internal names in dump
@@ -201,8 +202,7 @@ impl VM {
         // in the bytecode are actually _relative_ to the index of the first private symbol of the current file, and
         // adding private_name_base gives the absolute index in the vector of private names.
 
-        // ToDo: Is this RE-setting the values of `suppressed*`? Might they be non-empty? Neither appear to be added to
-        //       in this function.
+        // Reset per-load suppression bookkeeping before decoding this dump stream.
         self.suppressed = ConsList::EMPTY; // SUPPRESSED  // list of `-id' aliases successfully obeyed
         self.suppressed_t = ConsList::EMPTY; // TSUPPRESSED // list of -typename aliases (illegal just now)
 
@@ -226,7 +226,9 @@ impl VM {
 
             // If we encounter a `ch==1` *before* we ever even see a file, it is because it is the magic number for a
             // type-error script.
-            // Todo: It is awkward to have this inside the loop.
+            // Todo: Hoist this pre-file type-error sentinel handling out of the main file loop.
+            //       Blocker: current decode loop interleaves sentinels and file blocks with shared iterator state.
+            //       Migration target: a staged dump-header parser before file-block iteration.
             if *ch == 1 && files.is_empty() {
                 // The next w bytes (8 bytes) give the line number of the error.
                 let error_line_prefetch: usize =
@@ -235,7 +237,9 @@ impl VM {
                     // But only save it if this is the main script.
                     self.error_line = error_line_prefetch;
                 }
-                // Todo: What if there are multiple type errors?
+                // Todo: Preserve/report multiple type-error line entries when present.
+                //       Blocker: VM currently stores a single `error_line` scalar.
+                //       Migration target: aggregate type-error diagnostics in VM load state.
             }
 
             // Parse the file name and modified time
@@ -292,7 +296,9 @@ impl VM {
                     self.error_line = error_line_prefetch;
                 }
             }
-            // Todo: What if there are multiple type errors?
+            // Todo: Preserve/report multiple type-error line entries when present.
+            //       Blocker: VM currently stores a single `error_line` scalar.
+            //       Migration target: aggregate type-error diagnostics in VM load state.
 
             while let Some(_ch) = byte_iter.next() {
                 // Parse filename and modified time.
@@ -317,9 +323,10 @@ impl VM {
                 {
                     // Scope of `file_record`
                     // Add a new `FileRecord` to `old_files`
-                    // Todo: WTF is `old_files`? Why are we using it instead of `files`? Why are we setting its `sharable` to
-                    //       `false`, `defienda` to `NIL`? It is the most recent set of sources, in case of interrupted or failed
-                    //       compilation. Why its definitions and sharable flag are not saved is a mystery.
+                    // Todo: Confirm and document exact C parity rationale for `old_files` shape
+                    //       (`share=false`, empty definienda) on syntax-error dumps.
+                    //       Blocker: upstream C intent is implicit and currently under-documented.
+                    //       Migration target: loadfile parity notes + this branch documentation.
                     let file_record = FileRecord::new(
                         &mut self.heap,
                         filename,
@@ -354,7 +361,9 @@ impl VM {
 
         // Parse DEF_X
         // Parse sui generis constructors
-        // Todo: This does not appear in the binary description
+        // Todo: Reconcile this constructors block with durable binary-format docs.
+        //       Blocker: documented format omits this decoded segment.
+        //       Migration target: `Serialized Binary Representation` docs + evidence artifacts.
         {
             let new_defs: RawValue = self.load_defs(&mut byte_iter.by_ref().copied())?.into();
             self.sui_generis_constructors
@@ -372,8 +381,7 @@ impl VM {
             self.bindparams(defs, sorted_parameters);
         }
 
-        // Housekeeping
-        // Todo: Do we unalias unconditionally?
+        // Housekeeping: always restore alias diversions after decoding when alias list was non-empty.
         if !aliases.is_empty() {
             self.unalias(aliases)
         }
@@ -392,9 +400,9 @@ impl VM {
     /// by `DEF_X`, from the byte stream `byte_iter`.
     ///
     /// The type of the returned value has to be an opaque type, because any serializable object can be returned.
-    // Todo: Some calls to `load_defs()` assume that a cons list, or even a `ConsList<IdentifierRecordRef>`, is returned,
-    //       but it's clear that there are times when the return value is not a cons list.
-    //       The code in Miranda for this is a complete and total mess.
+    // Todo: Split `load_defs` result into a typed enum covering list-vs-single-object returns.
+    //       Blocker: callers currently depend on opaque `Value` shape with mixed expectations.
+    //       Migration target: typed `LoadDefsResult` and call-site migration in VM load/bytecode paths.
     pub(super) fn load_defs(
         &mut self,
         byte_iter: &mut dyn Iterator<Item = u8>,
@@ -432,7 +440,7 @@ impl VM {
                     item_stack.push(type_var.into());
                 }
 
-                // Todo: Do we want to support "small" integers? Yes for now, for Miranda compatibility.
+                // Preserve Miranda short-integer decode path for dump compatibility.
                 Bytecode::Short => {
                     let mut v = next(byte_iter)?;
                     if (v & 128u8) != 0 {
@@ -467,7 +475,9 @@ impl VM {
                 Bytecode::Double => {
                     let real_number = get_word_f64(byte_iter)?;
 
-                    // Todo: We convert isize-->f64 and then f64-->isize. This is stupid.
+                    // Todo: Avoid lossy/non-obvious `f64`<->`RawValue` conversion boundary here.
+                    //       Blocker: heap real-value API currently routes through `RawValue` conversion.
+                    //       Migration target: direct `f64` real-number heap constructor path.
                     item_stack.push(self.heap.real_ref(real_number).into());
                 }
 
@@ -489,7 +499,10 @@ impl VM {
                     let ps = self.heap.get_nth_private_symbol_ref(v);
                     item_stack.push(ps.into());
 
-                    // Todo: This is an index into `vm.private_names`?
+                    // Todo: Rename/document private-symbol index flow consistently with current
+                    //       `private_symbols` terminology.
+                    //       Blocker: legacy naming (`pnvec`/private_names) is carried through comments.
+                    //       Migration target: bytecode private-name decode docs and local comment cleanup.
                     /* Miranda source code is:
                     ch = getc(f);
                     ch = PNBASE + (ch | (getc(f) << 8));
@@ -515,10 +528,13 @@ impl VM {
                         item_stack.push(Combinator::Nil.into());
                     }
                     let last_value = item_stack.last_mut().unwrap();
-                    *last_value = self.heap.constructor_ref(v, (*last_value).into()).into();
+                    let wrapped_value =
+                        ConstructorRef::new(&mut self.heap, v, (*last_value).into());
+                    *last_value = wrapped_value.get_ref();
 
-                    let new_value = self.heap.constructor_ref(v, (*last_value).into());
-                    item_stack.push(new_value.into());
+                    let new_value =
+                        ConstructorRef::new(&mut self.heap, v, Value::from(wrapped_value));
+                    item_stack.push(new_value.get_ref());
                 }
 
                 Bytecode::ReadVals => {
@@ -558,13 +574,10 @@ impl VM {
 
                 Bytecode::AKA => {
                     let name = parse_string(byte_iter)?;
-                    // C: `datapair(get_id(name()), 0)`.
-                    // `name()` creates an identifier when missing, and `get_id(...)` extracts its
-                    // canonical string pointer.
-                    let source_id = self.heap.make_empty_identifier(name.as_str());
-                    let pair = IdentifierDefinitionRef::alias_metadata_from_source_identifier(
+                    // Shape: `datapair(get_id(name()), 0)`.
+                    let pair = IdentifierDefinitionRef::alias_metadata_from_source_name(
                         &mut self.heap,
-                        source_id,
+                        name.as_str(),
                     );
 
                     item_stack.push(pair.get_ref());
@@ -632,10 +645,10 @@ impl VM {
 
                         2 => {
                             // Case 3: Private name delimiter, signals end of a private name.
-                            let item = item_stack.pop().unwrap();
+                            let private_name = PrivateNameRef::from_ref(item_stack.pop().unwrap());
                             let value = IdentifierValueRef::from_ref(item_stack.pop().unwrap());
-                            value.store_in_private_name(&mut self.heap, item);
-                            defs.push(&mut self.heap, item);
+                            value.store_in_private_name(&mut self.heap, private_name);
+                            defs.push(&mut self.heap, private_name.get_ref());
                         }
 
                         4 => {
@@ -656,23 +669,27 @@ impl VM {
 
                                 // This is the "id aliased to pname" branch (non-ID destination).
                                 // Store the raw alias target for later `SUPPRESSED` membership checks.
-                                let pname_ref = top_item;
+                                let private_name = PrivateNameRef::from_ref(top_item);
                                 let suppressed_target = IdentifierValueRef::from_ref(top_item);
                                 let alias_target = suppressed_target;
                                 self.suppressed.push(&mut self.heap, suppressed_target);
 
-                                // Todo: Why are we throwing away the who field?
+                                // In the non-ID alias destination branch, `who` is used only to
+                                // recover optional alias metadata (`aka`) for undefined fallback
+                                // reporting; we do not attach definition metadata to non-ID
+                                // destinations directly.
                                 let who_field =
                                     IdentifierDefinitionRef::from_ref(item_stack.pop().unwrap());
                                 let mut private_aka = who_field.alias_metadata_pair(&self.heap);
 
-                                // Todo: Why are we throwing away the type field?
+                                // We keep the decoded type discriminator only for the
+                                // non-synonym typed-name suppression rule.
                                 let new_id_type = item_stack.pop().unwrap();
 
                                 // The value of the private name.
                                 let new_id_value =
                                     IdentifierValueRef::from_ref(item_stack.pop().unwrap());
-                                new_id_value.store_in_private_name(&mut self.heap, pname_ref);
+                                new_id_value.store_in_private_name(&mut self.heap, private_name);
 
                                 if new_id_value.typed_kind(&self.heap).is_some() {
                                     if new_id_value
@@ -692,7 +709,7 @@ impl VM {
                                             alias_target,
                                         );
                                         self.write_pname_undefined_fallback_application(
-                                            pname_ref,
+                                            private_name,
                                             private_aka,
                                         );
                                     }
@@ -720,7 +737,9 @@ impl VM {
                                     let Some(alias_entry) =
                                         self.find_alias_entry_for_old_identifier(new_id)
                                     else {
-                                        // Todo: Make infrastructure for nonfatal errors.
+                                        // Todo: Route this through structured nonfatal diagnostics.
+                                        //       Blocker: no load-phase nonfatal diagnostic channel exists yet.
+                                        //       Migration target: VM load diagnostics/reporting path in `src/vm/load.rs`.
                                         eprintln!(
                                             "impossible event in cyclic alias ({:?})",
                                             new_id.get_name(&self.heap)
@@ -775,7 +794,9 @@ impl VM {
                         }
 
                         _ => {
-                            // Todo: Miranda also returns the defs
+                            // Todo: Preserve Miranda's fallback return behavior for this case.
+                            //       Blocker: Rust currently treats it as malformed and errors out.
+                            //       Migration target: explicit parity decision + typed return handling.
                             return Err(BytecodeError::MalformedDef);
                         }
                     } // end math on item_stack.len()

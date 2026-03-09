@@ -48,7 +48,7 @@ See [Data Representation.md](Data%20Representation.md) for a diagram of how Iden
 
 */
 
-use super::{DataPair, FileInfoRef, HeapObjectProxy, HeapString, LineNumber};
+use super::{DataPair, FileInfoRef, HeapObjectProxy, HeapString, LineNumber, PrivateNameRef};
 use crate::compiler::HereInfo;
 use crate::data::{Combinator, Heap, RawValue, Tag, Type, Value};
 use enum_primitive_derive::Primitive;
@@ -379,9 +379,12 @@ pub struct IdentifierDefinitionRef {
 }
 
 impl IdentifierDefinitionRef {
-    // Todo: Is `script_file` a string? A `FileRecord` (or equivalent)? A reference? An arbitrary value?
-    // Todo: Same question, but for `source`.
     /// Creates a new identifier definition on the heap and constructs an `IdentifierDefinitionRef` referencing it.
+    ///
+    /// Semantics:
+    /// - `here_info.script_file` is source text that is interned into a canonical heap string.
+    /// - `source` (when present) is alias source-name text and is encoded as
+    ///   `datapair(source_name_ref, 0)` metadata.
     pub fn new(
         heap: &mut Heap,
         here_info: HereInfo,
@@ -425,6 +428,15 @@ impl IdentifierDefinitionRef {
         source_identifier: IdentifierRecordRef,
     ) -> DataPair {
         DataPair::new(heap, source_identifier.name_value(heap), Value::None)
+    }
+
+    /// Constructs alias metadata payload `datapair(get_id(name()), 0)` from source text.
+    ///
+    /// This mirrors Miranda's `get_id(name())` behavior by ensuring the identifier exists
+    /// before extracting its canonical name reference for the datapair payload.
+    pub fn alias_metadata_from_source_name(heap: &mut Heap, source_name: &str) -> DataPair {
+        let source_identifier = heap.make_empty_identifier(source_name);
+        Self::alias_metadata_from_source_identifier(heap, source_identifier)
     }
 
     /// An undefined identifier has `who = NIL`.
@@ -625,8 +637,9 @@ impl IdentifierValueRef {
     }
 
     /// Returns true when this value is a typed, non-synonym type name.
-    // Todo: Lift `new_id_type: RawValue` to a semantic decoded-type wrapper when DEF_X stack
-    // fields are represented by typed decode structures.
+    // Todo: Lift `new_id_type: RawValue` to a semantic decoded-type wrapper.
+    //       Blocker: DEF_X stack decode still yields immediate discriminator words.
+    //       Migration target: typed DEF_X decode structures in `src/vm/bytecode.rs`.
     pub fn is_non_synonym_typed_name(&self, heap: &Heap, new_id_type: RawValue) -> bool {
         if new_id_type != Type::Type.into() {
             return false;
@@ -639,9 +652,8 @@ impl IdentifierValueRef {
     }
 
     /// Writes this value into a private-name cell (`strcons(index, value)`).
-    // Todo: Replace `pname_ref` with a typed private-name proxy when available.
-    pub fn store_in_private_name(&self, heap: &mut Heap, pname_ref: RawValue) {
-        heap[pname_ref].tail = self.get_ref();
+    pub fn store_in_private_name(&self, heap: &mut Heap, private_name: PrivateNameRef) {
+        private_name.set_value(heap, *self);
     }
 }
 
@@ -657,7 +669,9 @@ impl HeapObjectProxy for IdentifierValueRef {
 
 /// The Department of Redundancy Department has been made redundant. The Ministry of Synonyms and Antonyms has taken
 /// over naming duties.
-// Todo: Should there be a `HeapObjectProxy` for `constructors`? `source_type`? `basis`?
+// Todo: Introduce semantic wrappers for `constructors`, `source_type`, and `basis` payloads.
+//       Blocker: these payload domains are not yet stabilized as proxy candidates in the active plan.
+//       Migration target: post-tranche candidate revalidation and proxy additions in `src/data/api/*`.
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 pub enum IdentifierValueTypeData {
     Algebraic {
@@ -719,7 +733,9 @@ impl IdentifierValueTypeRef {
         let reference = // the value of the following match
       match type_data {
         IdentifierValueTypeData::Algebraic { constructors } => {
-          // Todo: Figure out the type of `constructors` and fix this.
+          // Todo: Lift `constructors: Value` to a semantic wrapper parameter.
+          //       Blocker: constructor-list runtime shape is not yet modeled by a dedicated proxy.
+          //       Migration target: typed constructor-list proxy in `src/data/api/*`.
           heap.cons_ref(Value::Data(0), constructors)
         }
 
@@ -728,7 +744,9 @@ impl IdentifierValueTypeRef {
         }
 
         IdentifierValueTypeData::Abstract { basis } => {
-          // Todo: Figure out the type of `basis` and fix this.
+          // Todo: Lift `basis: Value` to a semantic basis wrapper parameter.
+          //       Blocker: basis payload semantics are not yet represented as a dedicated type.
+          //       Migration target: typed basis proxy/wrapper in `src/data/api/*`.
           heap.cons_ref(Value::Data(2), basis)
         }
 

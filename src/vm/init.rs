@@ -29,9 +29,11 @@ impl VM {
         );
         // *self.heap.id_type(self.void_) = Type::Void as RawValue;
         // *self.heap.id_val(self.void_)  = self.heap.constructor(0, self.void_).into();
-        let value: Value = self.heap.constructor_ref(0, self.void_.into());
-        self.void_
-            .set_value(&mut self.heap, IdentifierValueRef::from_ref(value.into()));
+        let value = ConstructorRef::new(&mut self.heap, 0, self.void_.into());
+        self.void_.set_value(
+            &mut self.heap,
+            IdentifierValueRef::from_ref(value.get_ref()),
+        );
 
         self.common_stdin = self.heap.apply_ref(Combinator::Read.into(), Value::from(0));
         self.common_stdinb = self
@@ -62,7 +64,7 @@ impl VM {
         self.showvoid = self.heap.make_empty_identifier("showvoid");
         self.showwhat = self.heap.make_empty_identifier("showwhat");
         let stdout_ = self.heap.string("Stdout");
-        self.stdout = self.heap.constructor_ref(0, stdout_.into());
+        self.stdout = ConstructorRef::new(&mut self.heap, 0, stdout_.into()).into();
     }
 
     /// This is tsetup() in Miranda.

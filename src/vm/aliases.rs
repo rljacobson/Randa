@@ -212,8 +212,9 @@ impl VM {
 /// Alias lists are represented as cons-list payloads containing raw references to
 /// `cons(new_target, old_identifier)` tuples. This helper keeps the raw extraction and
 /// proxy projection at one boundary point for alias-phase loops.
-// Todo: Introduce a typed alias-list iterator/adaptor so alias-phase loops no longer
-//       consume raw cons payloads directly at this boundary.
+// Todo: Introduce a typed alias-list iterator/adaptor for alias entry traversal.
+//       Blocker: `ConsList` currently exposes generic payload traversal only.
+//       Migration target: typed alias-list iterator in `src/data/api/*` and this boundary.
 fn pop_alias_entry(heap: &Heap, cursor: &mut ConsList) -> Option<AliasEntry> {
     cursor
         .pop_value(heap)
