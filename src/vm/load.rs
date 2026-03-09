@@ -171,7 +171,7 @@ impl VM {
         }
 
         if !self.files.is_empty() && !self.making && !self.initializing {
-            self.unfix_exports_partial();
+            self.unfix_exports();
         }
         self.loading = false;
 
@@ -512,8 +512,8 @@ impl VM {
     /// C parity target: `fixexports(); makedump(); unfixexports();` on success paths.
     /// Current concrete behavior:
     /// - run phase only for initialization or normal `.m` sources,
-    /// - execute `fixexports`/`makedump` F2 boundaries in order,
-    /// - execute `unfix_exports_partial` as the current F6 unwind subset.
+    /// - execute `fixexports`/`makedump` boundaries in order,
+    /// - execute `unfix_exports` unwind restoration.
     ///
     /// This keeps orchestration concrete while deferring full dump serialization
     /// and deep export-visibility rewriting semantics.
@@ -521,7 +521,7 @@ impl VM {
         &mut self,
         source_path: &str,
     ) -> Result<(), BytecodeError> {
-        // C parity: initialization always writes a dump; otherwise only "normal" scripts
+        // Initialization always writes a dump; otherwise only "normal" scripts
         // (ending in `.m`) run through fixexports/makedump/unfixexports.
         let should_run_dump_visibility = self.initializing || source_path.ends_with(".m");
         if !should_run_dump_visibility {
@@ -529,28 +529,226 @@ impl VM {
         }
 
         self.record_load_phase("dump-fixexports");
-        self.run_fixexports_boundary();
+        self.fix_exports();
         self.record_load_phase("dump-write");
         self.run_makedump_boundary(source_path)?;
         self.record_load_phase("dump-unfixexports");
-        self.unfix_exports_partial();
+        self.unfix_exports();
 
         Ok(())
     }
 
-    /// `fixexports` visibility boundary.
+    /// Applies `fixexports` visibility rewriting before dump serialization.
     ///
-    /// C parity target: `fixexports();` before dump serialization.
+    /// Runs before dump serialization.
     /// Current concrete behavior:
-    /// - marks export-list processing mode when exports are present,
-    /// - leaves real visibility rewriting (including full internal-name handling)
-    ///   deferred.
+    /// - computes invocation-scoped `internals` by internalizing non-exported IDs,
+    /// - uses `%export` presence to control export-list mode (`in_export_list`),
+    /// - preserves existing dump-phase orchestration labels and call structure.
+    pub(super) fn fix_exports(&mut self) {
+        // Export-list mode mirrors the temporary export gate:
+        // when exports are present we must avoid internalizing those IDs.
+        let has_exports = self.exports != NIL;
+        self.in_export_list = has_exports;
+
+        // `internals` is invocation-scoped output from this pass.
+        // Shape: cons(internal_id, ...), where each `internal_id` is the
+        // replacement/public-facing ID returned by internalization.
+        self.internals = ConsList::EMPTY;
+
+        // No files means no definienda to scan, so visibility rewriting is a no-op.
+        if self.files.is_empty() {
+            return;
+        }
+
+        // Branch split:
+        // - no `%export` directives at all => internalize `%free` formal IDs + subsidiary files,
+        // - otherwise => scan all files and skip explicitly exported IDs.
+        let has_export_directive =
+            self.exports != NIL || self.exportfiles != NIL || self.embargoes != NIL;
+
+        // `exports` is a list of identifier records that must remain public in this pass.
+        let exports: ConsList<IdentifierRecordRef> = ConsList::from_ref(self.exports.into());
+
+        if !has_export_directive {
+            // `free_ids` entries are formal-binding structures; we use `head(head(e))` to reach the ID.
+            // Rust equivalent here:
+            //   formal_binding_ref (CONS) -> head (formal tuple) -> head (ID ref).
+            let mut free_ids = self.free_ids;
+            while let Some(formal_binding_ref) = free_ids.pop_raw(&self.heap) {
+                let formal_binding_head = self.heap[formal_binding_ref].head;
+                let formal_id_ref = if self.heap[formal_binding_head].tag == Tag::Cons {
+                    self.heap[formal_binding_head].head
+                } else {
+                    formal_binding_head
+                };
+                if self.heap[formal_id_ref].tag == Tag::Id {
+                    self.internalize_identifier_for_dump_visibility(IdentifierRecordRef::from_ref(
+                        formal_id_ref,
+                    ));
+                }
+            }
+
+            // This branch scans only subsidiary files (`rest(files)`), not the front script file.
+            if let Some(mut subsidiary_files) = self.files.rest(&self.heap) {
+                while let Some(file_record) = subsidiary_files.pop(&self.heap) {
+                    self.collect_internalized_file_defs(file_record, exports);
+                }
+            }
+            return;
+        }
+
+        // Export-active branch: scan every file record, but skip members of `exports`.
+        let mut files = self.files;
+        while let Some(file_record) = files.pop(&self.heap) {
+            self.collect_internalized_file_defs(file_record, exports);
+        }
+    }
+
+    /// Internalizes one identifier using the current dump-visibility representation seam.
     ///
-    /// This is an F2 deferred boundary that should collapse into direct concrete
-    /// visibility logic when export-visibility parity work lands.
-    pub(super) fn run_fixexports_boundary(&mut self) {
-        if self.exports != NIL {
-            self.in_export_list = true;
+    /// Purpose: owns the `privatise`-equivalent heap mutation used by `fixexports`.
+    /// Invariant: each successful internalization pushes exactly one internal-ID entry to `internals`.
+    fn internalize_identifier_for_dump_visibility(
+        &mut self,
+        identifier: IdentifierRecordRef,
+    ) -> Option<IdentifierRecordRef> {
+        // We only internalize true identifier records.
+        let identifier_ref = identifier.get_ref();
+        if self.heap[identifier_ref].tag != Tag::Id {
+            return None;
+        }
+
+        // Before rewriting heap shape, ensure typed-name definitions carry alias metadata.
+        // For type names this keeps `who` in alias-capable form:
+        //   cons(datapair(source_name, 0), here_info)
+        // instead of bare `here_info`.
+        let definition = identifier.get_definition(&self.heap);
+        if RawValue::from(identifier.get_type(&self.heap)) == RawValue::from(Type::Type)
+            && !definition.is_undefined()
+        {
+            let definition_ref = definition.get_ref();
+            let here_info_ref = if self.heap[definition_ref].tag == Tag::Cons {
+                self.heap[definition_ref].tail
+            } else {
+                definition_ref
+            };
+            let alias_metadata = definition
+                .alias_metadata_pair(&self.heap)
+                .unwrap_or_else(|| {
+                    IdentifierDefinitionRef::alias_metadata_from_source_identifier(
+                        &mut self.heap,
+                        identifier,
+                    )
+                });
+            let wrapped_definition = self
+                .heap
+                .cons_ref(alias_metadata.into(), Value::from(here_info_ref));
+            identifier.set_definition(
+                &mut self.heap,
+                IdentifierDefinitionRef::from_ref(wrapped_definition.into()),
+            );
+        }
+
+        // Start shape (public identifier):
+        //   Tag::Id
+        //   head = cons(strcons(name, who), type)
+        //   tail = value
+        let original_head = self.heap[identifier_ref].head;
+        let mut original_value = self.heap[identifier_ref].tail;
+
+        // For undefined identifiers, replace bare `UNDEF` with a fallback application payload:
+        //   ap(datapair(source_name, 0), here_info)
+        // The payload survives the ID -> private-name carrier rewrite so undefined-name
+        // diagnostics remain attributable after internalization.
+        if original_value == Combinator::Undef.into() {
+            let definition = identifier.get_definition(&self.heap);
+            let alias_metadata = definition
+                .alias_metadata_pair(&self.heap)
+                .unwrap_or_else(|| {
+                    IdentifierDefinitionRef::alias_metadata_from_source_identifier(
+                        &mut self.heap,
+                        identifier,
+                    )
+                });
+            let here_info_ref = if definition.is_undefined() {
+                Combinator::Nil.into()
+            } else {
+                let definition_ref = definition.get_ref();
+                if self.heap[definition_ref].tag == Tag::Cons {
+                    self.heap[definition_ref].tail
+                } else {
+                    definition_ref
+                }
+            };
+            original_value = self
+                .heap
+                .apply_ref(alias_metadata.into(), Value::from(here_info_ref))
+                .into();
+        }
+
+        // Allocate a private-name cell (pname slot) in `heap.private_symbols`.
+        // Initial private-name shape from allocator:
+        //   Tag::StrCons
+        //   head = private_symbol_index
+        //   tail = identifier_ref (temporary payload)
+        let private_name_ref = match self.heap.make_private_symbol_ref(identifier_ref.into()) {
+            Value::Reference(reference) => reference,
+            _ => return None,
+        };
+        let private_symbol_index = self.heap[private_name_ref].head;
+
+        // Convert the allocated private-name cell into an internal ID shell by
+        // retagging to `Tag::Id` and reusing the original identifier head.
+        // Internal-ID shape after this step:
+        //   Tag::Id
+        //   head = original_head
+        //   tail = <existing tail in private-name cell>
+        self.heap[private_name_ref].tag = Tag::Id;
+        self.heap[private_name_ref].head = original_head;
+
+        // Convert the original public identifier cell into a private-name carrier.
+        // Public-name-carrier shape after this step:
+        //   Tag::StrCons
+        //   head = private_symbol_index
+        //   tail = original_value
+        // This internalization step means public lookup now resolves via the
+        // internal-ID indirection, while original value payload is preserved.
+        self.heap[identifier_ref].tag = Tag::StrCons;
+        self.heap[identifier_ref].head = private_symbol_index;
+        self.heap[identifier_ref].tail = original_value;
+
+        // Record the new internal ID as a restoration candidate for `unfixexports`.
+        // `internals` remains the sole source of truth for later unfix traversal.
+        let internal_id = IdentifierRecordRef::from_ref(private_name_ref);
+        let internal_name = internal_id.get_name(&self.heap);
+        self.heap
+            .register_identifier_name(internal_name.as_str(), internal_id.get_ref());
+        self.internals.push(&mut self.heap, internal_id);
+        Some(internal_id)
+    }
+
+    /// Scans one file's definienda and internalizes each non-exported identifier.
+    ///
+    /// Purpose: centralizes file-def scan invariants for `fixexports` branch handling.
+    /// Invariant: only `Tag::Id` definienda that are not exported are internalized.
+    fn collect_internalized_file_defs(
+        &mut self,
+        file_record: FileRecord,
+        exports: ConsList<IdentifierRecordRef>,
+    ) {
+        let mut definienda = file_record.get_definienda(&self.heap);
+        while let Some(def_ref) = definienda.pop_raw(&self.heap) {
+            if self.heap[def_ref].tag != Tag::Id {
+                continue;
+            }
+
+            let definition_id = IdentifierRecordRef::from_ref(def_ref);
+            if exports.contains(&self.heap, definition_id) {
+                continue;
+            }
+
+            self.internalize_identifier_for_dump_visibility(definition_id);
         }
     }
 
@@ -643,18 +841,96 @@ impl VM {
         })
     }
 
-    /// `unfixexports` state restoration used by undump and load-tail paths.
+    /// Restores internalized identifiers back to their public lookup shape.
     ///
     /// Current concrete behavior:
-    /// - exits export-list processing mode,
-    /// - clears deferred `internals` bookkeeping.
-    ///
-    /// This is intentionally not the full C `unfixexports` algorithm.
-    /// Deeper name-restore/publicise semantics remain deferred to export-visibility
-    /// parity work.
-    pub(super) fn unfix_exports_partial(&mut self) {
+    /// - exits export-list mode,
+    /// - in exports-only mode, preserves internalized state for export listing,
+    /// - otherwise restores each entry currently tracked in `internals` and clears it.
+    pub(super) fn unfix_exports(&mut self) {
         self.in_export_list = false;
+        if !self.options.make_exports.is_empty() {
+            return;
+        }
+
+        let mut internals = self.internals;
+        while let Some(internal_id) = internals.pop(&self.heap) {
+            self.restore_public_identifier_from_internal(internal_id);
+        }
+
         self.internals = ConsList::EMPTY;
+    }
+
+    /// Restores one internal ID entry to public ID shape and lookup binding.
+    ///
+    /// Purpose: owns the representation-sensitive unfix step for one `internals` element.
+    /// Invariant: successful restoration rebinds the identifier name to the restored public ID cell.
+    fn restore_public_identifier_from_internal(
+        &mut self,
+        internal_id: IdentifierRecordRef,
+    ) -> Option<IdentifierRecordRef> {
+        // `internals` should contain internal IDs produced by fix-time rewriting.
+        // Expected internal-ID shape on entry:
+        //   Tag::Id
+        //   head = cons(strcons(name, who), type)
+        //   tail = restored_public_ref
+        // where `restored_public_ref` currently points to a private-name carrier.
+        let internal_id_ref = internal_id.get_ref();
+        if self.heap[internal_id_ref].tag != Tag::Id {
+            return None;
+        }
+
+        // Resolve the canonical name before mutating heap cells so we can rebind
+        // identifier lookup to the restored public cell at the end.
+        let restored_name = internal_id.get_name(&self.heap);
+
+        // The internal ID's value slot is the public-name carrier to restore.
+        // Expected carrier shape before restore:
+        //   Tag::StrCons
+        //   head = private_symbol_index
+        //   tail = value
+        let restored_public_ref = match Value::from(self.heap[internal_id_ref].tail) {
+            Value::Reference(reference) => reference,
+            _ => return None,
+        };
+        if self.heap[restored_public_ref].tag != Tag::StrCons {
+            return None;
+        }
+
+        // Restore the public cell to identifier shape using the internal ID's head.
+        // Public cell shape after this step:
+        //   Tag::Id
+        //   head = hd[internal_id_ref]
+        //   tail = prior value payload (still in place)
+        // Invariant: both `Id` and private-name carrier store value in `tail`, so
+        // this retag+head write is sufficient for structural restoration.
+        self.heap[restored_public_ref].tag = Tag::Id;
+        self.heap[restored_public_ref].head = self.heap[internal_id_ref].head;
+
+        // Some undefined-name fallback payloads are represented as applications
+        // whose head is a DataPair sentinel. When present, normalize value back
+        // to `UNDEF` so restored IDs report as undefined through normal paths.
+        // Checked shape:
+        //   restored_value_ref = ap(x, y)
+        //   hd[restored_value_ref] has Tag::DataPair
+        let restored_value_ref = self.heap[restored_public_ref].tail;
+        if let Value::Reference(application_ref) = Value::from(restored_value_ref) {
+            if self.heap[application_ref].tag == Tag::Ap {
+                if let Value::Reference(head_ref) = Value::from(self.heap[application_ref].head) {
+                    if self.heap[head_ref].tag == Tag::DataPair {
+                        self.heap[restored_public_ref].tail = Combinator::Undef.into();
+                    }
+                }
+            }
+        }
+
+        // Rebind name lookup to the restored public identifier cell.
+        // Invariant: after unfix traversal, external name resolution should point
+        // at restored public IDs, not transient internal IDs.
+        self.heap
+            .register_identifier_name(restored_name.as_str(), restored_public_ref);
+
+        Some(IdentifierRecordRef::from_ref(restored_public_ref))
     }
 }
 

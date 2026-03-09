@@ -1,4 +1,5 @@
 use super::*;
+use crate::compiler::HereInfo;
 use std::path::PathBuf;
 
 fn unique_test_path(file_name: &str) -> PathBuf {
@@ -793,17 +794,145 @@ fn source_update_check_is_false_when_dump_timestamp_is_not_older_than_source() {
 }
 
 #[test]
-fn unfix_exports_partial_clears_export_processing_state() {
+fn unfix_exports_clears_export_processing_state() {
     let mut vm = VM::new_for_tests();
 
     vm.in_export_list = true;
     let internal = vm.heap.make_empty_identifier("internal_name");
     vm.internals = ConsList::new(&mut vm.heap, internal);
 
-    vm.unfix_exports_partial();
+    vm.unfix_exports();
 
     assert!(!vm.in_export_list);
     assert!(vm.internals.is_empty());
+}
+
+#[test]
+fn unfix_exports_preserves_internals_in_exports_mode() {
+    let mut vm = VM::new_for_tests();
+
+    vm.in_export_list = true;
+    vm.options.make_exports.push("script.m".to_string());
+    let internal = vm.heap.make_empty_identifier("internal_name");
+    vm.internals = ConsList::new(&mut vm.heap, internal);
+
+    vm.unfix_exports();
+
+    assert!(!vm.in_export_list);
+    assert!(!vm.internals.is_empty());
+}
+
+#[test]
+fn fixexports_internalizes_nested_free_id_bindings() {
+    let mut vm = VM::new_for_tests();
+
+    let source_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("fixexports_freeids_shape.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        ConsList::EMPTY,
+    );
+    vm.files = ConsList::new(&mut vm.heap, source_file);
+
+    let free_id = vm.heap.make_empty_identifier("free_param");
+    let free_binding: RawValue = vm
+        .heap
+        .cons_ref(free_id.get_ref().into(), Combinator::Nil.into())
+        .into();
+    let free_ids_list: RawValue = vm
+        .heap
+        .cons_ref(free_binding.into(), Combinator::Nil.into())
+        .into();
+    vm.free_ids = ConsList::from_ref(free_ids_list);
+
+    vm.exports = NIL;
+    vm.exportfiles = NIL;
+    vm.embargoes = NIL;
+
+    vm.fix_exports();
+
+    assert_eq!(vm.heap[free_id.get_ref()].tag, Tag::StrCons);
+    assert!(!vm.internals.is_empty());
+}
+
+#[test]
+fn fixexports_internalize_undef_writes_fallback_application_payload() {
+    let mut vm = VM::new_for_tests();
+
+    vm.exportfiles = Combinator::True.into();
+
+    let source_path = unique_test_path("fixexports_undef_payload.m")
+        .to_string_lossy()
+        .to_string();
+    let definition = IdentifierDefinitionRef::new(
+        &mut vm.heap,
+        HereInfo {
+            script_file: source_path.clone(),
+            line_number: 7,
+        },
+        None,
+    );
+    let undef_id = IdentifierRecordRef::new(
+        &mut vm.heap,
+        "missing_name".to_string(),
+        definition,
+        Type::Undefined.into(),
+        Some(IdentifierValueRef::from_ref(Combinator::Undef.into())),
+    );
+
+    let defs = ConsList::new(&mut vm.heap, undef_id);
+    let file_record = FileRecord::new(&mut vm.heap, source_path, UNIX_EPOCH, false, defs);
+    vm.files = ConsList::new(&mut vm.heap, file_record);
+
+    vm.fix_exports();
+
+    assert_eq!(vm.heap[undef_id.get_ref()].tag, Tag::StrCons);
+    let fallback_ref = vm.heap[undef_id.get_ref()].tail;
+    assert_eq!(vm.heap[fallback_ref].tag, Tag::Ap);
+    let fallback_head_ref = vm.heap[fallback_ref].head;
+    assert_eq!(vm.heap[fallback_head_ref].tag, Tag::DataPair);
+}
+
+#[test]
+fn fixexports_internalize_type_name_wraps_definition_with_alias_metadata() {
+    let mut vm = VM::new_for_tests();
+
+    vm.exportfiles = Combinator::True.into();
+
+    let source_path = unique_test_path("fixexports_type_metadata.m")
+        .to_string_lossy()
+        .to_string();
+    let definition = IdentifierDefinitionRef::new(
+        &mut vm.heap,
+        HereInfo {
+            script_file: source_path.clone(),
+            line_number: 11,
+        },
+        None,
+    );
+    let type_name = IdentifierRecordRef::new(
+        &mut vm.heap,
+        "TypeName".to_string(),
+        definition,
+        Type::Type.into(),
+        Some(IdentifierValueRef::from_ref(Combinator::Undef.into())),
+    );
+
+    let defs = ConsList::new(&mut vm.heap, type_name);
+    let file_record = FileRecord::new(&mut vm.heap, source_path, UNIX_EPOCH, false, defs);
+    vm.files = ConsList::new(&mut vm.heap, file_record);
+
+    vm.fix_exports();
+
+    let internal_id = vm
+        .internals
+        .head(&vm.heap)
+        .expect("expected internalized type-name entry");
+    let wrapped_definition = internal_id.get_definition(&vm.heap);
+    assert!(wrapped_definition.alias_metadata_pair(&vm.heap).is_some());
 }
 
 #[test]
