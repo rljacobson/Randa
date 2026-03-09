@@ -15,6 +15,9 @@ impl VM {
 
         self.unset_ids(self.free_ids);
         self.free_ids = ConsList::EMPTY;
+        self.detritus_parameter_bindings = ConsList::EMPTY;
+        self.missing_parameter_bindings = ConsList::EMPTY;
+        self.free_binding_sets = ConsList::EMPTY;
 
         self.sui_generis_constructors = ConsList::EMPTY;
         self.includees = ConsList::EMPTY;

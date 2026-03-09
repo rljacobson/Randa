@@ -805,3 +805,153 @@ fn unfix_exports_partial_clears_export_processing_state() {
     assert!(!vm.in_export_list);
     assert!(vm.internals.is_empty());
 }
+
+#[test]
+fn hdsort_orders_free_binding_pairs_by_identifier_name() {
+    let mut vm = VM::new_for_tests();
+
+    let gamma = vm.heap.make_empty_identifier("gamma");
+    let alpha = vm.heap.make_empty_identifier("alpha");
+    let beta = vm.heap.make_empty_identifier("beta");
+
+    let gamma_payload = vm.heap.integer_ref(1);
+    let alpha_payload = vm.heap.integer_ref(2);
+    let beta_payload = vm.heap.integer_ref(3);
+    let gamma_pair: RawValue = vm.heap.cons_ref(gamma.into(), gamma_payload).into();
+    let alpha_pair: RawValue = vm.heap.cons_ref(alpha.into(), alpha_payload).into();
+    let beta_pair: RawValue = vm.heap.cons_ref(beta.into(), beta_payload).into();
+
+    let mut unsorted: ConsList = ConsList::EMPTY;
+    unsorted.append(&mut vm.heap, gamma_pair);
+    unsorted.append(&mut vm.heap, alpha_pair);
+    unsorted.append(&mut vm.heap, beta_pair);
+
+    let sorted_ref = super::bytecode::hdsort_binding_list_ref(&mut vm.heap, unsorted.get_ref());
+    let mut sorted: ConsList = ConsList::from_ref(sorted_ref);
+
+    let mut names: Vec<String> = vec![];
+    while let Some(binding_pair_ref) = sorted.pop_raw(&vm.heap) {
+        let id_ref = IdentifierRecordRef::from_ref(vm.heap[binding_pair_ref].head);
+        names.push(id_ref.get_name(&vm.heap));
+    }
+
+    assert_eq!(names, vec!["alpha", "beta", "gamma"]);
+}
+
+#[test]
+fn bindparams_records_missing_and_extra_bindings_and_writes_matches() {
+    let mut vm = VM::new_for_tests();
+
+    let x = vm.heap.make_empty_identifier("x");
+    let y = vm.heap.make_empty_identifier("y");
+    let z = vm.heap.make_empty_identifier("z");
+
+    let x_original =
+        IdentifierDefinitionRef::alias_metadata_from_source_identifier(&mut vm.heap, x);
+    let y_original =
+        IdentifierDefinitionRef::alias_metadata_from_source_identifier(&mut vm.heap, y);
+
+    let x_formal_payload = vm
+        .heap
+        .cons_ref(x_original.get_ref().into(), Type::Undefined.into());
+    let y_formal_payload = vm
+        .heap
+        .cons_ref(y_original.get_ref().into(), Type::Undefined.into());
+    let x_formal_binding: RawValue = vm.heap.cons_ref(x.into(), x_formal_payload).into();
+    let y_formal_binding: RawValue = vm.heap.cons_ref(y.into(), y_formal_payload).into();
+
+    let mut formal_list: ConsList = ConsList::EMPTY;
+    formal_list.append(&mut vm.heap, x_formal_binding);
+    formal_list.append(&mut vm.heap, y_formal_binding);
+
+    let x_payload = vm.heap.integer_ref(42);
+    let z_payload = vm.heap.integer_ref(7);
+    let x_actual_binding: RawValue = vm.heap.cons_ref(x.into(), x_payload).into();
+    let z_actual_binding: RawValue = vm.heap.cons_ref(z.into(), z_payload).into();
+
+    let mut actual_list: ConsList = ConsList::EMPTY;
+    actual_list.append(&mut vm.heap, x_actual_binding);
+    actual_list.append(&mut vm.heap, z_actual_binding);
+
+    vm.bindparams(formal_list.get_ref().into(), actual_list.get_ref().into());
+
+    assert_eq!(vm.heap[x.get_ref()].tail, RawValue::from(x_payload));
+
+    assert_eq!(vm.missing_parameter_bindings.len(&vm.heap), 1);
+    assert_eq!(
+        vm.missing_parameter_bindings.raw_head(&vm.heap),
+        Some(y_original.get_ref())
+    );
+
+    assert_eq!(vm.detritus_parameter_bindings.len(&vm.heap), 1);
+    assert_eq!(
+        vm.detritus_parameter_bindings.raw_head(&vm.heap),
+        Some(z.get_ref())
+    );
+
+    assert_eq!(vm.free_binding_sets.len(&vm.heap), 1);
+    assert_eq!(
+        vm.free_binding_sets.raw_head(&vm.heap),
+        Some(formal_list.get_ref())
+    );
+}
+
+#[test]
+fn bindparams_records_wrong_arity_in_detritus_and_still_writes_formal_value() {
+    let mut vm = VM::new_for_tests();
+
+    let t = vm.heap.make_empty_identifier("t");
+    let t_original =
+        IdentifierDefinitionRef::alias_metadata_from_source_identifier(&mut vm.heap, t);
+
+    let formal_value_type =
+        IdentifierValueTypeRef::new(&mut vm.heap, IdentifierValueTypeData::Free);
+    t.set_value_from_data(
+        &mut vm.heap,
+        IdentifierValueData::Typed {
+            arity: 2,
+            show_function: Combinator::Nil.into(),
+            value_type: formal_value_type,
+        },
+    );
+
+    let formal_payload = vm
+        .heap
+        .cons_ref(t_original.get_ref().into(), Type::Type.into());
+    let formal_binding: RawValue = vm.heap.cons_ref(t.into(), formal_payload).into();
+    let formal_list: ConsList = ConsList::new(&mut vm.heap, formal_binding);
+
+    let actual_value_type =
+        IdentifierValueTypeRef::new(&mut vm.heap, IdentifierValueTypeData::Free);
+    let actual_type_payload = IdentifierValueRef::new(
+        &mut vm.heap,
+        IdentifierValueData::Typed {
+            arity: 3,
+            show_function: Combinator::Nil.into(),
+            value_type: actual_value_type,
+        },
+    );
+
+    let actual_binding_ref: RawValue = vm
+        .heap
+        .apply_ref(t.into(), Value::from(actual_type_payload.get_ref()))
+        .into();
+    let actual_list: ConsList = ConsList::new(&mut vm.heap, actual_binding_ref);
+
+    vm.bindparams(formal_list.get_ref().into(), actual_list.get_ref().into());
+
+    assert_eq!(vm.detritus_parameter_bindings.len(&vm.heap), 1);
+    let detritus_entry = vm
+        .detritus_parameter_bindings
+        .raw_head(&vm.heap)
+        .expect("expected one detritus entry");
+    assert_eq!(vm.heap[detritus_entry].tag, Tag::Cons);
+    assert_eq!(vm.heap[detritus_entry].head, t.get_ref());
+
+    let arity_pair_ref = vm.heap[detritus_entry].tail;
+    assert_eq!(vm.heap[arity_pair_ref].tag, Tag::DataPair);
+    assert_eq!(vm.heap[arity_pair_ref].head, 2);
+    assert_eq!(vm.heap[arity_pair_ref].tail, 3);
+
+    assert_eq!(vm.heap[t.get_ref()].tail, vm.heap[actual_binding_ref].tail);
+}

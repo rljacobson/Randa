@@ -1,4 +1,78 @@
 use super::*;
+use crate::data::api::HeapString;
+
+/// Recursively sorts `%free` actual-binding cons cells by binding-name key.
+///
+/// This directly implements Miranda C `hdsort` (`miralib/data.c`) on raw binding-list refs
+/// so include-time `bindparams` can merge formal/actual streams in name order.
+/// Invariant: returns a list containing the same binding-pair refs as input, reordered only by key.
+pub(super) fn hdsort_binding_list_ref(heap: &mut Heap, mut list_ref: RawValue) -> RawValue {
+    let nil: RawValue = Combinator::NIL.into();
+
+    if list_ref == nil {
+        return nil;
+    }
+
+    if heap[list_ref].tail == nil {
+        return list_ref;
+    }
+
+    let mut left_half: RawValue = nil;
+    let mut right_half: RawValue = nil;
+
+    while list_ref != nil {
+        let pair_ref = heap[list_ref].head;
+        right_half = RawValue::from(heap.cons_ref(pair_ref.into(), right_half.into()));
+        list_ref = heap[list_ref].tail;
+
+        std::mem::swap(&mut left_half, &mut right_half);
+    }
+
+    left_half = hdsort_binding_list_ref(heap, left_half);
+    right_half = hdsort_binding_list_ref(heap, right_half);
+
+    let mut merged_reversed: RawValue = nil;
+    while left_half != nil && right_half != nil {
+        let left_pair_ref = heap[left_half].head;
+        let right_pair_ref = heap[right_half].head;
+
+        if binding_name_for_hdsort(heap, left_pair_ref)
+            < binding_name_for_hdsort(heap, right_pair_ref)
+        {
+            merged_reversed =
+                RawValue::from(heap.cons_ref(left_pair_ref.into(), merged_reversed.into()));
+            left_half = heap[left_half].tail;
+        } else {
+            merged_reversed =
+                RawValue::from(heap.cons_ref(right_pair_ref.into(), merged_reversed.into()));
+            right_half = heap[right_half].tail;
+        }
+    }
+
+    let mut remaining = if left_half == nil {
+        right_half
+    } else {
+        left_half
+    };
+    while remaining != nil {
+        let pair_ref = heap[remaining].head;
+        merged_reversed = RawValue::from(heap.cons_ref(pair_ref.into(), merged_reversed.into()));
+        remaining = heap[remaining].tail;
+    }
+
+    let merged_reversed_list: ConsList = ConsList::from_ref(merged_reversed);
+    merged_reversed_list.reversed(heap).get_ref()
+}
+
+/// Returns the lexical sort key for one `%free` binding pair.
+///
+/// `hdsort` compares `get_id(hd[hd[pair]])`; this helper projects the same key through
+/// `IdentifierRecordRef` to keep C key semantics at the Rust boundary.
+/// Invariant: key identity matches the name of the pair-head identifier.
+fn binding_name_for_hdsort(heap: &Heap, binding_pair_ref: RawValue) -> HeapString {
+    let name_identifier_ref = heap[binding_pair_ref].head;
+    IdentifierRecordRef::from_ref(name_identifier_ref).get_name(heap)
+}
 
 impl VM {
     /// Reverse-association lookup over active alias entries by destination payload.
@@ -124,12 +198,169 @@ impl VM {
         applied_value.store_in_private_name(&mut self.heap, private_name);
     }
 
-    pub(super) fn hdsort(&mut self, _params: Value) -> Value {
-        unimplemented!()
-    }
+    /// Binds `%free` include parameters.
+    ///
+    /// Heap-shape expectations:
+    /// - `formal`: list of `cons(id, cons(datapair(original_name, 0), formal_type))`
+    /// - `actual`: list of binding pairs keyed by `pair.head == actual_name_id`
+    /// - `pair.tail`: bound payload value (value-binding payload, or AP/type payload for `==` bindings)
+    ///
+    /// Side-channel heap shapes written by this method:
+    /// - `missing_parameter_bindings`: list of `datapair(original_name, 0)`
+    /// - `detritus_parameter_bindings`: list items are either `actual_name_id` or
+    ///   `cons(actual_name_id, datapair(formal_arity, actual_arity))`
+    /// - `free_binding_sets`: stack/list of raw `formal` list refs
+    ///
+    /// Invariant: matched names always update formal value payloads; mismatch diagnostics are
+    /// accumulated without aborting this phase.
+    pub(super) fn bindparams(&mut self, formal: Value, actual: Value) {
+        // Both streams are sorted by binding name and walked in lockstep by lexical key.
+        let nil = RawValue::from(Combinator::NIL);
+        let mut formal_cursor: RawValue = formal.into();
+        let mut actual_cursor: RawValue = actual.into();
+        // Stage wrong-kind/wrong-arity entries, then append them into detritus at the end.
+        let mut badkind: ConsList = ConsList::EMPTY;
 
-    pub(super) fn bindparams(&mut self, _formal: Value, _actual: Value) {
-        unimplemented!()
+        // Each call starts with fresh diagnostics and records this include's formal set.
+        self.detritus_parameter_bindings = ConsList::EMPTY;
+        self.missing_parameter_bindings = ConsList::EMPTY;
+        self.free_binding_sets
+            .push_raw(&mut self.heap, formal_cursor);
+
+        loop {
+            // Advance through formals that have no matching actual yet.
+            while formal_cursor != nil {
+                // `formal_cursor` points to one cons cell in the formal stream.
+                // `formal_binding_ref` is `cons(formal_id, formal_payload)`.
+                let formal_binding_ref = self.heap[formal_cursor].head;
+                let formal_payload_ref = self.heap[formal_binding_ref].tail;
+                // `formal_payload` is `cons(original_name_datapair, formal_type)`.
+                let formal_original_name_ref = self.heap[formal_payload_ref].head;
+                let formal_name_ref = self.heap[formal_original_name_ref].head;
+                let formal_name = self
+                    .heap
+                    .resolve_string(Value::from(formal_name_ref))
+                    .unwrap_or_default();
+
+                if actual_cursor == nil {
+                    // No actuals left: every remaining formal is missing.
+                    self.missing_parameter_bindings
+                        .push_raw(&mut self.heap, formal_original_name_ref);
+                    formal_cursor = self.heap[formal_cursor].tail;
+                    continue;
+                }
+
+                // `actual_cursor` points to one cons cell in the actual stream.
+                // `actual_binding_ref` is keyed by `actual_binding_ref.head == actual_name_id`.
+                let actual_binding_ref = self.heap[actual_cursor].head;
+                let actual_name_ref = self.heap[actual_binding_ref].head;
+                let actual_name =
+                    IdentifierRecordRef::from_ref(actual_name_ref).get_name(&self.heap);
+
+                if formal_name < actual_name {
+                    // Formal key sorts before actual key: record missing formal and keep scanning formals.
+                    self.missing_parameter_bindings
+                        .push_raw(&mut self.heap, formal_original_name_ref);
+                    formal_cursor = self.heap[formal_cursor].tail;
+                } else {
+                    // Either equal (potential match) or actual is earlier (handled in outer flow).
+                    break;
+                }
+            }
+
+            if actual_cursor == nil {
+                // Stop once actual stream is exhausted; missing formals were recorded above.
+                break;
+            }
+
+            let actual_binding_ref = self.heap[actual_cursor].head;
+            let actual_name_ref = self.heap[actual_binding_ref].head;
+            let actual_name = IdentifierRecordRef::from_ref(actual_name_ref).get_name(&self.heap);
+
+            if formal_cursor == nil {
+                // Actual has no corresponding formal: detritus entry is just the actual name id.
+                self.detritus_parameter_bindings
+                    .push_raw(&mut self.heap, actual_name_ref);
+                actual_cursor = self.heap[actual_cursor].tail;
+                continue;
+            }
+
+            let formal_binding_ref = self.heap[formal_cursor].head;
+            let formal_payload_ref = self.heap[formal_binding_ref].tail;
+            let formal_original_name_ref = self.heap[formal_payload_ref].head;
+            let formal_name_ref = self.heap[formal_original_name_ref].head;
+            let formal_name = self
+                .heap
+                .resolve_string(Value::from(formal_name_ref))
+                .unwrap_or_default();
+
+            if formal_name != actual_name {
+                // Name mismatch with both streams present means actual name is not `%free` in this file.
+                self.detritus_parameter_bindings
+                    .push_raw(&mut self.heap, actual_name_ref);
+                actual_cursor = self.heap[actual_cursor].tail;
+                continue;
+            }
+
+            // Matched names: compute kind/arity compatibility.
+            // Convention: `-1` means "value binding" rather than "type binding".
+            let formal_type_ref = self.heap[formal_payload_ref].tail;
+            let mut formal_arity = -1;
+            if formal_type_ref == RawValue::from(Type::Type) {
+                // Type formal (`==` expected): extract arity from
+                // `formal_id.value = cons(cons(arity, showfn), cons(kind, info))`.
+                let formal_id_ref = self.heap[formal_binding_ref].head;
+                let value_ref = self.heap[formal_id_ref].tail;
+                if matches!(Value::from(value_ref), Value::Reference(_)) {
+                    let arity_pair_ref = self.heap[value_ref].head;
+                    if matches!(Value::from(arity_pair_ref), Value::Reference(_)) {
+                        formal_arity = self.heap[arity_pair_ref].head;
+                    }
+                }
+            }
+
+            let mut actual_arity = -1;
+            if self.heap[actual_binding_ref].tag == Tag::Ap {
+                // AP-shaped actual indicates a type-binding payload;
+                // read arity from the payload head pair.
+                let type_value_ref = self.heap[actual_binding_ref].tail;
+                if matches!(Value::from(type_value_ref), Value::Reference(_)) {
+                    let arity_pair_ref = self.heap[type_value_ref].head;
+                    if matches!(Value::from(arity_pair_ref), Value::Reference(_)) {
+                        actual_arity = self.heap[arity_pair_ref].head;
+                    }
+                }
+            }
+
+            if formal_arity != actual_arity {
+                // Wrong kind/arity is staged as
+                // `cons(actual_name_id, datapair(formal_arity, actual_arity))`.
+                let arity_pair: RawValue = self
+                    .heap
+                    .data_pair_ref(formal_arity.into(), actual_arity.into())
+                    .into();
+                let badkind_entry: RawValue = self
+                    .heap
+                    .cons_ref(actual_name_ref.into(), arity_pair.into())
+                    .into();
+                badkind.push_raw(&mut self.heap, badkind_entry);
+            }
+
+            // For matched names, copy payload by writing `formal_id.tail = actual_binding.tail`.
+            let formal_id_ref = self.heap[formal_binding_ref].head;
+            let actual_payload_ref = self.heap[actual_binding_ref].tail;
+            self.heap[formal_id_ref].tail = actual_payload_ref;
+
+            // Streams advance together only on key match.
+            formal_cursor = self.heap[formal_cursor].tail;
+            actual_cursor = self.heap[actual_cursor].tail;
+        }
+
+        // Finalize by appending staged wrong-kind entries into the detritus channel.
+        while let Some(badkind_entry) = badkind.pop_raw(&self.heap) {
+            self.detritus_parameter_bindings
+                .push_raw(&mut self.heap, badkind_entry);
+        }
     }
 
     /// Gets the file name for the topmost file in the `vm.files` cons list, which _should_ be the current file.
@@ -377,7 +608,10 @@ impl VM {
                 ConsList::from_ref(self.load_defs(&mut byte_iter.by_ref().copied())?.into());
         } else {
             let defs = self.load_defs(&mut byte_iter.by_ref().copied())?;
-            let sorted_parameters = self.hdsort(parameters);
+            let sorted_parameters = Value::from(hdsort_binding_list_ref(
+                &mut self.heap,
+                RawValue::from(parameters),
+            ));
             self.bindparams(defs, sorted_parameters);
         }
 

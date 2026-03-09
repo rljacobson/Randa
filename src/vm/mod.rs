@@ -112,6 +112,16 @@ pub struct VM {
     fnts: Value,       // `fnts` is flag indicating %bnf in use. Treated as Value?
     aliases: ConsList, // Not `IdentifierRecordRef`, because `hold` is not an `Identifier`.
     free_ids: ConsList<IdentifierRecordRef>,
+    // Miranda's DETROP, list of illegal `%free` actual bindings from `bindparams`.
+    // Elements are either an identifier (`name not %free`) or `cons(id, datapair(fa, ta))`
+    // for wrong-kind/wrong-arity `==` bindings.
+    detritus_parameter_bindings: ConsList,
+    // Miranda's MISSING, list of missing `%free` formal bindings from `bindparams`.
+    // Elements are formal original-name datapairs.
+    missing_parameter_bindings: ConsList,
+    // Miranda's FBS, stack/list of formal-binding sets introduced by parameterized includes.
+    // `bindparams` pushes raw formals list entries; include/type phases may later attach hereinfo.
+    free_binding_sets: ConsList,
     internals: ConsList<IdentifierRecordRef>, // list of names not exported, used by fix/unfixexports
     idsused: ConsList<IdentifierRecordRef>,
     clashes: ConsList<IdentifierRecordRef>,
@@ -292,6 +302,9 @@ impl VM {
             fnts: NIL,
             aliases: ConsList::EMPTY,
             free_ids: ConsList::EMPTY,
+            detritus_parameter_bindings: ConsList::EMPTY,
+            missing_parameter_bindings: ConsList::EMPTY,
+            free_binding_sets: ConsList::EMPTY,
             internals: ConsList::EMPTY,
             idsused: ConsList::EMPTY,
             clashes: ConsList::EMPTY,
