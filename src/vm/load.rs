@@ -1,5 +1,7 @@
 use super::diagnostics::{alfasort, printlist, source_update_check};
 use super::*;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 
 impl VM {
     /// Loads the object file for `source_path` if it exists and is modified after `source_path`. Otherwise calls
@@ -760,10 +762,15 @@ impl VM {
     /// - intentionally preserves `source_path` in the boundary contract for
     ///   future serializer output/diagnostic context,
     /// - defers actual dump serialization to later integration.
-    pub(super) fn run_makedump_boundary(
-        &mut self,
-        _source_path: &str,
-    ) -> Result<(), BytecodeError> {
+    pub(super) fn run_makedump_boundary(&mut self, source_path: &str) -> Result<(), BytecodeError> {
+        let dump_path = PathBuf::from(format!(
+            "{}{}",
+            source_path.strip_suffix(".m").unwrap_or(source_path),
+            ".x"
+        ));
+        let dump_bytes = self.serialize_dump_for_current_load_state();
+        self.write_dump_file_atomically(&dump_path, &dump_bytes)?;
+
         Ok(())
     }
 
@@ -792,6 +799,133 @@ impl VM {
         self.run_makedump_boundary(source_path)?;
 
         Ok(())
+    }
+
+    /// Serializes the currently reachable dump shape for load orchestration boundaries.
+    ///
+    /// Success-path dumps encode file anchors with empty definition/trailer lists.
+    /// Syntax-fallback dumps encode syntax sentinel + error line + old-file anchors.
+    /// Invariant: output is deterministic and decode-compatible with current `load_script` section order.
+    fn serialize_dump_for_current_load_state(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.push(WORD_SIZE as u8);
+        bytes.push(XVERSION as u8);
+
+        if self.files.is_empty() {
+            bytes.push(0);
+            bytes.extend_from_slice(&self.error_line.to_le_bytes());
+
+            let mut old_files = self.old_files;
+            while let Some(file_record) = old_files.pop(&self.heap) {
+                let filename = file_record.get_file_name(&self.heap);
+                bytes.push(1);
+                bytes.extend_from_slice(filename.as_bytes());
+                bytes.push(0);
+
+                let modified = file_record
+                    .get_last_modified(&self.heap)
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                bytes.extend_from_slice(&modified.to_le_bytes());
+            }
+
+            return bytes;
+        }
+
+        let mut files = self.files;
+        while let Some(file_record) = files.pop(&self.heap) {
+            let filename = file_record.get_file_name(&self.heap);
+            bytes.push(1);
+            bytes.extend_from_slice(filename.as_bytes());
+            bytes.push(0);
+
+            let modified = file_record
+                .get_last_modified(&self.heap)
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            bytes.extend_from_slice(&modified.to_le_bytes());
+
+            let shareable = if file_record.is_shareable(&self.heap) {
+                1
+            } else {
+                0
+            };
+            bytes.push(shareable);
+
+            // Current parser-placeholder load path keeps file definienda empty.
+            // This lone DEF_X is a placeholder for deferred `dump_defs` parity once
+            // real file definition payloads become reachable.
+            bytes.push(Bytecode::Definition.code());
+        }
+
+        bytes.push(0);
+
+        // Placeholder empty `dump_defs(algshfns)` section; real object/definition
+        // serialization remains deferred until non-empty payloads are reachable.
+        bytes.push(Bytecode::Definition.code());
+
+        // Placeholder `[ND]` / `[True]` marker encoding. The trailing DEF_X remains
+        // the deferred `dump_ob` / `dump_defs` boundary for full parity payloads.
+        if self.unused_types {
+            bytes.push(Combinator::True as u8);
+            bytes.push(Bytecode::Definition.code());
+        } else {
+            bytes.push(Bytecode::Definition.code());
+        }
+
+        // Placeholder empty section for the decoded `sui_generis_constructors`
+        // block; real `dump_defs` parity is deferred.
+        bytes.push(Bytecode::Definition.code());
+
+        // Placeholder empty `%free` section; real `dump_ob` / `dump_defs` parity for
+        // bound free-id payloads is deferred to later parser/load integration.
+        bytes.push(Bytecode::Definition.code());
+
+        // Placeholder empty internals definition list; real `dump_defs(internals)`
+        // serialization is deferred until non-empty internals are dumped here.
+        bytes.push(Bytecode::Definition.code());
+
+        bytes
+    }
+
+    /// Writes dump bytes to `path` via temp-file replacement.
+    ///
+    /// The temp-file rename keeps partially written dumps from becoming visible at `path`.
+    /// Invariant: on write failure, no success result is returned to load orchestration.
+    fn write_dump_file_atomically(
+        &self,
+        path: &Path,
+        dump_bytes: &[u8],
+    ) -> Result<(), BytecodeError> {
+        let mut temp_path = path.as_os_str().to_os_string();
+        temp_path.push(".tmp");
+        let temp_path = PathBuf::from(temp_path);
+
+        let mut temp_file =
+            std::fs::File::create(&temp_path).map_err(|source| BytecodeError::DumpWriteFailed {
+                path: path.display().to_string(),
+                source,
+            })?;
+
+        temp_file
+            .write_all(dump_bytes)
+            .map_err(|source| BytecodeError::DumpWriteFailed {
+                path: path.display().to_string(),
+                source,
+            })?;
+        temp_file
+            .sync_all()
+            .map_err(|source| BytecodeError::DumpWriteFailed {
+                path: path.display().to_string(),
+                source,
+            })?;
+
+        std::fs::rename(&temp_path, path).map_err(|source| BytecodeError::DumpWriteFailed {
+            path: path.display().to_string(),
+            source,
+        })
     }
 
     /// Parser/openfile load boundary.

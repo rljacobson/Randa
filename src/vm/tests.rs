@@ -612,6 +612,26 @@ fn dump_visibility_phase_runs_for_normal_m_source() {
 }
 
 #[test]
+fn dump_visibility_phase_writes_dump_file_for_normal_m_source() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("dump_write_success.m");
+    let source_path_str = source_path.to_string_lossy().to_string();
+    vm.files = vm.empty_environment_for_source(&source_path_str, UNIX_EPOCH);
+
+    let result = vm.run_dump_visibility_phase(&source_path_str);
+
+    assert!(result.is_ok());
+
+    let dump_path = source_path.with_extension("x");
+    let dump_bytes = std::fs::read(dump_path).expect("expected dump file to be written");
+    assert!(dump_bytes.len() > 2);
+    assert_eq!(dump_bytes[0], WORD_SIZE as u8);
+    assert_eq!(dump_bytes[1], XVERSION as u8);
+}
+
+#[test]
 fn dump_visibility_phase_skips_non_m_source_when_not_initializing() {
     let mut vm = VM::new_for_tests();
     vm.initializing = false;
@@ -660,19 +680,66 @@ fn syntax_dump_records_source_anchor_for_m_scripts() {
 }
 
 #[test]
+fn syntax_dump_writes_dump_file_for_m_scripts() {
+    let mut vm = VM::new_for_tests();
+    vm.old_files = ConsList::EMPTY;
+    vm.error_line = 17;
+
+    let source_path = unique_test_path("syntax_dump_write.m");
+    let source_path_str = source_path.to_string_lossy().to_string();
+    let result = vm.maybe_write_syntax_dump(&source_path_str);
+
+    assert!(result.is_ok());
+
+    let dump_path = source_path.with_extension("x");
+    let dump_bytes = std::fs::read(dump_path).expect("expected syntax dump file to be written");
+    assert!(dump_bytes.len() > 2);
+    assert_eq!(dump_bytes[0], WORD_SIZE as u8);
+    assert_eq!(dump_bytes[1], XVERSION as u8);
+    assert_eq!(dump_bytes[2], 0);
+}
+
+#[test]
 fn syntax_dump_is_noop_for_non_m_sources() {
     let mut vm = VM::new_for_tests();
     vm.old_files = ConsList::EMPTY;
     vm.last_load_phase_trace.clear();
 
-    let source_path = unique_test_path("syntax_dump_anchor.x")
-        .to_string_lossy()
-        .to_string();
-    let result = vm.maybe_write_syntax_dump(&source_path);
+    let source_path = unique_test_path("syntax_dump_anchor.x");
+    let source_path_str = source_path.to_string_lossy().to_string();
+    let result = vm.maybe_write_syntax_dump(&source_path_str);
 
     assert!(result.is_ok());
     assert!(vm.old_files.is_empty());
     assert!(vm.last_load_phase_trace.is_empty());
+    assert!(!source_path.with_extension("x").exists());
+}
+
+#[test]
+fn load_script_consumes_dump_shape_written_by_dump_visibility_phase() {
+    let mut writer_vm = VM::new_for_tests();
+    writer_vm.initializing = false;
+
+    let source_path = unique_test_path("dump_decode_roundtrip.m");
+    let source_path_str = source_path.to_string_lossy().to_string();
+    writer_vm.files = writer_vm.empty_environment_for_source(&source_path_str, UNIX_EPOCH);
+
+    let write_result = writer_vm.run_dump_visibility_phase(&source_path_str);
+    assert!(write_result.is_ok());
+
+    let mut reader_vm = VM::new_for_tests();
+    reader_vm.initializing = false;
+    let dump_path = source_path.with_extension("x");
+    let dump_file = File::open(dump_path).expect("expected generated dump file");
+    let load_result =
+        reader_vm.load_script(&dump_file, source_path_str, ConsList::EMPTY, NIL, true);
+
+    let decode_compatible = match load_result {
+        Ok(files) => !files.is_empty(),
+        Err(BytecodeError::WrongSourceFile) => true,
+        _ => false,
+    };
+    assert!(decode_compatible, "{:?}", load_result);
 }
 
 #[test]

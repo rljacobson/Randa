@@ -99,6 +99,11 @@ impl FileRecord {
         ConsList::from_ref(self.definienda_value(heap).into())
     }
 
+    pub fn is_shareable(&self, heap: &Heap) -> bool {
+        let header_cons_ref = self.header_cons_ref(heap);
+        heap[header_cons_ref].tail == Combinator::True.into()
+    }
+
     /// Sets definienda to NIL
     #[inline(always)]
     pub fn clear_definienda(&self, heap: &mut Heap) {

@@ -55,6 +55,12 @@ pub enum BytecodeError {
     CodegenWithoutLoadedFiles,
     #[error("Initialization load contains unresolved errors")]
     InitializationLoadContainsErrors,
+    #[error("Unable to write dump file: {path}")]
+    DumpWriteFailed {
+        path: String,
+        #[source]
+        source: io::Error,
+    },
 }
 
 impl BytecodeError {
