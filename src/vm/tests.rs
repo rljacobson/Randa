@@ -1,5 +1,6 @@
 use super::*;
-use crate::compiler::HereInfo;
+use crate::compiler::{HereInfo, ParserBoundary, ParserSupportError};
+use crate::data::api::IdentifierValueTypeKind;
 use std::path::PathBuf;
 
 fn unique_test_path(file_name: &str) -> PathBuf {
@@ -251,6 +252,45 @@ fn load_file_reports_syntax_error_during_initialization() {
 }
 
 #[test]
+fn parse_source_script_commits_syntax_diagnostic_before_returning_status() {
+    let mut vm = VM::new_for_tests();
+    let source_path = unique_test_path("parse_boundary_syntax.m");
+    std::fs::write(&source_path, "before\nRANDA_PARSE_SYNTAX_ERROR\nafter\n")
+        .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+    let source_file = File::open(&source_path).expect("failed to open source test file");
+
+    let outcome = vm
+        .parse_source_script(&source_file, &source_path_str, false)
+        .expect("expected parse boundary to return syntax status");
+
+    assert_eq!(outcome.status, ParsePhaseStatus::SyntaxError);
+    assert_eq!(vm.error_line, 2);
+    assert_eq!(vm.parser_diagnostics.len(), 1);
+    assert_eq!(
+        vm.parser_diagnostics[0].message,
+        "source contains syntax errors"
+    );
+    assert_eq!(
+        vm.parser_diagnostics[0]
+            .here_info
+            .as_ref()
+            .unwrap()
+            .line_number,
+        2
+    );
+    assert_eq!(
+        vm.parser_diagnostics[0]
+            .here_info
+            .as_ref()
+            .unwrap()
+            .script_file,
+        source_path_str
+    );
+    assert_eq!(vm.errs.len(), 1);
+}
+
+#[test]
 fn success_postlude_phase_resets_syntax_editor_state() {
     let mut vm = VM::new_for_tests();
     vm.initializing = false;
@@ -268,6 +308,7 @@ fn success_postlude_phase_resets_syntax_editor_state() {
     assert!(vm.sorted);
     assert_eq!(vm.error_line, 0);
     assert!(vm.errs.is_empty());
+    assert!(vm.parser_diagnostics.is_empty());
     assert!(!vm.old_files.is_empty());
 }
 
@@ -289,9 +330,136 @@ fn syntax_fallback_resets_syntax_editor_state_outside_initialization() {
     assert!(result.is_ok());
     assert_eq!(vm.error_line, 0);
     assert!(vm.errs.is_empty());
+    assert!(vm.parser_diagnostics.is_empty());
     assert!(vm.files.is_empty());
     assert!(vm.includees.is_empty());
     assert!(!vm.old_files.is_empty());
+}
+
+#[test]
+fn parser_boundary_interns_identifiers_and_builds_alias_metadata() {
+    let mut vm = VM::new_for_tests();
+
+    let first = vm.intern_identifier("widget");
+    let second = vm.intern_identifier("widget");
+
+    assert_eq!(first, second);
+    assert_eq!(vm.identifier_name(first), "widget");
+
+    let metadata = vm.source_name_metadata("widget");
+    assert_eq!(
+        vm.heap
+            .resolve_string(metadata.left_value(&vm.heap))
+            .unwrap(),
+        "widget"
+    );
+    assert_eq!(RawValue::from(metadata.right_value(&vm.heap)), 0);
+}
+
+#[test]
+fn parser_boundary_supports_type_and_runtime_helpers() {
+    let mut vm = VM::new_for_tests();
+
+    let bool_id = vm.intern_identifier("bool");
+    assert_eq!(vm.translate_type_identifier(bool_id), Type::Bool.into());
+
+    let custom_type_value = IdentifierValueTypeRef::new(
+        &mut vm.heap,
+        IdentifierValueTypeData::Abstract { basis: NIL },
+    );
+    let custom_type_id_value = IdentifierValueRef::new(
+        &mut vm.heap,
+        IdentifierValueData::Typed {
+            arity: 0,
+            show_function: Value::None,
+            value_type: custom_type_value,
+        },
+    );
+    let custom_type = IdentifierRecordRef::new(
+        &mut vm.heap,
+        "Thing".to_string(),
+        IdentifierDefinitionRef::undefined(),
+        Type::Type.into(),
+        Some(custom_type_id_value),
+    );
+
+    let show_fn = vm.intern_prefixed_identifier("show", custom_type);
+    assert_eq!(vm.identifier_name(show_fn), "showThing");
+    vm.attach_type_show_function(custom_type, show_fn)
+        .expect("expected typed show function attachment to succeed");
+
+    let IdentifierValueData::Typed { show_function, .. } =
+        custom_type.get_value(&vm.heap).unwrap().get_data(&vm.heap)
+    else {
+        panic!("expected typed identifier value");
+    };
+    assert_eq!(show_function, show_fn.into());
+
+    assert_eq!(vm.listdiff_function(), vm.listdiff_fn.into());
+    assert_eq!(vm.numeric_one(), Value::Data(1));
+    assert_eq!(
+        vm.void_tuple(),
+        vm.void_.get_value(&vm.heap).unwrap().into()
+    );
+    assert_eq!(vm.indent_function().unwrap(), vm.indent_fn.into());
+    assert_eq!(vm.outdent_function().unwrap(), vm.outdent_fn.into());
+
+    let private_name = vm.private_name(Combinator::Undef.into());
+    assert_ne!(private_name, Combinator::Undef.into());
+}
+
+#[test]
+fn parser_boundary_exposes_explicit_deferred_mutation_stubs() {
+    let mut vm = VM::new_for_tests();
+
+    assert_eq!(
+        vm.record_deferred_exports(NIL, NIL, NIL),
+        Err(ParserSupportError::DeferredMutation {
+            operation: "record_deferred_exports"
+        })
+    );
+    assert_eq!(
+        vm.record_deferred_includees(NIL),
+        Err(ParserSupportError::DeferredMutation {
+            operation: "record_deferred_includees"
+        })
+    );
+    assert_eq!(
+        vm.record_deferred_freeids(NIL),
+        Err(ParserSupportError::DeferredMutation {
+            operation: "record_deferred_freeids"
+        })
+    );
+    assert_eq!(
+        vm.declare_definition(NIL),
+        Err(ParserSupportError::DeferredMutation {
+            operation: "declare_definition"
+        })
+    );
+    assert_eq!(
+        vm.apply_specification(NIL, NIL, NIL),
+        Err(ParserSupportError::DeferredMutation {
+            operation: "apply_specification"
+        })
+    );
+    assert_eq!(
+        vm.declare_type(NIL, IdentifierValueTypeKind::Abstract, NIL, NIL),
+        Err(ParserSupportError::DeferredMutation {
+            operation: "declare_type"
+        })
+    );
+    assert_eq!(
+        vm.declare_constructor(NIL, NIL, NIL, NIL),
+        Err(ParserSupportError::DeferredMutation {
+            operation: "declare_constructor"
+        })
+    );
+    assert_eq!(
+        vm.free_value(),
+        Err(ParserSupportError::DeferredMutation {
+            operation: "free_value"
+        })
+    );
 }
 
 #[test]

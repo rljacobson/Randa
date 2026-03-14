@@ -1,5 +1,9 @@
 use super::diagnostics::{alfasort, printlist, source_update_check};
 use super::*;
+use crate::compiler::{
+    line_number_for_location, HereInfo, Loc, ParserBoundary, ParserDiagnostic, ParserSupportError,
+};
+use crate::data::api::IdentifierValueTypeKind;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -303,6 +307,27 @@ impl VM {
         ConsList::new(&mut self.heap, source_record)
     }
 
+    fn record_parser_syntax_diagnostic(&mut self, diagnostic: ParserDiagnostic) {
+        if self.error_line == 0 {
+            if let Some(here_info) = &diagnostic.here_info {
+                if here_info.line_number > 0 {
+                    self.error_line = here_info.line_number as usize;
+                }
+            }
+        }
+
+        if let Some(here_info) = diagnostic.here_info.clone() {
+            let raw_here_info = FileInfoRef::from_script_file(
+                &mut self.heap,
+                here_info.script_file,
+                here_info.line_number,
+            );
+            self.errs.push(raw_here_info.get_ref());
+        }
+
+        self.parser_diagnostics.push(diagnostic);
+    }
+
     pub(super) fn apply_syntax_error_fallback(
         &mut self,
         source_path: &str,
@@ -341,6 +366,7 @@ impl VM {
     pub(super) fn reset_syntax_error_state_for_load(&mut self) {
         self.error_line = 0;
         self.errs.clear();
+        self.parser_diagnostics.clear();
     }
 
     /// Validates `%export` file-id bindings against the currently tracked include set.
@@ -964,6 +990,16 @@ impl VM {
         }
 
         if source_text.contains("RANDA_PARSE_SYNTAX_ERROR") {
+            let marker = "RANDA_PARSE_SYNTAX_ERROR";
+            let location = source_text
+                .find(marker)
+                .map(|begin| Loc::new(begin as u32, (begin + marker.len()) as u32));
+            let here_info = self.here_info_for_location(source_path, &source_text, location);
+            self.record_syntax_diagnostic(ParserDiagnostic::syntax(
+                "source contains syntax errors",
+                location,
+                Some(here_info),
+            ));
             return Ok(ParsePhaseOutcome {
                 status: ParsePhaseStatus::SyntaxError,
                 files: placeholder_files,
@@ -1065,6 +1101,179 @@ impl VM {
             .register_identifier_name(restored_name.as_str(), restored_public_ref);
 
         Some(IdentifierRecordRef::from_ref(restored_public_ref))
+    }
+}
+
+impl ParserBoundary for VM {
+    fn record_syntax_diagnostic(&mut self, diagnostic: ParserDiagnostic) {
+        self.record_parser_syntax_diagnostic(diagnostic);
+    }
+
+    fn here_info_for_location(
+        &self,
+        source_path: &str,
+        source_text: &str,
+        location: Option<Loc>,
+    ) -> HereInfo {
+        HereInfo {
+            script_file: source_path.to_string(),
+            line_number: line_number_for_location(source_text, location),
+        }
+    }
+
+    fn intern_identifier(&mut self, name: &str) -> IdentifierRecordRef {
+        self.heap
+            .get_identifier(name)
+            .unwrap_or_else(|| self.heap.make_empty_identifier(name))
+    }
+
+    fn identifier_name(&self, identifier: IdentifierRecordRef) -> String {
+        identifier.get_name(&self.heap)
+    }
+
+    fn source_name_metadata(&mut self, source_name: &str) -> DataPair {
+        let source_identifier = self.intern_identifier(source_name);
+        IdentifierDefinitionRef::alias_metadata_from_source_identifier(
+            &mut self.heap,
+            source_identifier,
+        )
+    }
+
+    fn private_name(&mut self, value: Value) -> Value {
+        self.heap.make_private_symbol_ref(value)
+    }
+
+    fn translate_type_identifier(&self, identifier: IdentifierRecordRef) -> Value {
+        match identifier.get_name(&self.heap).as_str() {
+            "bool" => Type::Bool.into(),
+            "num" => Type::Number.into(),
+            "char" => Type::Char.into(),
+            _ => identifier.into(),
+        }
+    }
+
+    fn listdiff_function(&self) -> Value {
+        self.listdiff_fn.into()
+    }
+
+    fn numeric_one(&self) -> Value {
+        Value::Data(1)
+    }
+
+    fn void_tuple(&self) -> Value {
+        self.void_
+            .get_value(&self.heap)
+            .map(Value::from)
+            .unwrap_or_else(|| self.void_.into())
+    }
+
+    fn attach_type_show_function(
+        &mut self,
+        type_identifier: IdentifierRecordRef,
+        show_function: IdentifierRecordRef,
+    ) -> Result<(), ParserSupportError> {
+        let Some(type_value) = type_identifier.get_value(&self.heap) else {
+            return Err(ParserSupportError::DeferredMutation {
+                operation: "attach_type_show_function",
+            });
+        };
+
+        match type_value.get_data(&self.heap) {
+            IdentifierValueData::Typed {
+                arity, value_type, ..
+            } => {
+                type_identifier.set_value_from_data(
+                    &mut self.heap,
+                    IdentifierValueData::Typed {
+                        arity,
+                        show_function: show_function.into(),
+                        value_type,
+                    },
+                );
+                Ok(())
+            }
+            _ => Err(ParserSupportError::DeferredMutation {
+                operation: "attach_type_show_function",
+            }),
+        }
+    }
+
+    fn indent_function(&self) -> Result<Value, ParserSupportError> {
+        Ok(self.indent_fn.into())
+    }
+
+    fn outdent_function(&self) -> Result<Value, ParserSupportError> {
+        Ok(self.outdent_fn.into())
+    }
+
+    fn record_deferred_exports(
+        &mut self,
+        _exports: Value,
+        _exportfiles: Value,
+        _embargoes: Value,
+    ) -> Result<(), ParserSupportError> {
+        Err(ParserSupportError::DeferredMutation {
+            operation: "record_deferred_exports",
+        })
+    }
+
+    fn record_deferred_includees(&mut self, _includees: Value) -> Result<(), ParserSupportError> {
+        Err(ParserSupportError::DeferredMutation {
+            operation: "record_deferred_includees",
+        })
+    }
+
+    fn record_deferred_freeids(&mut self, _freeids: Value) -> Result<(), ParserSupportError> {
+        Err(ParserSupportError::DeferredMutation {
+            operation: "record_deferred_freeids",
+        })
+    }
+
+    fn declare_definition(&mut self, _definition: Value) -> Result<(), ParserSupportError> {
+        Err(ParserSupportError::DeferredMutation {
+            operation: "declare_definition",
+        })
+    }
+
+    fn apply_specification(
+        &mut self,
+        _identifier: Value,
+        _specification: Value,
+        _here: Value,
+    ) -> Result<(), ParserSupportError> {
+        Err(ParserSupportError::DeferredMutation {
+            operation: "apply_specification",
+        })
+    }
+
+    fn declare_type(
+        &mut self,
+        _identifier: Value,
+        _kind: IdentifierValueTypeKind,
+        _info: Value,
+        _here: Value,
+    ) -> Result<(), ParserSupportError> {
+        Err(ParserSupportError::DeferredMutation {
+            operation: "declare_type",
+        })
+    }
+
+    fn declare_constructor(
+        &mut self,
+        _identifier: Value,
+        _type_value: Value,
+        _rhs_ids: Value,
+        _here: Value,
+    ) -> Result<(), ParserSupportError> {
+        Err(ParserSupportError::DeferredMutation {
+            operation: "declare_constructor",
+        })
+    }
+
+    fn free_value(&self) -> Result<Value, ParserSupportError> {
+        Err(ParserSupportError::DeferredMutation {
+            operation: "free_value",
+        })
     }
 }
 

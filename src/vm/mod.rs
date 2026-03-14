@@ -27,6 +27,7 @@ use crate::bytecode_parser::{
     parse_filename_modified_time, parse_string,
 };
 use crate::compiler::bytecode::Bytecode;
+use crate::compiler::ParserDiagnostic;
 use crate::data::api::IdentifierDefinitionData;
 use crate::{
     compiler::Token,
@@ -89,6 +90,7 @@ pub struct VM {
     /// of up to one error in `%insert` script (each is 0 if not set). Some errors can set both.
     error_line: usize,
     errs: Vec<RawValue>, // Todo: What is this holding? It is `char[24]` in Miranda.
+    parser_diagnostics: Vec<ParserDiagnostic>,
 
     last_expression: Value, // A reference to the last expression evaluated.
     private_symbol_base_index: usize, // The index into the private_symbol stack marking the beginning of the current file's private symbols.
@@ -266,6 +268,7 @@ impl VM {
             in_file: None,
             error_line: 0,
             errs: vec![],
+            parser_diagnostics: vec![],
             last_expression: Value::None, // A reference to the last expression evaluated.
             private_symbol_base_index: 0,
             include_depth: 0,

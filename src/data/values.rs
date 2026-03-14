@@ -87,7 +87,7 @@ impl From<RawValue> for Value {
         let v = value;
 
         if v < TOKEN_BASE {
-            // It is possible to encode a non-ASCII char which then decodes as the wrong value type.
+            // It is possible to encode a non-ASCII char, which then decodes as the wrong value type.
             // Make sure `Value::Char`'s only hold ASCII characters.
             Value::Char(
                 // This must be kept in sync with the target of `RawValue`.
