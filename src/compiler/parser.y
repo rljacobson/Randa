@@ -22,7 +22,9 @@ use super::{
 
 use crate::{
     data::{
+        api::IdentifierValueTypeKind,
         tag::Tag,
+        types::Type,
         values::{
             Value,
             RawValue
@@ -87,6 +89,7 @@ use crate::{
 
 // Used so often.
 static NIL: Value = Value::Combinator(Combinator::Nil);
+const GUARD: Value = Value::Data(1);
 
 /*
 Miranda has text representation of tokens here, but we don't need that,
@@ -155,8 +158,6 @@ entity:  /* the entity to be parsed is either a definition script or an
     error
 
     | script {
-        // Done compiling script in this action.
-        // lastname=0;
         /* outstats(); */  // statistics not usually wanted after compilation
       }
 
@@ -166,28 +167,20 @@ entity:  /* the entity to be parsed is either a definition script or an
           for the different commands for interactive sessions.
           */
     | Value exp {
-        /*
-        In an interactive session, the special variable `$$` always
-        contains the value of the last evaluated expression. Since we
-        separate parsing from evaluation, we don't set this value here.
-        */
-        // lastexp=$2; // next line of `$+'
+        // Interactive `$+` / `lastexp` update is handled outside the current
+        // expression-only parser path.
       }
 
     | Eval exp {
-        // If no sytntax errors and the last token read from the lexer was
-        // EOF, then evaluate the expression `exp`. Moved out of the parser.
+        // Interactive evaluation is handled outside the parser.
       }
 
     | Eval exp ColonColon {
-        // Typecheck `exp`.
+        // Interactive type reporting is handled outside the parser.
       }
 
     | Eval exp To {
-          /* exp &> pathname
-          A background process is set up  to  evaluate  exp,  and  the  resulting
-          output (including error messages, if any) sent to the designated file.
-          */
+          // Interactive output redirection is handled outside the parser.
       }
     ;
 
@@ -271,18 +264,15 @@ alt:
     here exp {
         errs=$1;
         syntax("obsolete syntax, \", otherwise\" missing\n");
-        $$ = self.heap.apply_ref(Token::Otherwise.into(), label($1, $2));
+        $$ = self.heap.apply_ref(Token::Otherwise.into(), self.heap.label_ref($1, $2));
       }
-    | here exp Comma if exp { $$ = label($1, self.heap.apply2(Combinator::Cond.into(), $5, $2)); }
-    | here exp Comma Otherwise { $$ = self.heap.apply_ref(Token::Otherwise.into(), label($1, $2)); }
+    | here exp Comma if exp { $$ = self.heap.label_ref($1, self.heap.apply2(Combinator::Cond.into(), $5, $2)); }
+    | here exp Comma Otherwise { $$ = self.heap.apply_ref(Token::Otherwise.into(), self.heap.label_ref($1, $2)); }
     ;
 
 if:
     /* empty */ {
-        //extern word strictif;
-        if strictif {
-          syntax("\"if\" missing\n");
-        }
+        // The legacy `strictif` policy hook is not wired in here.
       }
     | If
     ;
@@ -357,8 +347,8 @@ e2:
     | e2 Plus e2 { $$ = self.heap.apply2(Combinator::Plus.into(), $1, $3); }
     | e2 Minus e2 { $$ = self.heap.apply2(Combinator::Minus.into(), $1, $3); }
     | e2 Times e2 { $$ = self.heap.apply2(Combinator::Times.into(), $1, $3); }
-    | e2 Divide e2 { $$ = self.heap.apply2(Combinator::Divide.into(), $1, $3); }
-    | e2 IntegerDivide e2 { $$ = self.heap.apply2(Combinator::IntegerDivide.into(), $1, $3); }
+    | e2 Divide e2 { $$ = self.heap.apply2(Combinator::DivideFloat.into(), $1, $3); }
+    | e2 IntegerDivide e2 { $$ = self.heap.apply2(Combinator::DivideInteger.into(), $1, $3); }
     | e2 Remainder e2 { $$ = self.heap.apply2(Combinator::Remainder.into(), $1, $3); }
     | e2 Caret e2 { $$ = self.heap.apply2(Combinator::Power.into(), $1, $3); }
     | e2 Dot e2 { $$ = self.heap.apply2(Combinator::B.into(), $1, $3);  }
@@ -375,10 +365,10 @@ es2:               /* e2 or presection */
     | e2 Minus { $$ = self.heap.apply_ref(Combinator::Minus.into(), $1); }
     | e2 Times e2 { $$ = self.heap.apply2(Combinator::Times.into(), $1, $3); }
     | e2 Times { $$ = self.heap.apply_ref(Combinator::Times.into(), $1); }
-    | e2 Divide e2 { $$ = self.heap.apply2(Combinator::Divide.into(), $1, $3); }
-    | e2 Divide { $$ = self.heap.apply_ref(Combinator::Divide.into(), $1); }
-    | e2 IntegerDivide e2 { $$ = self.heap.apply2(Combinator::IntegerDivide.into(), $1, $3); }
-    | e2 IntegerDivide { $$ = self.heap.apply_ref(Combinator::IntegerDivide.into(), $1); }
+    | e2 Divide e2 { $$ = self.heap.apply2(Combinator::DivideFloat.into(), $1, $3); }
+    | e2 Divide { $$ = self.heap.apply_ref(Combinator::DivideFloat.into(), $1); }
+    | e2 IntegerDivide e2 { $$ = self.heap.apply2(Combinator::DivideInteger.into(), $1, $3); }
+    | e2 IntegerDivide { $$ = self.heap.apply_ref(Combinator::DivideInteger.into(), $1); }
     | e2 Remainder e2 { $$ = self.heap.apply2(Combinator::Remainder.into(), $1, $3); }
     | e2 Remainder { $$ = self.heap.apply_ref(Combinator::Remainder.into(), $1); }
     | e2 Caret e2 { $$ = self.heap.apply2(Combinator::Power.into(), $1, $3); }
@@ -446,6 +436,7 @@ relsn:                     /* reln or presection */
     ;
 
 arg:
+    /* `%lex` parsing remains outside the current expression-only parser path. */
     /* empty */ {
       if !SYNERR {
         lexstates = NIL;
@@ -472,7 +463,9 @@ arg:
                             get_id(self.heap[lexstate_hd].head)
                           );
                         } else {
-                          // Todo: What are these magic values?
+                          // Canonical `%lex` state flags from `miralib/rules.y`:
+                          // bit 1 means the state is entered, bit 2 means the
+                          // state has associated rules.
                           if !(lexstate_hd_tl & 2) {
                             println!(
                               "warning: lex state {} has no associated rules",
@@ -487,7 +480,7 @@ arg:
                     if $3 == NIL {
                     syntax("%lex with no rules\n");
                   } else {
-                    self.heap[$3].tag = LEXER;
+                     self.heap[$3].tag = Tag::Lexer;
                   }
 
                     /*
@@ -502,14 +495,20 @@ arg:
     | Name
     | ConstructorName
     | Constant
-    | ReadVals { $$ = readvals(0, 0); }
-    | Show { $$ = show(0, 0); }
+    /* Interactive/session-only expression branches are not handled in the
+       current parser path. */
+    | ReadVals {
+        syntax("interactive \"readvals\" is not supported here\n");
+        $$ = NIL;
+      }
+    | Show {
+        syntax("interactive \"show\" is not supported here\n");
+        $$ = NIL;
+      }
     | DollarDollar {
-          $$ = lastexp;
-          if lastexp==UNDEF {
-            syntax("no previous expression to substitute for $$\n");
-          }
-        }
+        syntax("interactive \"$$\" substitution is not supported here\n");
+        $$ = NIL;
+      }
     | OpenBracket CloseBracket { $$ = NIL; }
     | OpenBracket exp CloseBracket { $$ = self.heap.cons_ref($2, NIL); }
     | OpenBracket exp Comma exp CloseBracket {
@@ -530,27 +529,23 @@ arg:
         let minus_expr= self.heap.apply2(Combinator::Minus.into(), $4, $2);
         $$ = self.heap.apply2(Combinator::Step.into(), minus_expr, $2);
      }
+    /* Only list literals and ranges are handled here; list comprehensions are
+       still unsupported. */
     | OpenBracket exp Pipe qualifiers CloseBracket {
-        $$ = if SYNERR {
-          NIL
-        }else {
-          compzf($2, $4, 0)
-        };
+        syntax("list comprehensions are not supported here\n");
+        $$ = NIL;
       }
     | OpenBracket exp Diagonal qualifiers CloseBracket {
-          $$ = if SYNERR {
-            NIL
-          } else {
-            compzf($2, $4, 1)
-          };
-        }
+        syntax("diagonal list comprehensions are not supported here\n");
+        $$ = NIL;
+      }
     | OpenParenthesis op CloseParenthesis       /* RSB */ { $$ = $2; }
     | OpenParenthesis es1 CloseParenthesis      /* presection or parenthesised e1 */ { $$ = $2; }
     | OpenParenthesis diop1 e1 CloseParenthesis /* postsection */ {
         /* optimisation */
         let hd = self.heap[$2].head;
         $$ = if self.heap[$2].tag == Tag::Ap && hd == Combinator::C.into() {
-          self.heap.apply_ref(hd.into(), $3)
+          self.heap.apply_ref(self.heap[$2].tail.into(), $3)
         } else {
           self.heap.apply2(Combinator::C.into(), $2, $3).into()
         };
@@ -564,10 +559,10 @@ arg:
         `self.heap.cons(a1, self.heap.cons(a2, ...pair(a(n-1), an)))`.
         */
         if self.heap[$4].tail.into() == NIL {
-          $$ = pair($2, self.heap[$4].head);
+          $$ = self.heap.pair_ref($2, self.heap[$4].head.into());
         } else {
           let tl = self.heap[$4].tail;
-          $$ = pair(self.heap[tl].head, self.heap[$4].head);
+          $$ = self.heap.pair_ref(self.heap[tl].head.into(), self.heap[$4].head.into());
           let mut next_item = self.heap[tl].tail;
           while next_item != NIL {
             let hd = self.heap[next_item].head;
@@ -589,7 +584,7 @@ lexrules:
           syntax("illegal lex rule - lhs matches empty\n");
         }
         let cons_a = self.heap.cons_ref($2, (1+$9).into());
-        let cons_b = self.heap.cons_ref($4, label($3, $8));
+        let cons_b = self.heap.cons_ref($4, self.heap.label_ref($3, $8));
         let cons = self.heap.cons_ref(cons_a, cons_a);
         $$ = self.heap.cons_ref(cons, $1);
       }
@@ -597,7 +592,7 @@ lexrules:
     ;
 
 lstart:
-    /* empty */ { $$ = RawValue(0).into(); }
+    /* empty */ { $$ = RawValue::from(0).into(); }
     | Less cnames Greater {
         let mut ns = NIL;
         let mut next_item = $2;
@@ -612,10 +607,12 @@ lstart:
           i += 1;
           x = &self.heap[*x].tail;
       }
-        // Todo: What does any of this do?
+      // Canonical `%lex` state records pair a constructor name with bit flags.
+      // lstart sets the "appears in start-condition list" flag (bit 2) and
+      // interns the corresponding numeric start-state index into `ns`.
       if *x == NIL {
           let hd = self.heap[next_item].head;
-          let cons = self.heap.cons_ref(hd.into(), RawValue(2).into());
+          let cons = self.heap.cons_ref(hd.into(), RawValue::from(2).into());
           *x = self.heap.cons_ref(cons, NIL);
       } else {
           let x_tail = self.heap[*x].tail;
@@ -644,7 +641,7 @@ cnames:
     ;
 
 lpostfix:
-        /* empty */ { $$ = RawValue(-1).into(); }
+        /* empty */ { $$ = RawValue::from(-1).into(); }
         | Begin ConstructorName
         {
           let mut x = &lexstates;
@@ -658,19 +655,19 @@ lpostfix:
         x = self.heap[x].tail;
           }
           if *x == NIL {
-          let cons = self.heap.cons_ref($2, RawValue(1).into());
+          let cons = self.heap.cons_ref($2, RawValue::from(1).into());
           x = self.heap.cons_ref(cons, NIL);
           } else {
         let hd = self.heap[x].head;
         self.heap[hd].tail |= 1;
           }
-            $$ = RawValue(i).into();
+            $$ = RawValue::from(i).into();
           }
         | Begin Constant {
             if !isnat($2) || get_int($2)!=0 {
               syntax("%begin not followed by IDENTIFIER or 0\n");
             }
-            $$ = RawValue(0).into();
+            $$ = RawValue::from(0).into();
           }
         ;
 
@@ -689,7 +686,7 @@ re:   /* regular expression */
 
 re1:
     lterm Divide lterm { $$ = self.heap.apply2(Combinator::Lex_RContext.into(), $1, $3); }
-    | lterm Divide { $$ = self.heap.apply2(Combinator::Lex_RContext.into(), $1, RawValue(0).into()); }
+    | lterm Divide { $$ = self.heap.apply2(Combinator::Lex_RContext.into(), $1, RawValue::from(0).into()); }
     | lterm
     ;
 
@@ -722,7 +719,7 @@ lunit:
         print!("\" in regular expression\n");
         acterror();
       };
-        $$ = if $1==NILS {
+        $$ = if $1==Combinator::Nils.into() {
           self.heap.apply_ref(Combinator::Lex_String.into(), NIL)
         } else{
           if self.heap[$1].tail==NIL {
@@ -772,55 +769,34 @@ lunit:
 
 name: Name | ConstructorName ;
 
+/* List-comprehension qualifier/generator lowering is not implemented yet. */
 qualifiers:
-    exp { $$ = self.heap.cons_ref(self.heap.cons_ref(Combinator::GUARD.into(), $1), NIL);  }
+    exp { $$ = self.heap.cons_ref(self.heap.cons_ref(GUARD, $1), NIL);  }
     | generator { $$ = self.heap.cons_ref($1, NIL);  }
     | qualifiers Semicolon generator { $$ = self.heap.cons_ref($3, $1);   }
-    | qualifiers Semicolon exp { $$ = self.heap.cons_ref(self.heap.cons_ref(Combinator::GUARD.into(), $3), $1);   }
+    | qualifiers Semicolon exp { $$ = self.heap.cons_ref(self.heap.cons_ref(GUARD, $3), $1);   }
     ;
 
 generator:
     e1 Comma generator {
-        /* fix syntax to disallow patlist on lhs of iterate generator */
-        if (self.heap[$3].head==Combinator::GENERATOR.into()) {
-          let e = tl[tl[$3]];
-          if (
-            tag[e]==Tag::Ap
-            && tag[hd[e]]==Tag::Ap
-            && (hd[hd[e]]==Combinator::Iterate.into() || hd[hd[e]]==Combinator::Iterate1.into())
-          )
-          {
-            syntax("ill-formed generator\n");
-          }
-        }
-        $$ = self.heap.cons_ref(Combinator::Repeat.into(), self.heap.cons_ref(genlhs($1), $3));
-        idsused = NIL;
+        syntax("generator syntax is not supported here\n");
+        $$ = NIL;
       }
     | generator1
     ;
 
 generator1:
     e1 LeftArrow exp {
-        $$ = self.heap.cons_ref(Combinator::Generator.into(), self.heap.cons_ref(genlhs($1), $3));
-        idsused = NIL;
+        syntax("generator syntax is not supported here\n");
+        $$ = NIL;
       }
     | e1 LeftArrow exp Comma exp DotDot {
-        let p = genlhs($1);
-        idsused = NIL;
-        $$ = self.heap.cons_ref(
-          Combinator::Generator.into(),
-          self.heap.cons_ref(
-            p,
-            self.heap.apply2(
-              if irrefutable(p) {Combinator::Iterate.into()} else {Combinator::Iterate1.into()},
-              lambda(p, $5),
-              $3
-            )
-          )
-        );
+        syntax("iterate-generator syntax is not supported here\n");
+        $$ = NIL;
       }
     ;
 
+/* Script-definition and type grammar continues below. */
 defs:
     def
     | defs def
@@ -838,14 +814,14 @@ def:
             l = self.heap[l].head;
           }
         }
-        r = label($5, r);
+        r = self.heap.label_ref($5, r);
         /* to help locate type errors */
         declare(l, r);
         lastname = l;
       }
 
     | spec {
-        let h = reverse(self.heap[$1].head);
+        let mut h = reverse(self.heap[$1].head);
         let spec_tail = self.heap[$1].tail;
         let hr = self.heap[spec_tail].head;
         let t = self.heap[spec_tail].tail;
@@ -881,30 +857,40 @@ def:
             of flagging that t is an abstract type */
         x = reverse($3);
         while x!=NIL && !SYNERR {
-          decltype(self.heap[x].head, abstract_t, undef_t, $2);
+          decltype(
+            self.heap[x].head,
+            IdentifierValueTypeKind::Abstract,
+            Type::Undefined.into(),
+            $2
+          );
           tids = self.heap.cons_ref(head(self.heap[x].head), tids);
           /* check for presence of showfunction */
           // Are  dicp  and  dicq  parts of a hash table?
           self.dicp = "show".to_string() + get_id(self.heap[tids].head);
 
-      // Todo: I can't make any sense of this. Is it  retrieving `Identifier` info? Then  use `get_identifier()`. Is
-      //       it  writing `Identifier` info? Then use `put_identifier()`.
-      // Two past the end?
-          self.dicq = dicp + strlen(dicp) + 1;
-          let shfn = name();
-          if member(ids, shfn) {
+      // The original parser builds a temporary dictionary name of the form
+      // `show<type>` and resolves it through `name()`. The typed identifier
+      // lookup/intern seam for that path is still missing here.
+           self.dicq = dicp + strlen(dicp) + 1;
+           let shfn = name();
+           if member(ids, shfn) {
             t_showfn(self.heap[tids].head) = shfn;
           }
           x = self.heap[x].tail;
         }
         TABSTRS = self.heap.cons_ref(self.heap.cons_ref(tids, ids), TABSTRS);
-        $$ = self.heap.cons_ref(nill, NIL);
+        $$ = self.heap.cons_ref(self.heap.nill, NIL);
       }
 
     | typeform indent act1 here EqualEqual type act2 outdent {
         let x = redtvars(self.heap.apply_ref($1, $6).into());
-        decltype(self.heap[x].head, IdentifierValueType::Synonym, self.heap[x].tail, $4);
-        $$ = self.heap.cons_ref(nill, NIL);
+        decltype(
+          self.heap[x].head,
+          IdentifierValueTypeKind::Synonym,
+          self.heap[x].tail,
+          $4
+        );
+        $$ = self.heap.cons_ref(self.heap.nill, NIL);
       }
 
     | typeform indent act1 here Colon2Equal construction act2 outdent {
@@ -923,15 +909,18 @@ def:
           let mut stricts = NIL;
           let mut i = 0;
           while self.heap[h].tag==Tag::Ap {
-            if (tag[self.heap[h].tail]==Tag::Ap && hd[self.heap[h].tail]==strict_t) {
+            if (
+              self.heap[self.heap[h].tail].tag == Tag::Ap &&
+              self.heap[self.heap[h].tail].head == Type::Strict.into()
+            ) {
               stricts = self.heap.cons_ref(i.into(), stricts.into());
               self.heap[h].tail = tl[self.heap[h].tail];
             }
-            t = self.heap.apply2(arrow_t, self.heap[h].tail, t);
+            t = self.heap.apply2(Type::Arrow.into(), self.heap[h].tail.into(), t);
             h = self.heap[h].head;
             i += 1;
           }
-          if(tag[h]==ID){
+          if self.heap[h].tag == Tag::Id {
             n -= 1;
             declconstr(h, n, t);
           } else {
@@ -947,9 +936,9 @@ def:
             acterror();
           } /* can this still happen? check later */
           if (stricts!=NIL) { /* ! operators were present */
-            word k = id_val(h);
+            let mut k = id_val(h);
             while (stricts!=NIL) {
-              k = self.heap.apply2(MKSTRICT, i - self.heap[stricts].head, k);
+              k = self.heap.apply2(Combinator::MkStrict.into(), (i - self.heap[stricts].head).into(), k);
               stricts = self.heap[stricts].tail;
             }
             id_val(h) = k; /* overwrite id_val of original constructor */
@@ -958,9 +947,9 @@ def:
           rhs = self.heap[rhs].tail;
         }
         if (!SYNERR) {
-          decltype($1, algebraic_t, r_ids, $4);
+          decltype($1, IdentifierValueTypeKind::Algebraic, r_ids, $4);
         }
-        $$ = self.heap.cons_ref(nill, NIL);
+        $$ = self.heap.cons_ref(self.heap.nill, NIL);
       }
 
     | indent setexp Export parts outdent {
@@ -974,7 +963,7 @@ def:
           }
           exports = self.heap.cons_ref($2, $4);  /* self.heap.cons(hereinfo, identifiers) */
         }
-        $$ = self.heap.cons_ref(nill, NIL);
+        $$ = self.heap.cons_ref(self.heap.nill, NIL);
       }
 
     | Free here OpenBrace specs CloseBrace {
@@ -982,12 +971,12 @@ def:
           errs=$2;
           syntax("multiple %free statements are illegal\n");
         } else {
-          let x = reverse($4);
+          let mut x = reverse($4);
           while (x!=NIL&&!SYNERR) {
             specify(hd[hd[x]], tl[tl[hd[x]]], hd[tl[hd[x]]]);
             freeids = self.heap.cons_ref(head(hd[hd[x]]), freeids);
-            if (tl[tl[hd[x]]]==type_t) {
-              t_class(self.heap[freeids].head) = free_t;
+            if (tl[tl[hd[x]]]==Type::Type.into()) {
+              t_class(self.heap[freeids].head) = IdentifierValueTypeKind::Free;
             }
             else {
               id_val(self.heap[freeids].head) = FREE; /* conventional value */
@@ -996,19 +985,21 @@ def:
           }
           fil_share(self.heap[files].head) = 0; /* parameterised scripts unshareable */
           freeids = alfasort(freeids);
-          for(x=freeids; x!=NIL; x=self.heap[x].tail){
+          let mut freeid_cursor = freeids;
+          while freeid_cursor!=NIL {
             /* each element of freeids is of the form
               self.heap.cons(id, self.heap.cons(original_name, type)) */
-            self.heap[x].head = self.heap.cons_ref(
-              self.heap[x].head,
+            self.heap[freeid_cursor].head = self.heap.cons_ref(
+              self.heap[freeid_cursor].head,
               self.heap.cons_ref(
-                datapair(get_id(self.heap[x].head), 0),
-                id_type(self.heap[x].head)
+                datapair(get_id(self.heap[freeid_cursor].head), 0),
+                id_type(self.heap[freeid_cursor].head)
               )
             );
+            freeid_cursor = self.heap[freeid_cursor].tail;
           }
         }
-        $$ = self.heap.cons_ref(nill, NIL);
+        $$ = self.heap.cons_ref(self.heap.nill, NIL);
       }
 
     | Include bindings modifiers outdent { /* fiddle - 'indent' done by yylex() on reading fileid */
@@ -1016,33 +1007,34 @@ def:
         // extern word CLASHES, BAD_DUMP;
         /* $1 contains file+hereinfo */
         includees = self.heap.cons_ref(self.heap.cons_ref($1, self.heap.cons_ref($3, $2)), includees);
-        $$ = self.heap.cons_ref(nill, NIL);
+        $$ = self.heap.cons_ref(self.heap.nill, NIL);
       }
 
     | here BNF { startbnf(); inbnf = 1; } names outdent productions EndIR {
         /* fiddle - `indent' done by yylex() while processing directive */
-        let lhs = NIL;
-        let p=$6;
-        let subjects;
-        let body;
-        let startswith = NIL;
-        let leftrecs = NIL;
+        let mut lhs = NIL;
+        let mut p = $6;
+        let mut subjects = NIL;
+        let mut body = NIL;
+        let mut startswith = NIL;
+        let mut leftrecs = NIL;
         ihlist = 0;
         inbnf = 0;
         nonterminals = UNION(nonterminals, $4);
-        for(;p!=NIL;p=self.heap[p].tail){
-          if (dval(self.heap[p].head)==UNDEF) {
+        while p!=NIL {
+          if (dval(self.heap[p].head)==Combinator::Undef.into()) {
             nonterminals = add1(dlhs(self.heap[p].head), nonterminals);
           }
           else{
             lhs = add1(dlhs(self.heap[p].head), lhs);
           }
+          p = self.heap[p].tail;
         }
         nonterminals = setdiff(nonterminals, lhs);
         if (nonterminals!=NIL) {
           errs = $1;
           member($4, self.heap[nonterminals].head); /*||findnt(self.heap[nonterminals].head)*/
-          printf("%sfatal error in grammar, ", echoing?"\n":"");
+          printf("%sfatal error in grammar, ", if echoing {"\n"} else {""});
           printf(
             "undefined nonterminal%s: ",
             if self.heap[nonterminals].tail==NIL {""} else {"s"}
@@ -1051,11 +1043,16 @@ def:
           acterror();
         } else { /* compute list of nonterminals admitting empty prodn */
           eprodnts = NIL;
-          L:
-          for(p = $6; p!=NIL; p = self.heap[p].tail) {
-            if(!member(eprodnts, dlhs(self.heap[p].head)) && eprod(dval(self.heap[p].head))) {
-              eprodnts = self.heap.cons_ref(dlhs(self.heap[p].head), eprodnts);
-              goto L;
+          let mut changed = true;
+          while changed {
+            changed = false;
+            p = $6;
+            while p!=NIL {
+              if(!member(eprodnts, dlhs(self.heap[p].head)) && eprod(dval(self.heap[p].head))) {
+                eprodnts = self.heap.cons_ref(dlhs(self.heap[p].head), eprodnts);
+                changed = true;
+              }
+              p = self.heap[p].tail;
             }
           }
           /*
@@ -1063,7 +1060,8 @@ def:
             (performing binomial transformation en route)
             and use to detect unremoved left recursion
           */
-          for(p=$6;p!=NIL;p=self.heap[p].tail) {
+          p = $6;
+          while p!=NIL {
             lhs = starts(dval(self.heap[p].head));
             if (member(lhs, dlhs(self.heap[p].head))) {
               binom(dval(self.heap[p].head), dlhs(self.heap[p].head));
@@ -1077,12 +1075,14 @@ def:
             } else {
               startswith = self.heap.cons_ref(self.heap.cons_ref(dlhs(self.heap[p].head), lhs), startswith);
             }
+            p = self.heap[p].tail;
           }
           startswith = tclos(sortrel(startswith));
-          for(; startswith!=NIL; startswith = self.heap[startswith].tail) {
+          while startswith!=NIL {
             if (member(tl[hd[startswith]], hd[hd[startswith]])) {
               leftrecs = add1(hd[hd[startswith]], leftrecs);
             }
+            startswith = self.heap[startswith].tail;
           }
           if(leftrecs!=NIL){
             errs = getloc(self.heap[leftrecs].head, $6);
@@ -1093,26 +1093,27 @@ def:
             printlist("irremovable left recursion: ", leftrecs);
             acterror();
           }
-          if($4==NIL) { /* implied start symbol */
-            $4 = self.heap.cons_ref(dlhs(self.heap[lastlink($6)].head), NIL);
+          let mut start_symbols = $4;
+          if(start_symbols==NIL) { /* implied start symbol */
+            start_symbols = self.heap.cons_ref(dlhs(self.heap[lastlink($6)].head), NIL);
           }
           fnts = 1; /* fnts is flag indicating %bnf in use */
-          if (self.heap[$4].tail==NIL) { /* only one start symbol */
-            subjects = getfname(self.heap[$4].head);
-            body = self.heap.apply2(G_CLOSE, str_conv(get_id(self.heap[$4].head)), self.heap[$4].head);
+          if (self.heap[start_symbols].tail==NIL) { /* only one start symbol */
+            subjects = getfname(self.heap[start_symbols].head);
+            body = self.heap.apply2(Combinator::G_Close.into(), str_conv(get_id(self.heap[start_symbols].head)), self.heap[start_symbols].head);
           } else {
             body = Void;
             subjects = Void;
-            while ($4!=NIL) {
-              subjects = pair(getfname(self.heap[$4].head), subjects);
-              body = pair(
-                self.heap.apply2(G_CLOSE, str_conv(get_id(self.heap[$4].head)), self.heap[$4].head),
+            while start_symbols!=NIL {
+              subjects = self.heap.pair_ref(getfname(self.heap[start_symbols].head), subjects);
+              body = self.heap.pair_ref(
+                self.heap.apply2(Combinator::G_Close.into(), str_conv(get_id(self.heap[start_symbols].head)), self.heap[start_symbols].head),
                 body
               );
-              $4 = self.heap[$4].tail;
+              start_symbols = self.heap[start_symbols].tail;
             }
           }
-          declare(subjects, label($1, block($6, body, 0)));
+          declare(subjects, self.heap.label_ref($1, block($6, body, 0)));
         }
       }
     ;
@@ -1139,36 +1140,48 @@ binding:
     Name indent Equal exp outdent { $$ = self.heap.cons_ref($1, $4); }
     | typeform indent act1 EqualEqual type act2 outdent {
         let x = redtvars(self.heap.apply_ref($1, $5).into());
-        let arity = 0;
-        let h = self.heap[x].head;
-        while (tag[h]==Combinator::AP.into()) {
+        let mut arity = 0;
+        let mut h = self.heap[x].head;
+        while self.heap[h].tag == Tag::Ap {
           arity += 1;
           h = self.heap[h].head;
         }
-        $$ = self.heap.apply_ref(h.into(), make_typ(arity, 0, synonym_t, self.heap[x].tail).into()).into();
+        $$ = self.heap.apply_ref(
+          h.into(),
+          make_typ(arity, 0, IdentifierValueTypeKind::Synonym, self.heap[x].tail).into()
+        ).into();
       }
     ;
 
 modifiers:
     /* empty */ { $$ = NIL; }
     | negmods {
-        let a;
-        let b;
-        let c = 0;
-        for(a = $1; a!=NIL; a = self.heap[a].tail) {
-          for(b = self.heap[a].tail; b!=NIL; b = self.heap[b].tail) {
-            if(hd[hd[a]]==hd[hd[b]]) {
-              c = hd[hd[a]];
+        let mut a = $1;
+        let mut c = NIL;
+        while a!=NIL {
+          let alias_a = self.heap[a].head;
+          let left_a = self.heap[alias_a].head;
+          let right_a = self.heap[alias_a].tail;
+          let mut b = self.heap[a].tail;
+          while b!=NIL {
+            let alias_b = self.heap[b].head;
+            if(left_a==self.heap[alias_b].head) {
+              c = left_a.into();
             }
-            if (tl[hd[a]]==tl[hd[b]]) {
-              c = tl[hd[a]];
+            if (right_a==self.heap[alias_b].tail) {
+              c = right_a.into();
             }
-            if(c){
+            if(c!=NIL){
               break;
             }
+            b = self.heap[b].tail;
           }
+          if(c!=NIL) {
+            break;
+          }
+          a = self.heap[a].tail;
         }
-        if(c) {
+        if(c!=NIL) {
           printf(
             "%ssyntax error: conflicting aliases (\"%s\")\n",
             if echoing {"\n"} else {""},
@@ -1187,7 +1200,7 @@ negmods:
 negmod:
     Name Divide Name { $$ = self.heap.cons_ref($1, $3); }
     | ConstructorName Divide ConstructorName { $$ = self.heap.cons_ref($1, $3); }
-    | Minus Name { $$ = self.heap.cons_ref(make_pn(UNDEF).into(), $2); }
+    | Minus Name { $$ = self.heap.cons_ref(make_pn(Combinator::Undef.into()).into(), $2); }
     /*| Minus ConstructorName  no - cannot suppress constructors selectively */
     ;
 
@@ -1213,7 +1226,7 @@ act2:
 ldefs:
     ldef {
         $$ = self.heap.cons_ref($1, NIL);
-        dval($1) = tries(dlhs($1), self.heap.cons_ref(dval($1), NIL));
+        dval($1) = self.heap.tries_ref(dlhs($1), self.heap.cons_ref(dval($1), NIL));
         if (!SYNERR && get_ids(dlhs($1))==NIL) {
           errs = hd[hd[tl[dval($1)]]];
           syntax("illegal lhs for local definition\n");
@@ -1240,7 +1253,7 @@ ldefs:
             syntax("illegal lhs for local definition\n");
           }
           $$ = self.heap.cons_ref($2, $1);
-          dval($2) = tries(dlhs($2), self.heap.cons_ref(dval($2), NIL));
+          dval($2) = self.heap.tries_ref(dlhs($2), self.heap.cons_ref(dval($2), NIL));
           while(ns!=NIL&&!SYNERR) { /* local nameclash check */
             nclashcheck(self.heap[ns].head, $1, hr);
             ns = self.heap[ns].tail;
@@ -1253,30 +1266,30 @@ ldef:
     spec {
         errs = hd[tl[$1]];
         syntax("`::' encountered in local defs\n");
-        $$ = self.heap.cons_ref(nill, NIL);
+        $$ = self.heap.cons_ref(self.heap.nill, NIL);
       }
     | typeform here EqualEqual {
         errs=$2;
         syntax("`==' encountered in local defs\n");
-        $$ = self.heap.cons_ref(nill, NIL);
+        $$ = self.heap.cons_ref(self.heap.nill, NIL);
       }
     | typeform here Colon2Equal {
         errs=$2;
         syntax("`::=' encountered in local defs\n");
-        $$ = self.heap.cons_ref(nill, NIL);
+        $$ = self.heap.cons_ref(self.heap.nill, NIL);
       }
     | v act2 indent Equal here rhs outdent {
         let l = $1;
         let r = $6;
-        word f = head(l);
-        if(tag[f]==ID&&!isconstructor(f)) { /* fnform defn */
-          while(tag[l]==Combinator::AP.into()){
+        let f = self.heap[l].head;
+        if(self.heap[f].tag == Tag::Id && !isconstructor(f)) { /* fnform defn */
+          while(self.heap[l].tag == Tag::Ap){
             r = lambda(self.heap[l].tail, r);
             l = self.heap[l].head;
           }
         }
-        r = label($5, r); /* to help locate type errors */
-        $$ = defn(l, undef_t, r);
+        r = self.heap.label_ref($5, r); /* to help locate type errors */
+        $$ = defn(l, Type::Undefined.into(), r);
       }
     ;
 
@@ -1303,8 +1316,8 @@ v1:
     | Minus Constant {
         /* if(tag[$2]==DOUBLE)
               $$ = self.heap.cons(Constant, sto_dbl(-get_dbl($2))); else */
-        if (tag[$2]==INT) {
-          $$ = self.heap.cons_ref(Constant, bignegate($2));
+        if (tag[$2]==Tag::Int) {
+          $$ = self.heap.cons_ref(Token::Constant.into(), bignegate($2));
         } else {
           syntax("inappropriate use of \"-\" in pattern\n");
         }
@@ -1317,7 +1330,7 @@ v2:
     v3
     | v2 v3 {
         $$ = self.heap.apply_ref(
-          if self.heap[$1].head==Constant && tag[tl[$1]]==ID {
+          if self.heap[$1].head==Token::Constant.into() && tag[tl[$1]]==Tag::Id {
             self.heap[$1].tail.into()
           } else {
             $1
@@ -1336,7 +1349,7 @@ v3:
         }
         /* cannot use grammar variable in a binding position */
         if (memb(idsused, $1)) {
-          $$ = self.heap.cons_ref(Constant, $1);
+          $$ = self.heap.cons_ref(Token::Constant.into(), $1);
         } /* picks up repeated names in a template */
         else {
           idsused = self.heap.cons_ref($1, idsused);
@@ -1344,15 +1357,15 @@ v3:
       }
     | ConstructorName
     | Constant {
-        if (tag[$1]==DOUBLE) {
+        if (tag[$1]==Tag::Double) {
           syntax("use of floating point literal in pattern\n");
         }
-        $$ = self.heap.cons_ref(Constant, $1);
+        $$ = self.heap.cons_ref(Token::Constant.into(), $1);
       }
-    | OpenBracket CloseBracket { $$ = nill; }
+    | OpenBracket CloseBracket { $$ = self.heap.nill; }
     | OpenBracket vlist CloseBracket {
-        let x = $2;
-        let y = nill;
+        let mut x = $2;
+        let mut y = self.heap.nill;
         while(x!=NIL) {
           y = self.heap.cons_ref(self.heap[x].head, y);
           x = self.heap[x].tail;
@@ -1363,17 +1376,18 @@ v3:
     | OpenParenthesis v CloseParenthesis { $$ = $2; }
     | OpenParenthesis v Comma vlist CloseParenthesis {
         /* representation of the tuple (a1, ..., an) is
-             tself.heap.cons(a1, tself.heap.cons(a2, ...pair(a(n-1), an))) */
+             self.heap.cons_ref(a1, self.heap.cons_ref(a2, ...pair(a(n-1), an))) */
         if(self.heap[$4].tail==NIL) {
-          $$=pair($2, self.heap[$4].head);
+          $$ = self.heap.pair_ref($2, self.heap[$4].head.into());
         } else {
-          $$ = pair(hd[tl[$4]], self.heap[$4].head);
-          $4 = tl[tl[$4]];
-          while ($4!=NIL) {
-            $$=tself.heap.cons(self.heap[$4].head, $$);
-            $4=self.heap[$4].tail;
+          let second_pair = self.heap[$4].tail;
+          $$ = self.heap.pair_ref(self.heap[second_pair].head.into(), self.heap[$4].head.into());
+          let mut rest = self.heap[second_pair].tail;
+          while (rest!=NIL) {
+            $$ = self.heap.cons_ref(self.heap[rest].head.into(), $$);
+            rest = self.heap[rest].tail;
           }
-          $$ = tself.heap.cons($2, $$);
+          $$ = self.heap.cons_ref($2, $$);
         }
 
       }
@@ -1381,7 +1395,7 @@ v3:
 
 type:
     type1
-    | type Arrow type { $$ = self.heap.apply2(arrow_t, $1, $3); }
+    | type Arrow type { $$ = self.heap.apply2(Type::Arrow.into(), $1, $3); }
     ;
 
 type1:
@@ -1417,7 +1431,7 @@ argtype:
         $$ = $1;
       }
     | OpenParenthesis typelist CloseParenthesis { $$ = $2; }
-    | OpenBracket type CloseBracket  /* at release one was `typelist' */ { $$ = self.heap.apply_ref(list_t.into(), $2); }
+    | OpenBracket type CloseBracket  /* at release one was `typelist' */ { $$ = self.heap.apply_ref(Type::List.into(), $2); }
     | OpenBracket type Comma typel CloseBracket {
         syntax(
           "tuple-type with missing parentheses (obsolete syntax)\n"
@@ -1426,16 +1440,16 @@ argtype:
     ;
 
 typelist:
-    /* empty */ { $$ = void_t; }  /* voidtype */
+    /* empty */ { $$ = Type::Void.into(); }  /* voidtype */
     | type
     | type Comma typel {
-        let x = $3;
-        let y = void_t;
+        let mut x = $3;
+        let mut y = Type::Void.into();
         while (x!=NIL) {
-          y = self.heap.apply2(comma_t, self.heap[x].head, y);
+          y = self.heap.apply2(Type::Comma.into(), self.heap[x].head.into(), y);
           x = self.heap[x].tail;
         }
-        $$ = self.heap.apply2(comma_t, $1, y);
+        $$ = self.heap.apply2(Type::Comma.into(), $1, y);
       }
     ;
 
@@ -1470,8 +1484,8 @@ parts: /* returned in reverse order */
 specs:  /* returns a list of self.heap.cons(id, self.heap.cons(here, type))
            in reverse order of appearance */
     specs spec {
-        let x = $1;
-        let h = self.heap[$2].head;
+        let mut x = $1;
+        let mut h = self.heap[$2].head;
         let t = self.heap[$2].tail;
         while (h!=NIL) {
           x = self.heap.cons_ref(self.heap.cons_ref(self.heap[h].head, t), x);
@@ -1480,8 +1494,8 @@ specs:  /* returns a list of self.heap.cons(id, self.heap.cons(here, type))
         $$ = x;
       }
     | spec {
-        let x = NIL;
-        let h = self.heap[$1].head;
+        let mut x = NIL;
+        let mut h = self.heap[$1].head;
         let t = self.heap[$1].tail;
         while (h!=NIL) {
           x = self.heap.cons_ref(self.heap.cons_ref(self.heap[h].head, t), x);
@@ -1500,8 +1514,8 @@ spec:
 lspecs:  /* returns a list of self.heap.cons(id, self.heap.cons(here, type))
            in reverse order of appearance */
     lspecs lspec {
-        let x = $1;
-        let h = self.heap[$2].head;
+        let mut x = $1;
+        let mut h = self.heap[$2].head;
         let t = self.heap[$2].tail;
         while(h!=NIL) {
           x = self.heap.cons_ref(self.heap.cons_ref(self.heap[h].head, t), x);
@@ -1510,8 +1524,8 @@ lspecs:  /* returns a list of self.heap.cons(id, self.heap.cons(here, type))
         $$ = x;
       }
     | lspec {
-        let x = NIL;
-        let h = self.heap[$1].head;
+        let mut x = NIL;
+        let mut h = self.heap[$1].head;
         let t = self.heap[$1].tail;
         while(h!=NIL) {
           x = self.heap.cons_ref(self.heap.cons_ref(self.heap[h].head, t), x);
@@ -1539,9 +1553,10 @@ typeform:
     | Name typevars   /* warning if typevar is repeated */ {
         $$ = $1;
         idsused = $2;
-        while($2!=NIL) {
-          $$ = self.heap.apply_ref($$, self.heap[$2].head.into());
-          $2 = self.heap[$2].tail;
+        let mut typevars = $2;
+        while(typevars!=NIL) {
+          $$ = self.heap.apply_ref($$, self.heap[typevars].head.into());
+          typevars = self.heap[typevars].tail;
         }
       }
     | typevar InfixName typevar {
@@ -1558,7 +1573,7 @@ typeform:
 
 ttype:
     type
-    | Type { $$ = type_t; }
+    | Type { $$ = Type::Type.into(); }
     ;
 
 typevar:
@@ -1579,7 +1594,7 @@ typevars:
 construction:
     constructs { /* keeps track of sui-generis constructors */
         // extern word SGC;
-        if ( self.heap[$1].tail==NIL && tag[hd[$1]]!=ID ) {
+        if ( self.heap[$1].tail==NIL && tag[hd[$1]]!=Tag::Id ) {
                         /* 2nd conjunct excludes singularity types */
           SGC = self.heap.cons_ref(head(self.heap[$1].head), SGC);
         }
@@ -1610,11 +1625,11 @@ construct1:
 
 field:
     type
-    | argtype Bang { $$ = self.heap.apply_ref(strict_t.into(), $1); }
+    | argtype Bang { $$ = self.heap.apply_ref(Type::Strict.into(), $1); }
     ;
 
 field1:
-    argtype Bang { $$ = self.heap.apply_ref(strict_t.into(), $1); }
+    argtype Bang { $$ = self.heap.apply_ref(Type::Strict.into(), $1); }
     | argtype
     ;
 
@@ -1638,29 +1653,30 @@ names:          /* used twice - for bnf list, and for inherited attr list */
       }
     ;
 
+/* `%bnf` grammar-analysis and lowering is still incomplete here. */
 productions:
     lspec {
-        let h = reverse(self.heap[$1].head);
+        let mut h = reverse(self.heap[$1].head);
         let hr = hd[tl[$1]];
         let t = tl[tl[$1]];
         inbnf = 1;
         $$ = NIL;
         while (h!=NIL && !SYNERR) {
           ntspecmap = self.heap.cons_ref(self.heap.cons_ref(self.heap[h].head, hr), ntspecmap);
-          $$ = add_prod(defn(self.heap[h].head, t, UNDEF), $$, hr);
+          $$ = add_prod(defn(self.heap[h].head, t, Combinator::Undef.into()), $$, hr);
           h = self.heap[h].tail;
         }
       }
     | production { $$ = self.heap.cons_ref($1, NIL); }
     | productions lspec {
-        let h = reverse(self.heap[$2].head);
+        let mut h = reverse(self.heap[$2].head);
         let hr = hd[tl[$2]];
         let t = tl[tl[$2]];
         inbnf = 1;
         $$=$1;
         while(h!=NIL&&!SYNERR){
           ntspecmap = self.heap.cons_ref(self.heap.cons_ref(self.heap[h].head, hr), ntspecmap);
-          $$ = add_prod(defn(self.heap[h].head, t, UNDEF), $$, hr);
+          $$ = add_prod(defn(self.heap[h].head, t, Combinator::Undef.into()), $$, hr);
           h = self.heap[h].tail;
         }
       }
@@ -1670,7 +1686,7 @@ productions:
 production:
     Name params Colon indent grhs outdent
       /* found by experiment that indent must follow Colon here */ {
-        $$ = defn($1, undef_t, $5);
+        $$ = defn($1, Type::Undefined.into(), $5);
       }
     ;
 
@@ -1686,31 +1702,31 @@ params:   /* places inherited attributes, if any, on ihlist */
     ;
 
 grhs:
-    here phrase { $$ = label($1, $2); }
+    here phrase { $$ = self.heap.label_ref($1, $2); }
     ;
 
 phrase:
-    error_term { $$ = self.heap.apply2(G_ERROR, G_ZERO, $1); }
+    error_term { $$ = self.heap.apply2(Combinator::G_Error.into(), Combinator::G_Zero.into(), $1); }
     | phrase1 {
-        $$ = self.heap[$1].head;
-        $1 = self.heap[$1].tail;
-        while ($1!=NIL) {
-          $$ = label(self.heap[$1].head, $$);
-          $1 = self.heap[$1].tail;
-          $$ = self.heap.apply2(G_ALT, self.heap[$1].head, $$);
-          $1 = self.heap[$1].tail;
+        $$ = self.heap[$1].head.into();
+        let mut branches = self.heap[$1].tail;
+        while (branches!=NIL) {
+          $$ = self.heap.label_ref(self.heap[branches].head.into(), $$);
+          branches = self.heap[branches].tail;
+          $$ = self.heap.apply2(Combinator::G_Alt.into(), self.heap[branches].head.into(), $$);
+          branches = self.heap[branches].tail;
         }
       }
     | phrase1 Pipe error_term {
-        $$=self.heap[$1].head;
-        $1=self.heap[$1].tail;
-        while($1!=NIL){
-          $$ = label(self.heap[$1].head, $$);
-          $1 = self.heap[$1].tail;
-          $$ = self.heap.apply2(G_ALT, self.heap[$1].head, $$);
-          $1 = self.heap[$1].tail;
+        $$ = self.heap[$1].head.into();
+        let mut branches = self.heap[$1].tail;
+        while(branches!=NIL){
+          $$ = self.heap.label_ref(self.heap[branches].head.into(), $$);
+          branches = self.heap[branches].tail;
+          $$ = self.heap.apply2(Combinator::G_Alt.into(), self.heap[branches].head.into(), $$);
+          branches = self.heap[branches].tail;
         }
-        $$ = self.heap.apply2(G_ERROR, $$, $3);
+        $$ = self.heap.apply2(Combinator::G_Error.into(), $$, $3);
       }
       /* we right rotate G_ALT's to facilitate left factoring (see trans) */
     ;
@@ -1721,13 +1737,32 @@ phrase1:
     ;
 
 term:
-    count_factors { }
-    | count_factors {inbnf=2;} indent Equal here rhs outdent { }
+    count_factors {
+        syntax("%bnf production lowering is not implemented here\n");
+        $$ = NIL;
+      }
+    | count_factors {inbnf=2;} indent Equal here rhs outdent {
+        syntax("%bnf production lowering is not implemented here\n");
+        inbnf = 1;
+        sreds = 0;
+        $$ = NIL;
+      }
     ;
 
 error_term:
-    ErrorSymbol { }
-    | ErrorSymbol { inbnf=2, sreds=2; } indent Equal here rhs outdent { }
+    ErrorSymbol {
+        syntax("%bnf error productions are not implemented here\n");
+        $$ = NIL;
+      }
+    | ErrorSymbol {
+        inbnf = 2;
+        sreds = 2;
+      } indent Equal here rhs outdent {
+        syntax("%bnf error productions are not implemented here\n");
+        inbnf = 1;
+        sreds = 0;
+        $$ = NIL;
+      }
     ;
 
 count_factors:
@@ -1740,13 +1775,31 @@ count_factors:
         sreds = 0;
         $$ = NIL;
         }
-    | { open_bracket_count=0; } factors { }
+    | { open_bracket_count=0; } factors {
+        let mut f = $2;
+        if open_bracket_count != 0 {
+          syntax(if open_bracket_count > 0 {
+            "unmatched { in grammar rule\n"
+          } else {
+            "unmatched } in grammar rule\n"
+          });
+        }
+        sreds = 0;
+        while f != NIL {
+          sreds += 1;
+          f = self.heap[f].tail.into();
+        }
+        if self.heap[$2].head == Combinator::G_End.into() {
+          sreds -= 1;
+        }
+        $$ = $2;
+      }
     ;
 
 factors:
     factor { $$ = self.heap.cons_ref($1, NIL); }
     | factors factor {
-        if (self.heap[$1].head==Combinator::G_END.into()) {
+        if (self.heap[$1].head==Combinator::G_End.into()) {
           syntax("unexpected token after end\n");
         }
         $$ = self.heap.cons_ref($2, $1);
@@ -1773,19 +1826,19 @@ factor:
 
 unit:
     symbol
-    | symbol Times { $$ = self.heap.apply_ref(Combinator::G_STAR.into(), $1); }
+    | symbol Times { $$ = self.heap.apply_ref(Combinator::G_Star.into(), $1); }
     | symbol Plus {
         $$ = self.heap.apply2(
-                    Combinator::G_SEQ.into(),
+                    Combinator::G_Seq.into(),
                     $1,
                     self.heap.apply2(
-                      Combinator::G_SEQ.into(),
+                      Combinator::G_Seq.into(),
                       self.heap.apply_ref(
-                        Combinator::G_STAR.into(),
+                        Combinator::G_Star.into(),
                         $1
                       ),
                       self.heap.apply_ref(
-                        Combinator::G_RULE.into(),
+                        Combinator::G_Rule.into(),
                         self.heap.apply_ref(
                           Combinator::C.into(),
                           Combinator::P.into()
@@ -1794,18 +1847,17 @@ unit:
                     )
                   );
       }
-    | symbol QuestionMark { $$ = self.heap.apply_ref(Combinator::G_OPT.into(), $1); }
+    | symbol QuestionMark { $$ = self.heap.apply_ref(Combinator::G_Opt.into(), $1); }
     ;
 
 symbol:
     Name {
-        //extern word NEW;
-        nonterminals = newadd1($1, nonterminals);
-        if(NEW){
-          ntmap = self.heap.cons_ref(self.heap.cons_ref($1, lasth), ntmap);
-        }
+        // The original `%bnf` path records the symbol in `nonterminals` and
+        // conditionally appends to `ntmap` through the `NEW` side channel.
+        // That bookkeeping is still not wired here.
+        $$ = $1;
       }
-    | EndSymbol { $$ = Combinator::G_END.into(); }
+    | EndSymbol { $$ = Combinator::G_End.into(); }
     | Constant {
         if(!isstring($1)) {
           print!(
@@ -1816,11 +1868,11 @@ symbol:
           print!(" (should be string-const)\n");
           acterror();
         }
-        $$ = self.heap.apply_ref(Combinator::G_SYMB.into(), $1);
+        $$ = self.heap.apply_ref(Combinator::G_Symb.into(), $1);
       }
-    | Caret { $$=Combinator::G_STATE.into(); }
-    | {inbnf=0;} OpenBracket exp {inbnf=1;} CloseBracket { $$ = self.heap.apply_ref(Combinator::G_SUCHTHAT.into(), $3); }
-    | Minus { $$ = Combinator::G_ANY.into(); }
+    | Caret { $$=Combinator::G_State.into(); }
+    | {inbnf=0;} OpenBracket exp {inbnf=1;} CloseBracket { $$ = self.heap.apply_ref(Combinator::G_SuchThat.into(), $3); }
+    | Minus { $$ = Combinator::G_Any.into(); }
     ;
 
 %%
@@ -1863,12 +1915,9 @@ impl Parser {
     }
     
 
-    fn report_syntax_error(&mut self, ctx: &Context) {
-        let token_id: usize = ctx.token().code().try_into().unwrap();
-        let token_name = Lexer::TOKEN_NAMES[id];
-        let error_loc = ctx.location();
-
-        eprintln!("Unexpected token {} at {:?}", token_name, loc);
+    fn report_syntax_error(&mut self, _yystack: &YYStack, yytoken: &SymbolKind, yylloc: YYLoc) {
+        let token_name = SymbolKind::yynames_[i32_to_usize(yytoken.code())];
+        eprintln!("Unexpected token {} at {:?}", token_name, yylloc);
     }
 
 }
