@@ -4,7 +4,6 @@ See [Data Representation.md](Data%20Representation.md) for details about how Ide
 
 */
 
-// use saucepan::LineNumber;
 use num_traits::FromPrimitive;
 
 use super::Type;
@@ -16,10 +15,8 @@ use crate::{
     data::{Combinator, HeapCell, Value},
 };
 
-// #[derive(Clone, Eq, PartialEq, Hash, Debug)]
 pub struct Identifier {
     pub name: String,
-    // `String` or `&str`?
     pub definition: IdentifierDefinition,
     // Note: `datatype` cannot be type `Type` because, e.g. `char_list_type` is of type Value.
     pub datatype: Value,

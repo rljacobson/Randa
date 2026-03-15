@@ -1,5 +1,5 @@
 use super::*;
-use crate::compiler::{HereInfo, ParserBoundary, ParserSupportError};
+use crate::compiler::{HereInfo, ParserSupportError};
 use crate::data::api::{IdentifierValueTypeData, IdentifierValueTypeKind, IdentifierValueTypeRef};
 use std::path::PathBuf;
 
@@ -23,6 +23,10 @@ fn load_file_missing_script_is_allowed_outside_initialization() {
     let source_path_str = source_path.to_string_lossy().to_string();
 
     let result = vm.load_file(&source_path_str);
+    eprintln!(
+        "result={result:?} diagnostics={:?} last_expression={:?}",
+        vm.parser_diagnostics, vm.last_expression
+    );
 
     assert!(result.is_ok());
     assert!(!vm.loading);
@@ -52,7 +56,7 @@ fn undump_propagates_load_file_error_after_bad_dump() {
     vm.initializing = false;
 
     let source_path = unique_test_path("script.m");
-    std::fs::write(&source_path, "-- test source\n").expect("failed to write source test file");
+    std::fs::write(&source_path, "entry = 1\n").expect("failed to write source test file");
 
     let binary_path = source_path.with_extension("x");
     std::fs::write(&binary_path, [0_u8, 0_u8, 0_u8, 0_u8])
@@ -74,7 +78,7 @@ fn undump_falls_back_to_load_file_after_wrong_bytecode_version() {
     vm.initializing = false;
 
     let source_path = unique_test_path("script_version_mismatch.m");
-    std::fs::write(&source_path, "-- test source\n").expect("failed to write source test file");
+    std::fs::write(&source_path, "entry = 1\n").expect("failed to write source test file");
 
     let binary_path = source_path.with_extension("x");
     let mut bad_dump = vec![0_u8; 16];
@@ -100,7 +104,7 @@ fn load_file_parser_deferred_keeps_attempted_source_in_old_files() {
     vm.files = vm.empty_environment_for_source("prior_source.m", UNIX_EPOCH);
 
     let source_path = unique_test_path("parser_deferred.m");
-    std::fs::write(&source_path, "-- no parse marker\n").expect("failed to write source test file");
+    std::fs::write(&source_path, "entry = 1\n").expect("failed to write source test file");
     let source_path_str = source_path.to_string_lossy().to_string();
 
     let result = vm.load_file(&source_path_str);
@@ -149,8 +153,7 @@ fn load_file_normalizes_non_m_source_paths() {
 
     let source_path_no_ext = unique_test_path("normalize_target");
     let source_path_with_m = source_path_no_ext.with_extension("m");
-    std::fs::write(&source_path_with_m, "-- test source\n")
-        .expect("failed to write source test file");
+    std::fs::write(&source_path_with_m, "entry = 1\n").expect("failed to write source test file");
 
     let requested_path = source_path_no_ext.to_string_lossy().to_string();
     let normalized_path = source_path_with_m.to_string_lossy().to_string();
@@ -164,12 +167,12 @@ fn load_file_normalizes_non_m_source_paths() {
 }
 
 #[test]
-fn load_file_runs_placeholder_phase_pipeline_when_parse_is_marked_ok() {
+fn load_file_runs_phase_pipeline_when_expression_parse_succeeds() {
     let mut vm = VM::new_for_tests();
     vm.initializing = false;
 
     let source_path = unique_test_path("phase_pipeline.m");
-    std::fs::write(&source_path, "RANDA_PARSE_OK\n").expect("failed to write source test file");
+    std::fs::write(&source_path, "+").expect("failed to write source test file");
     let source_path_str = source_path.to_string_lossy().to_string();
 
     let result = vm.load_file(&source_path_str);
@@ -199,13 +202,12 @@ fn load_file_runs_placeholder_phase_pipeline_when_parse_is_marked_ok() {
 }
 
 #[test]
-fn load_file_uses_syntax_fallback_when_parse_marks_syntax_error() {
+fn load_file_uses_syntax_fallback_when_expression_parse_fails() {
     let mut vm = VM::new_for_tests();
     vm.initializing = false;
 
     let source_path = unique_test_path("syntax_fallback.m");
-    std::fs::write(&source_path, "RANDA_PARSE_SYNTAX_ERROR\n")
-        .expect("failed to write source test file");
+    std::fs::write(&source_path, "1 +\n").expect("failed to write source test file");
     let source_path_str = source_path.to_string_lossy().to_string();
 
     let result = vm.load_file(&source_path_str);
@@ -234,8 +236,7 @@ fn load_file_reports_syntax_error_during_initialization() {
     vm.initializing = true;
 
     let source_path = unique_test_path("init_syntax.m");
-    std::fs::write(&source_path, "RANDA_PARSE_SYNTAX_ERROR\n")
-        .expect("failed to write source test file");
+    std::fs::write(&source_path, "1 +\n").expect("failed to write source test file");
     let source_path_str = source_path.to_string_lossy().to_string();
 
     let result = vm.load_file(&source_path_str);
@@ -252,11 +253,10 @@ fn load_file_reports_syntax_error_during_initialization() {
 }
 
 #[test]
-fn parse_source_script_commits_syntax_diagnostic_before_returning_status() {
+fn parse_source_script_commits_returned_syntax_diagnostic_before_returning_status() {
     let mut vm = VM::new_for_tests();
     let source_path = unique_test_path("parse_boundary_syntax.m");
-    std::fs::write(&source_path, "before\nRANDA_PARSE_SYNTAX_ERROR\nafter\n")
-        .expect("failed to write source test file");
+    std::fs::write(&source_path, "1 +\n").expect("failed to write source test file");
     let source_path_str = source_path.to_string_lossy().to_string();
     let source_file = File::open(&source_path).expect("failed to open source test file");
 
@@ -265,19 +265,18 @@ fn parse_source_script_commits_syntax_diagnostic_before_returning_status() {
         .expect("expected parse boundary to return syntax status");
 
     assert_eq!(outcome.status, ParsePhaseStatus::SyntaxError);
-    assert_eq!(vm.error_line, 2);
+    assert_eq!(vm.error_line, 1);
     assert_eq!(vm.parser_diagnostics.len(), 1);
-    assert_eq!(
-        vm.parser_diagnostics[0].message,
-        "source contains syntax errors"
-    );
+    assert!(vm.parser_diagnostics[0]
+        .message
+        .starts_with("unexpected token"));
     assert_eq!(
         vm.parser_diagnostics[0]
             .here_info
             .as_ref()
             .unwrap()
             .line_number,
-        2
+        1
     );
     assert_eq!(
         vm.parser_diagnostics[0]
@@ -299,7 +298,7 @@ fn success_postlude_phase_resets_syntax_editor_state() {
     vm.errs = vec![Combinator::True.into()];
 
     let source_path = unique_test_path("success_postlude_reset.m");
-    std::fs::write(&source_path, "RANDA_PARSE_OK\n").expect("failed to write source test file");
+    std::fs::write(&source_path, "+").expect("failed to write source test file");
     let source_path_str = source_path.to_string_lossy().to_string();
 
     let result = vm.load_file(&source_path_str);
@@ -321,8 +320,7 @@ fn syntax_fallback_resets_syntax_editor_state_outside_initialization() {
     vm.includees = vm.empty_environment_for_source("stale_includee.m", UNIX_EPOCH);
 
     let source_path = unique_test_path("syntax_reset.m");
-    std::fs::write(&source_path, "RANDA_PARSE_SYNTAX_ERROR\n")
-        .expect("failed to write source test file");
+    std::fs::write(&source_path, "1 +\n").expect("failed to write source test file");
     let source_path_str = source_path.to_string_lossy().to_string();
 
     let result = vm.load_file(&source_path_str);
@@ -337,7 +335,7 @@ fn syntax_fallback_resets_syntax_editor_state_outside_initialization() {
 }
 
 #[test]
-fn parser_boundary_interns_identifiers_and_builds_alias_metadata() {
+fn parser_vm_api_interns_identifiers_and_builds_alias_metadata() {
     let mut vm = VM::new_for_tests();
 
     let first = vm.intern_identifier("widget");
@@ -357,7 +355,7 @@ fn parser_boundary_interns_identifiers_and_builds_alias_metadata() {
 }
 
 #[test]
-fn parser_boundary_supports_type_and_runtime_helpers() {
+fn parser_vm_api_supports_type_and_runtime_helpers() {
     let mut vm = VM::new_for_tests();
 
     let bool_id = vm.intern_identifier("bool");
@@ -410,7 +408,7 @@ fn parser_boundary_supports_type_and_runtime_helpers() {
 }
 
 #[test]
-fn parser_boundary_exposes_explicit_deferred_mutation_stubs() {
+fn parser_vm_api_exposes_explicit_deferred_mutation_stubs() {
     let mut vm = VM::new_for_tests();
 
     assert_eq!(
@@ -471,7 +469,7 @@ fn exportfile_phase_errors_when_path_is_not_in_includees() {
         .to_string_lossy()
         .to_string();
     let path_ref = vm.heap.string(path.clone());
-    vm.exportfiles = vm.heap.cons_ref(Value::Reference(path_ref), NIL).into();
+    vm.exportfiles = vm.heap.cons_ref(Value::Reference(path_ref), NIL);
     vm.includees = ConsList::EMPTY;
 
     let result = vm.validate_exportfile_bindings_partial();
@@ -490,7 +488,7 @@ fn exportfile_phase_errors_when_path_binding_is_ambiguous() {
         .to_string_lossy()
         .to_string();
     let path_ref = vm.heap.string(path.clone());
-    vm.exportfiles = vm.heap.cons_ref(Value::Reference(path_ref), NIL).into();
+    vm.exportfiles = vm.heap.cons_ref(Value::Reference(path_ref), NIL);
 
     let first = FileRecord::new(
         &mut vm.heap,
@@ -525,7 +523,7 @@ fn exportfile_phase_accepts_unique_included_binding() {
         .to_string_lossy()
         .to_string();
     let path_ref = vm.heap.string(path.clone());
-    vm.exportfiles = vm.heap.cons_ref(Value::Reference(path_ref), NIL).into();
+    vm.exportfiles = vm.heap.cons_ref(Value::Reference(path_ref), NIL);
 
     let includee = FileRecord::new(&mut vm.heap, path, UNIX_EPOCH, false, ConsList::EMPTY);
     vm.includees = ConsList::new(&mut vm.heap, includee);
@@ -639,7 +637,7 @@ fn export_closure_phase_is_noop_without_exports() {
 fn export_closure_phase_clears_exports_when_undefined_names_present() {
     let mut vm = VM::new_for_tests();
     let export_id = vm.heap.make_empty_identifier("exported_name");
-    vm.exports = vm.heap.cons_ref(export_id.into(), NIL).into();
+    vm.exports = vm.heap.cons_ref(export_id.into(), NIL);
     let missing_id = vm.heap.make_empty_identifier("missing_name");
     vm.undefined_names = ConsList::new(&mut vm.heap, missing_id);
 
@@ -656,7 +654,7 @@ fn export_closure_phase_clears_exports_when_undefined_names_present() {
 fn export_closure_phase_keeps_exports_when_no_undefined_names() {
     let mut vm = VM::new_for_tests();
     let export_id = vm.heap.make_empty_identifier("exported_name");
-    vm.exports = vm.heap.cons_ref(export_id.into(), NIL).into();
+    vm.exports = vm.heap.cons_ref(export_id.into(), NIL);
     vm.undefined_names = ConsList::EMPTY;
 
     let result = vm.run_export_closure_phase_partial();
@@ -679,7 +677,7 @@ fn bereaved_warning_phase_is_noop_without_risk_flag() {
 fn bereaved_warning_phase_returns_ok_when_risk_flagged() {
     let mut vm = VM::new_for_tests();
     let export_id = vm.heap.make_empty_identifier("exported_name");
-    vm.exports = vm.heap.cons_ref(export_id.into(), NIL).into();
+    vm.exports = vm.heap.cons_ref(export_id.into(), NIL);
     vm.unused_types = true;
 
     vm.emit_bereaved_warnings_partial();
@@ -693,16 +691,16 @@ fn unused_diagnostics_phase_clears_deferred_marker() {
     vm.eprodnts = Combinator::True.into();
 
     vm.emit_unused_definition_diagnostics_partial();
-    assert_eq!(vm.eprodnts, Value::from(NIL));
+    assert_eq!(vm.eprodnts, NIL);
 }
 
 #[test]
 fn unused_diagnostics_phase_is_stable_when_marker_absent() {
     let mut vm = VM::new_for_tests();
-    vm.eprodnts = Value::from(NIL);
+    vm.eprodnts = NIL;
 
     vm.emit_unused_definition_diagnostics_partial();
-    assert_eq!(vm.eprodnts, Value::from(NIL));
+    assert_eq!(vm.eprodnts, NIL);
 }
 
 #[test]

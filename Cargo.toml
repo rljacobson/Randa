@@ -19,8 +19,7 @@ publish = false
 debug = []
 
 [dependencies]
-saucepan   = {path = "../saucepan", features = ["reporting", "nom-parsing", "runtime-dispatch-simd"]}
-logos      = "0.12.1"
+logos      = "0.16.1"
 atty       = "0.2.14" # Checks if stdin is a terminal or piped input. Determines verbosity level.
 console    = "0.15.4" # Formatting & Coloring console text.
 argparse   = "0.2.2"  # Command line argument and environment variable parsing of options.
@@ -28,18 +27,8 @@ gag        = "1.0.0"  # For redirecting stderr to file.
 num-traits = "0.2.15" # Conversion from repr to enum
 enum-primitive-derive = "0.2.2"  # Conversion from repr to enum
 thiserror  = "2.0.17"
-#dirs      = "4.0.0"  # For redirecting stderr to file.
-
-[dependencies.regex]
-# The following enables only the minimal necessary features of regex.
-version          = "1"
-default-features = false
-# regex currently requires the standard library, you must re-enable it.
-features         = ["std"]
-
 
 [build-dependencies]
-#rust-bison-skeleton = {path = "../rust-bison-skeleton/rust-bison-skeleton"} #"0.41.0"
 rust-bison-skeleton = "0.41.0"
 chrono = "0.4.44" # For date and time.
 

@@ -484,7 +484,7 @@ impl VM {
             let sharable: bool = *byte_iter.next().unwrap_or(&0u8) == 1;
 
             #[cfg(feature = "debug")]
-            println("loading: {}({})", filename, _modified_time);
+            println!("loading: {}({:?})", filename, modified_time);
 
             if files.is_empty() {
                 // Is this the right dump file?

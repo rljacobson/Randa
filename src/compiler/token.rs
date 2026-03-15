@@ -7,9 +7,9 @@ use std::fmt::{Display, Formatter};
 
 use logos::Logos;
 
-// use saucepan::Span;
 use enum_primitive_derive::Primitive;
 
+use super::Loc;
 use crate::data::{Value, TOKEN_BASE};
 
 // region Token Strings
@@ -251,9 +251,8 @@ pub enum Token {
     Float = 333, // = 77 + TOKEN_BASE, // FLOAT
     EOF = 334,   // = 78 + TOKEN_BASE, // EOF
 
-    #[error]
-    #[regex(r"[ \t]*\|\|[^\n]*\n", logos::skip)]
-    #[regex(r"[ \t]*", logos::skip)]
+    #[regex(r"[ \t]*\|\|[^\n]*\n", logos::skip, allow_greedy = true)]
+    #[regex(r"[ \t]+", logos::skip)]
     Error = 335, // = 79 + TOKEN_BASE,  // ERROR
 }
 
@@ -272,4 +271,11 @@ impl Token {
     pub fn into_value(self) -> Value {
         Value::Token(self)
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct ParserLookahead {
+    pub token_type: i32,
+    pub token: Token,
+    pub loc: Loc,
 }

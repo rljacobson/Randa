@@ -1,6 +1,10 @@
 use super::diagnostics::{alfasort, printlist, source_update_check};
 use super::*;
-use crate::compiler::{HereInfo, Loc, ParserBoundary, ParserDiagnostic, ParserSupportError};
+use crate::compiler::{
+    parser::Parser, Lexer, ParserActivation, ParserDeferredState, ParserRunDiagnostics,
+    ParserRunResult, ParserSessionState, ParserSupportError, ParserVmContext,
+};
+use crate::compiler::{token::ParserLookahead, Token};
 use crate::data::api::IdentifierValueTypeKind;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -70,7 +74,7 @@ impl VM {
         self.unload();
 
         #[cfg(feature = "debug")]
-        if !self.initialising {
+        if !self.initializing {
             println!("undumping from {}", binary_path);
         }
 
@@ -144,7 +148,7 @@ impl VM {
     }; // end match on load_result
 
         #[cfg(feature = "debug")]
-        if !self.initialising {
+        if !self.initializing {
             println!(
                 "{} undumped, success={}",
                 binary_path, dump_error_encountered
@@ -872,6 +876,7 @@ impl VM {
         // Placeholder `[ND]` / `[True]` marker encoding. The trailing DEF_X remains
         // the deferred `dump_ob` / `dump_defs` boundary for full parity payloads.
         if self.unused_types {
+            #[allow(clippy::cast_enum_truncation)]
             bytes.push(Combinator::True as u8);
             bytes.push(Bytecode::Definition.code());
         } else {
@@ -958,34 +963,124 @@ impl VM {
             }
         })?;
 
+        if self.looks_like_deferred_top_level_form(source_path, &source_text)? {
+            return Err(BytecodeError::ParserIntegrationDeferred {
+                path: source_path.to_string(),
+            });
+        }
+
         let placeholder_files = self.empty_environment_for_source(source_path, SystemTime::now());
-        if source_text.contains("RANDA_PARSE_OK") {
-            return Ok(ParsePhaseOutcome {
-                status: ParsePhaseStatus::Parsed,
-                files: placeholder_files,
-            });
+        let lexer = Lexer::new(source_path, &source_text);
+        let activation = self.parser_activation();
+        let mut parser = Parser::new(lexer, activation);
+        let parsed = parser.parse();
+
+        match parser.finish_run(parsed) {
+            ParserRunResult::ParsedExpression(expression) => {
+                self.last_expression = expression;
+                Ok(ParsePhaseOutcome {
+                    status: ParsePhaseStatus::Parsed,
+                    files: placeholder_files,
+                })
+            }
+            ParserRunResult::SyntaxError(diagnostics) => {
+                self.commit_parser_run_diagnostics(diagnostics);
+                Ok(ParsePhaseOutcome {
+                    status: ParsePhaseStatus::SyntaxError,
+                    files: placeholder_files,
+                })
+            }
+        }
+    }
+
+    fn parser_activation(&mut self) -> ParserActivation<'_> {
+        let listdiff_function = self.listdiff_fn.into();
+        let void_tuple = self
+            .void_
+            .get_value(&self.heap)
+            .map(Value::from)
+            .unwrap_or_else(|| self.void_.into());
+
+        ParserActivation {
+            heap: &mut self.heap,
+            vm: ParserVmContext::new(listdiff_function, void_tuple),
+            session: ParserSessionState::default(),
+            deferred: ParserDeferredState::default(),
+        }
+    }
+
+    fn commit_parser_run_diagnostics(&mut self, diagnostics: ParserRunDiagnostics) {
+        for diagnostic in diagnostics.diagnostics {
+            if self.error_line == 0 {
+                if let Some(here_info) = &diagnostic.here_info {
+                    if here_info.line_number > 0 {
+                        self.error_line = here_info.line_number as usize;
+                    }
+                }
+            }
+
+            if let Some(here_info) = diagnostic.here_info.clone() {
+                let raw_here_info = FileInfoRef::from_script_file(
+                    &mut self.heap,
+                    here_info.script_file,
+                    here_info.line_number,
+                );
+                self.errs.push(raw_here_info.get_ref());
+            }
+
+            self.parser_diagnostics.push(diagnostic);
+        }
+    }
+
+    fn looks_like_deferred_top_level_form(
+        &mut self,
+        source_path: &str,
+        source_text: &str,
+    ) -> Result<bool, BytecodeError> {
+        let mut lexer = Lexer::new(source_path, source_text);
+        let mut tokens: Vec<Token> = Vec::new();
+
+        while tokens.len() < 3 {
+            let lookahead: ParserLookahead =
+                lexer
+                    .yylex()
+                    .map_err(|source| BytecodeError::UnreadableSourceFile {
+                        path: source_path.to_string(),
+                        source: std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            source.to_string(),
+                        ),
+                    })?;
+            match lookahead.token {
+                Token::Newline => continue,
+                Token::EOF => break,
+                token => tokens.push(token),
+            }
         }
 
-        if source_text.contains("RANDA_PARSE_SYNTAX_ERROR") {
-            let marker = "RANDA_PARSE_SYNTAX_ERROR";
-            let location = source_text
-                .find(marker)
-                .map(|begin| Loc::new(begin as u32, (begin + marker.len()) as u32));
-            let here_info = HereInfo::from_source_location(source_path, &source_text, location);
-            self.record_syntax_diagnostic(ParserDiagnostic {
-                message: "source contains syntax errors".to_string(),
-                location,
-                here_info: Some(here_info),
-            });
-            return Ok(ParsePhaseOutcome {
-                status: ParsePhaseStatus::SyntaxError,
-                files: placeholder_files,
-            });
-        }
+        let first = tokens.first().copied();
+        let second = tokens.get(1).copied();
 
-        Err(BytecodeError::ParserIntegrationDeferred {
-            path: source_path.to_string(),
-        })
+        Ok(matches!(
+            (first, second),
+            (Some(Token::Lex), _)
+                | (Some(Token::BNF), _)
+                | (Some(Token::Include), _)
+                | (Some(Token::Export), _)
+                | (Some(Token::Free), _)
+                | (Some(Token::Type), _)
+                | (Some(Token::AbsoluteType), _)
+                | (Some(Token::Value), _)
+                | (Some(Token::Eval), _)
+                | (Some(Token::Identifier), Some(Token::Equal))
+                | (Some(Token::Identifier), Some(Token::ColonColon))
+                | (Some(Token::Identifier), Some(Token::Colon2Equal))
+                | (Some(Token::Name), Some(Token::Equal))
+                | (Some(Token::Name), Some(Token::ColonColon))
+                | (Some(Token::Name), Some(Token::Colon2Equal))
+                | (Some(Token::ConstructorName), Some(Token::Equal))
+                | (Some(Token::ConstructorName), Some(Token::Colon2Equal))
+        ))
     }
 
     /// Restores internalized identifiers back to their public lookup shape.
@@ -1081,39 +1176,18 @@ impl VM {
     }
 }
 
-impl ParserBoundary for VM {
-    fn record_syntax_diagnostic(&mut self, diagnostic: ParserDiagnostic) {
-        if self.error_line == 0 {
-            if let Some(here_info) = &diagnostic.here_info {
-                if here_info.line_number > 0 {
-                    self.error_line = here_info.line_number as usize;
-                }
-            }
-        }
-
-        if let Some(here_info) = diagnostic.here_info.clone() {
-            let raw_here_info = FileInfoRef::from_script_file(
-                &mut self.heap,
-                here_info.script_file,
-                here_info.line_number,
-            );
-            self.errs.push(raw_here_info.get_ref());
-        }
-
-        self.parser_diagnostics.push(diagnostic);
-    }
-
-    fn intern_identifier(&mut self, name: &str) -> IdentifierRecordRef {
+impl VM {
+    pub(crate) fn intern_identifier(&mut self, name: &str) -> IdentifierRecordRef {
         self.heap
             .get_identifier(name)
             .unwrap_or_else(|| self.heap.make_empty_identifier(name))
     }
 
-    fn identifier_name(&self, identifier: IdentifierRecordRef) -> String {
+    pub(crate) fn identifier_name(&self, identifier: IdentifierRecordRef) -> String {
         identifier.get_name(&self.heap)
     }
 
-    fn source_name_metadata(&mut self, source_name: &str) -> DataPair {
+    pub(crate) fn source_name_metadata(&mut self, source_name: &str) -> DataPair {
         let source_identifier = self.intern_identifier(source_name);
         IdentifierDefinitionRef::alias_metadata_from_source_identifier(
             &mut self.heap,
@@ -1121,11 +1195,11 @@ impl ParserBoundary for VM {
         )
     }
 
-    fn private_name(&mut self, value: Value) -> Value {
+    pub(crate) fn private_name(&mut self, value: Value) -> Value {
         self.heap.make_private_symbol_ref(value)
     }
 
-    fn translate_type_identifier(&self, identifier: IdentifierRecordRef) -> Value {
+    pub(crate) fn translate_type_identifier(&self, identifier: IdentifierRecordRef) -> Value {
         match identifier.get_name(&self.heap).as_str() {
             "bool" => Type::Bool.into(),
             "num" => Type::Number.into(),
@@ -1134,22 +1208,22 @@ impl ParserBoundary for VM {
         }
     }
 
-    fn listdiff_function(&self) -> Value {
+    pub(crate) fn listdiff_function(&self) -> Value {
         self.listdiff_fn.into()
     }
 
-    fn numeric_one(&self) -> Value {
+    pub(crate) fn numeric_one(&self) -> Value {
         Value::Data(1)
     }
 
-    fn void_tuple(&self) -> Value {
+    pub(crate) fn void_tuple(&self) -> Value {
         self.void_
             .get_value(&self.heap)
             .map(Value::from)
             .unwrap_or_else(|| self.void_.into())
     }
 
-    fn attach_type_show_function(
+    pub(crate) fn attach_type_show_function(
         &mut self,
         type_identifier: IdentifierRecordRef,
         show_function: IdentifierRecordRef,
@@ -1180,15 +1254,15 @@ impl ParserBoundary for VM {
         }
     }
 
-    fn indent_function(&self) -> Result<Value, ParserSupportError> {
+    pub(crate) fn indent_function(&self) -> Result<Value, ParserSupportError> {
         Ok(self.indent_fn.into())
     }
 
-    fn outdent_function(&self) -> Result<Value, ParserSupportError> {
+    pub(crate) fn outdent_function(&self) -> Result<Value, ParserSupportError> {
         Ok(self.outdent_fn.into())
     }
 
-    fn record_deferred_exports(
+    pub(crate) fn record_deferred_exports(
         &mut self,
         _exports: Value,
         _exportfiles: Value,
@@ -1199,25 +1273,34 @@ impl ParserBoundary for VM {
         })
     }
 
-    fn record_deferred_includees(&mut self, _includees: Value) -> Result<(), ParserSupportError> {
+    pub(crate) fn record_deferred_includees(
+        &mut self,
+        _includees: Value,
+    ) -> Result<(), ParserSupportError> {
         Err(ParserSupportError::DeferredMutation {
             operation: "record_deferred_includees",
         })
     }
 
-    fn record_deferred_freeids(&mut self, _freeids: Value) -> Result<(), ParserSupportError> {
+    pub(crate) fn record_deferred_freeids(
+        &mut self,
+        _freeids: Value,
+    ) -> Result<(), ParserSupportError> {
         Err(ParserSupportError::DeferredMutation {
             operation: "record_deferred_freeids",
         })
     }
 
-    fn declare_definition(&mut self, _definition: Value) -> Result<(), ParserSupportError> {
+    pub(crate) fn declare_definition(
+        &mut self,
+        _definition: Value,
+    ) -> Result<(), ParserSupportError> {
         Err(ParserSupportError::DeferredMutation {
             operation: "declare_definition",
         })
     }
 
-    fn apply_specification(
+    pub(crate) fn apply_specification(
         &mut self,
         _identifier: Value,
         _specification: Value,
@@ -1228,7 +1311,7 @@ impl ParserBoundary for VM {
         })
     }
 
-    fn declare_type(
+    pub(crate) fn declare_type(
         &mut self,
         _identifier: Value,
         _kind: IdentifierValueTypeKind,
@@ -1240,7 +1323,7 @@ impl ParserBoundary for VM {
         })
     }
 
-    fn declare_constructor(
+    pub(crate) fn declare_constructor(
         &mut self,
         _identifier: Value,
         _type_value: Value,
@@ -1252,7 +1335,7 @@ impl ParserBoundary for VM {
         })
     }
 
-    fn free_value(&self) -> Result<Value, ParserSupportError> {
+    pub(crate) fn free_value(&self) -> Result<Value, ParserSupportError> {
         Err(ParserSupportError::DeferredMutation {
             operation: "free_value",
         })

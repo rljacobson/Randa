@@ -23,7 +23,7 @@ From Miranda:
 use num_traits::FromPrimitive; // For conversion from `i32` to `Token` or `Combinator`
 
 use crate::{
-    compiler::Token,
+    compiler::{token::ParserLookahead, Token},
     data::{Combinator, ATOM_LIMIT, COMBINATOR_BASE, TOKEN_BASE},
 };
 
@@ -51,13 +51,6 @@ impl From<Value> for RawValue {
     }
 }
 
-// impl<T> From<T> for RawValue
-//   where T: Into<RawValue> + Numeric
-// {
-//   fn from(c: T) -> Self {
-//     Into::<RawValue>::into(c)
-//   }
-// }
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Default)]
 pub enum Value {
@@ -109,9 +102,11 @@ impl From<RawValue> for Value {
 impl Value {
     /// Required method, parser expects it to be defined.
     ///
-    /// Constructor for `LexicalValue::Token(token)` variant.
-    pub(crate) fn from_token(value: Token) -> Self {
-        Self::Token(value)
+    /// Constructor for the parser skeleton's shifted-token semantic value. The invariant is that
+    /// this stores the underlying lexical token while leaving token id and location on the
+    /// lookahead wrapper.
+    pub(crate) fn from_token(value: ParserLookahead) -> Self {
+        Self::Token(value.token)
     }
 
     pub(crate) fn new_uninitialized() -> Self {

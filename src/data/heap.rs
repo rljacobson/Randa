@@ -938,14 +938,13 @@ mod tests {
         // fileinfo(script,line_no)
 
         let x = heap.strcons_ref(Value::Reference(noodles_ref), who);
-        let id_head = heap.cons_ref(x, Value::Data(Type::Number as RawValue).into());
+        let id_head = heap.cons_ref(x, Value::Data(Type::Number as RawValue));
         let id: RawValue = heap.put_ref(Tag::Id, id_head, value).into(); // cons(strcons(name,who),type)
 
         let id_record = IdentifierRecordRef::from_ref(id);
 
         let ident = id_record.get_data(&heap);
-        println!("Identifier:\n\t{}", ident.name);
-        assert!(true);
+        assert_eq!(ident.name, "noodles");
     }
 
     #[test]

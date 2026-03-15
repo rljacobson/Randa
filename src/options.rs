@@ -22,7 +22,6 @@ use std::{
 
 use atty::Stream;
 use gag::Redirect;
-// use dirs::data_local_dir;
 
 use argparse::{ArgumentParser, List as StoreList, Print, Store, StoreFalse, StoreTrue};
 

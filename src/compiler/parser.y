@@ -4,9 +4,10 @@
 */
 
 %define api.parser.struct {Parser}
-%define api.parser.generic {<'t /* 'fix quotes */>}
+%define api.parser.generic {<'ctx /* 'fix quotes */>}
 %define api.value.type {Value}
 %define api.parser.check_debug { self.debug }
+%start parse_entry
 
 %define parse.error custom
 %define parse.trace
@@ -14,17 +15,21 @@
 %code use {
 // all use goes here
 use super::{
-  token::Token,
+  token::{ParserLookahead},
   lexer::Lexer,
-  errors::LexerError,
+  HereInfo,
   Loc,
+  ParserActivation,
+  ParserDiagnostic,
+  ParserRunDiagnostics,
+  ParserRunResult,
+  ParserVmContext,
 };
 
 use crate::{
     data::{
-        api::IdentifierValueTypeKind,
+        api::{ConsList},
         tag::Tag,
-        types::Type,
         values::{
             Value,
             RawValue
@@ -42,18 +47,39 @@ use crate::{
   /// Enables debug printing
   pub debug: bool,
   /// The heap on which everything is constructed.
-  heap: Heap,
+  heap: &'ctx /* 'fix quotes */ mut Heap,
+  vm: ParserVmContext,
+  synerr: bool,
+  diagnostics: ParserRunDiagnostics,
 
-  lexstates   : RawValue,
+  lexstates: RawValue,
+  idsused: RawValue,
+  lexdefs: RawValue,
+  last_name: RawValue,
+  ihlist: RawValue,
+  nonterminals: RawValue,
+  eprodnts: RawValue,
+  ntspecmap: RawValue,
+  ntmap: RawValue,
+  last_here: RawValue,
 
-  // Parser state.
-  inbnf             : u8,   // 0=false, 1=true, 2=something about offside rule
-  inexplist         : bool,
-  inlex             : u8,   // 0=false, 1=true, 2=??
-  tvarscope         : bool,
+  inbnf: u8,   // 0=false, 1=true, 2=something about offside rule
+  inexplist: bool,
+  inlex: u8,   // 0=false, 1=true, 2=??
+  tvarscope: bool,
 
-  sreds             : i16,  // counts something
+  sreds: i16,  // counts something
   open_bracket_count: i16,
+
+  exports: RawValue,
+  exportfiles: RawValue,
+  embargoes: RawValue,
+  includees: RawValue,
+  freeids: RawValue,
+
+  fnts: RawValue,
+  dicp: String,
+  dicq: String,
 }
 
 %code {
@@ -89,6 +115,7 @@ use crate::{
 
 // Used so often.
 static NIL: Value = Value::Combinator(Combinator::Nil);
+const NIL_RAW: RawValue = Combinator::Nil as RawValue;
 const GUARD: Value = Value::Data(1);
 
 /*
@@ -152,6 +179,13 @@ Miranda uses the following utility functions:
 
 %%
 
+parse_entry:
+    exp {
+        self.result = Some($1);
+        $$ = $1;
+      }
+    ;
+
 entity:  /* the entity to be parsed is either a definition script or an
             expression (the latter appearing as a command line) */
 
@@ -186,33 +220,33 @@ entity:  /* the entity to be parsed is either a definition script or an
 
 script:
     /* script can be empty */
-    | defs
+    | defs { $$ = $1; }
     ;
 
 exp:
-    op /* will later suppress in favour of (op) in arg */
-    | e1
+    op /* will later suppress in favour of (op) in arg */ { $$ = $1; }
+    | e1 { $$ = $1; }
     ;
 
 op:
     Tilde { $$ = Combinator::Not.into(); }
     | Hash { $$ = Combinator::Length.into(); }
-    | diop
+    | diop { $$ = $1; }
     ;
 
 diop:
     Minus { $$ = Combinator::Minus.into(); }
-    | diop1
+    | diop1 { $$ = $1; }
     ;
 
 diop1:
     Plus { $$ = Combinator::Plus.into(); }
     | PlusPlus { $$ = Combinator::Append.into(); }
     | Colon { $$ = Combinator::P.into(); }
-    | MinusMinus { $$ = listdiff_fn; }
+    | MinusMinus { $$ = self.vm.listdiff_function(); }
     | Vel { $$ = Combinator::Or.into(); }
     | Ampersand { $$ = Combinator::And.into(); }
-    | relop
+    | relop { $$ = $1; }
     | Times { $$ = Combinator::Times.into(); }
     | DivideFloat { $$ = Combinator::DivideFloat.into(); }
     | DivideInteger { $$ = Combinator::DivideInteger.into(); }
@@ -220,8 +254,8 @@ diop1:
     | Caret { $$ = Combinator::Power.into(); }
     | Dot { $$ = Combinator::B.into(); }
     | Bang { $$ = self.heap.apply_ref(Combinator::C.into(), Combinator::Subscript.into()); }
-    | InfixName
-    | InfixCName
+    | InfixName { $$ = $1; }
+    | InfixCName { $$ = $1; }
     ;
 
 relop:
@@ -234,8 +268,8 @@ relop:
     ;
 
 eqop:
-    EqualEqual /* silently accept for benefit of Haskell users */
-    | Equal
+    EqualEqual { $$ = NIL; } /* silently accept for benefit of Haskell users */
+    | Equal { $$ = NIL; }
     ;
 
 rhs:
@@ -273,6 +307,7 @@ alt:
 if:
     /* empty */ {
         // The legacy `strictif` policy hook is not wired in here.
+        $$ = NIL;
       }
     | If
     ;
@@ -283,6 +318,7 @@ indent:
           layout();
           setlmargin();
         }
+        $$ = NIL;
       }
     ;
 /* note that because of yacc's one symbol look ahead, indent must usually be
@@ -305,6 +341,7 @@ reindent:
           layout();
           setlmargin();
         }
+        $$ = NIL;
       }
     ;
 
@@ -318,7 +355,7 @@ e1:
     Tilde e1 %prec Equal { $$ = self.heap.apply_ref(Combinator::Not.into(), $2); }
     | e1 PlusPlus e1 { $$ = self.heap.apply2(Combinator::Append.into(), $1, $3); }
     | e1 Colon e1 { $$ = self.heap.cons_ref($1, $3); }
-    | e1 MinusMinus e1 { $$ = self.heap.apply2(listdiff_fn, $1, $3);  }
+    | e1 MinusMinus e1 { $$ = self.heap.apply2(self.vm.listdiff_function(), $1, $3);  }
     | e1 Vel e1 { $$ = self.heap.apply2(Combinator::Or.into(), $1, $3); }
     | e1 Ampersand e1 { $$ = self.heap.apply2(Combinator::And.into(), $1, $3); }
     | reln
@@ -331,8 +368,8 @@ es1:                     /* e1 or presection */
     | e1 PlusPlus { $$ = self.heap.apply_ref(Combinator::Append.into(), $1); }
     | e1 Colon e1 { $$ = self.heap.cons_ref($1, $3); }
     | e1 Colon { $$ = self.heap.apply_ref(Combinator::P.into(), $1); }
-    | e1 MinusMinus e1 { $$ = self.heap.apply2(listdiff_fn, $1, $3);  }
-    | e1 MinusMinus { $$ = self.heap.apply_ref(listdiff_fn.into(), $1);  }
+    | e1 MinusMinus e1 { $$ = self.heap.apply2(self.vm.listdiff_function(), $1, $3);  }
+    | e1 MinusMinus { $$ = self.heap.apply_ref(self.vm.listdiff_function(), $1);  }
     | e1 Vel e1 { $$ = self.heap.apply2(Combinator::Or.into(), $1, $3); }
     | e1 Vel { $$ = self.heap.apply_ref(Combinator::Or.into(), $1); }
     | e1 Ampersand e1 { $$ = self.heap.apply2(Combinator::And.into(), $1, $3); }
@@ -438,75 +475,31 @@ relsn:                     /* reln or presection */
 arg:
     /* `%lex` parsing remains outside the current expression-only parser path. */
     /* empty */ {
-      if !SYNERR {
-        lexstates = NIL;
-        inlex = 1;
+      if !self.synerr {
+        self.lexstates = NIL_RAW;
+        self.inlex = 1;
       }
+      $$ = NIL;
     }
-    Lex lexrules EndIR {
-          inlex = 0;
-                    lexdefs = NIL;
-                    if lexstates!=NIL {
-                      let mut echoed = 0;
-                      while lexstates!=NIL {
-                        if !echoed {
-                          if echoing {
-                            println!();
-                          }
-                          echoed = 1;
-                        }
-                        let mut lexstate_hd = self.heap[lexstates].head;
-                        let mut lexstate_hd_tl  = self.heap[lexstate_hd].tail;
-                        if !(lexstate_hd_tl & 1) {
-                          println!(
-                            "warning: lex state {} is never entered",
-                            get_id(self.heap[lexstate_hd].head)
-                          );
-                        } else {
-                          // Canonical `%lex` state flags from `miralib/rules.y`:
-                          // bit 1 means the state is entered, bit 2 means the
-                          // state has associated rules.
-                          if !(lexstate_hd_tl & 2) {
-                            println!(
-                              "warning: lex state {} has no associated rules",
-                              get_id(self.heap[lexstate_hd].head)
-                            );
-                          }
-                        }
-
-                        lexstates = self.heap[lexstates].tail;
-                      }
-                    }
-                    if $3 == NIL {
-                    syntax("%lex with no rules\n");
-                  } else {
-                     self.heap[$3].tag = Tag::Lexer;
-                  }
-
-                    /*
-                       result is lex-list, in reverse order, of items of the form
-                         self.heap.cons(scstuff, self.heap.cons(matcher, rhs))
-                       where scstuff is of the form
-                         self.heap.cons(0-or-list-of-startconditions, 1+newstartcondition)
-                     */
-
-                    $$ = $3;
-        }
+    Lex {
+        self.syntax("%lex is deferred for the expression-first parser MVP\n");
+        $$ = NIL;
+      }
     | Name
     | ConstructorName
     | Constant
     /* Interactive/session-only expression branches are not handled in the
        current parser path. */
     | ReadVals {
-        syntax("interactive \"readvals\" is not supported here\n");
+        self.syntax("interactive \"readvals\" is not supported here\n");
         $$ = NIL;
       }
     | Show {
-        syntax("interactive \"show\" is not supported here\n");
+        self.syntax("interactive \"show\" is not supported here\n");
         $$ = NIL;
       }
     | DollarDollar {
-        syntax("interactive \"$$\" substitution is not supported here\n");
+        self.syntax("interactive \"$$\" substitution is not supported here\n");
         $$ = NIL;
       }
     | OpenBracket CloseBracket { $$ = NIL; }
@@ -516,11 +509,12 @@ arg:
         $$ = self.heap.cons_ref($2, rhs);
     }
     | OpenBracket exp Comma exp Comma liste CloseBracket {
-       let rhs = self.heap.cons_ref($4, reverse($6));
-        $$ = self.heap.cons_ref($2, rhs);
-    }
-    | OpenBracket exp DotDot exp CloseBracket { $$ = self.heap.apply3(Combinator::StepUntil.into(), big_one, $4, $2); }
-    | OpenBracket exp DotDot CloseBracket { $$ = self.heap.apply2(Combinator::Step.into(), big_one, $2); }
+        let reversed = ConsList::<Value>::reversed_value(self.heap, $6);
+        let rhs = self.heap.cons_ref($4, reversed);
+         $$ = self.heap.cons_ref($2, rhs);
+     }
+    | OpenBracket exp DotDot exp CloseBracket { $$ = self.heap.apply3(Combinator::StepUntil.into(), Value::Data(1), $4, $2); }
+    | OpenBracket exp DotDot CloseBracket { $$ = self.heap.apply2(Combinator::Step.into(), Value::Data(1), $2); }
     | OpenBracket exp Comma exp DotDot exp CloseBracket {
         let minus_expr = self.heap.apply2(Combinator::Minus.into(), $4, $2);
         $$ = self.heap.apply3(Combinator::StepUntil.into(), minus_expr, $6, $2);
@@ -532,11 +526,11 @@ arg:
     /* Only list literals and ranges are handled here; list comprehensions are
        still unsupported. */
     | OpenBracket exp Pipe qualifiers CloseBracket {
-        syntax("list comprehensions are not supported here\n");
+        self.syntax("list comprehensions are not supported here\n");
         $$ = NIL;
       }
     | OpenBracket exp Diagonal qualifiers CloseBracket {
-        syntax("diagonal list comprehensions are not supported here\n");
+        self.syntax("diagonal list comprehensions are not supported here\n");
         $$ = NIL;
       }
     | OpenParenthesis op CloseParenthesis       /* RSB */ { $$ = $2; }
@@ -547,27 +541,27 @@ arg:
         $$ = if self.heap[$2].tag == Tag::Ap && hd == Combinator::C.into() {
           self.heap.apply_ref(self.heap[$2].tail.into(), $3)
         } else {
-          self.heap.apply2(Combinator::C.into(), $2, $3).into()
+          self.heap.apply2(Combinator::C.into(), $2, $3)
         };
       }
     | OpenParenthesis CloseParenthesis {
-        $$ = self.const_(HeapConstant::Void); /* the void tuple */
+        $$ = self.vm.void_tuple();
       }
     | OpenParenthesis exp Comma liste CloseParenthesis {
     	/*
     	A tuple. The heap representation of the tuple `(a1, ..., an)` is
         `self.heap.cons(a1, self.heap.cons(a2, ...pair(a(n-1), an)))`.
         */
-        if self.heap[$4].tail.into() == NIL {
+        if self.heap[$4].tail == NIL_RAW {
           $$ = self.heap.pair_ref($2, self.heap[$4].head.into());
         } else {
           let tl = self.heap[$4].tail;
           $$ = self.heap.pair_ref(self.heap[tl].head.into(), self.heap[$4].head.into());
           let mut next_item = self.heap[tl].tail;
-          while next_item != NIL {
+          while next_item != NIL_RAW {
             let hd = self.heap[next_item].head;
             $$ = self.heap.cons_ref(hd.into(), $$);
-            next_item = self.heap[next_item].tail.into();
+            next_item = self.heap[next_item].tail;
           }
           $$ = self.heap.cons_ref($2, $$);
         }
@@ -576,9 +570,9 @@ arg:
     ;
 
 lexrules:
-    lexrules lstart here re indent { if !SYNERR { inlex = 2; } }
+    lexrules lstart here re indent { if !SYNERR { self.inlex = 2; } }
 
-    Arrow exp lpostfix { if !SYNERR { inlex = 1; } } outdent {
+    Arrow exp lpostfix { if !SYNERR { self.inlex = 1; } } outdent {
         if $9 < 0 && e_re($4) {
           errs = $3;
           syntax("illegal lex rule - lhs matches empty\n");
@@ -597,23 +591,21 @@ lstart:
         let mut ns = NIL;
         let mut next_item = $2;
     while next_item != NIL {
-      let mut x = &lexstates;
+      let mut x = &mut self.lexstates;
       let mut i = 1;
 
       loop {
-          if x != NIL && self.heap[self.heap[*x].head].head != self.heap[next_item].head {
-          break;
-          }
+          if *x == NIL_RAW || self.heap[self.heap[*x].head].head == self.heap[next_item].head { break; }
           i += 1;
-          x = &self.heap[*x].tail;
+          x = &mut self.heap[*x].tail;
       }
       // Canonical `%lex` state records pair a constructor name with bit flags.
       // lstart sets the "appears in start-condition list" flag (bit 2) and
       // interns the corresponding numeric start-state index into `ns`.
-      if *x == NIL {
+      if *x == NIL_RAW {
           let hd = self.heap[next_item].head;
           let cons = self.heap.cons_ref(hd.into(), RawValue::from(2).into());
-          *x = self.heap.cons_ref(cons, NIL);
+          *x = self.heap.cons_ref(cons, NIL).into();
       } else {
           let x_tail = self.heap[*x].tail;
           self.heap[x_tail].head |= 2;
@@ -644,21 +636,21 @@ lpostfix:
         /* empty */ { $$ = RawValue::from(-1).into(); }
         | Begin ConstructorName
         {
-          let mut x = &lexstates;
+          let mut x = &mut self.lexstates;
           let mut i = 1;
           loop
           {
-        if *x == NIL { break; }
-        let hd = self.heap[x].head;
+        if *x == NIL_RAW { break; }
+        let hd = self.heap[*x].head;
         if self.heap[hd].head == $2 { break; }
         i += 1;
-        x = self.heap[x].tail;
+        x = &mut self.heap[*x].tail;
           }
-          if *x == NIL {
+          if *x == NIL_RAW {
           let cons = self.heap.cons_ref($2, RawValue::from(1).into());
-          x = self.heap.cons_ref(cons, NIL);
+          *x = self.heap.cons_ref(cons, NIL).into();
           } else {
-        let hd = self.heap[x].head;
+        let hd = self.heap[*x].head;
         self.heap[hd].tail |= 1;
           }
             $$ = RawValue::from(i).into();
@@ -674,9 +666,9 @@ lpostfix:
 lexdefs:
     lexdefs LexDef indent Equal re outdent {
             let cons = self.heap.cons_ref($2, $5);
-            self.lexdefs = self.heap.cons_ref(cons, self.lexdefs);
+            self.lexdefs = self.heap.cons_ref(cons, self.lexdefs.into()).into();
         }
-    | /* empty */ { self.lexdefs = NIL; }
+    | /* empty */ { self.lexdefs = NIL_RAW; }
     ;
 
 re:   /* regular expression */
@@ -746,14 +738,14 @@ lunit:
       }
     | Dot { $$ = Combinator::Lex_Dot.into(); }
     | name {
-        let x = self.lexdefs;
+        let mut x = self.lexdefs;
     loop {
-        if x == NIL { break; }
+        if x == NIL_RAW { break; }
         let hd = self.heap[x].head;
         if self.heap[hd].head == $1 { break; }
         x=tl[x];
     }
-    if x==NIL {
+    if x == NIL_RAW {
       print!(
         "{}syntax error: undefined lexeme {} in regular expression\n",
         if echoing {"\n"} else {""},
@@ -771,15 +763,21 @@ name: Name | ConstructorName ;
 
 /* List-comprehension qualifier/generator lowering is not implemented yet. */
 qualifiers:
-    exp { $$ = self.heap.cons_ref(self.heap.cons_ref(GUARD, $1), NIL);  }
+    exp {
+        let guard = self.heap.cons_ref(GUARD, $1);
+        $$ = self.heap.cons_ref(guard, NIL);
+      }
     | generator { $$ = self.heap.cons_ref($1, NIL);  }
     | qualifiers Semicolon generator { $$ = self.heap.cons_ref($3, $1);   }
-    | qualifiers Semicolon exp { $$ = self.heap.cons_ref(self.heap.cons_ref(GUARD, $3), $1);   }
+    | qualifiers Semicolon exp {
+        let guard = self.heap.cons_ref(GUARD, $3);
+        $$ = self.heap.cons_ref(guard, $1);
+      }
     ;
 
 generator:
     e1 Comma generator {
-        syntax("generator syntax is not supported here\n");
+        self.syntax("generator syntax is not supported here\n");
         $$ = NIL;
       }
     | generator1
@@ -787,11 +785,11 @@ generator:
 
 generator1:
     e1 LeftArrow exp {
-        syntax("generator syntax is not supported here\n");
+        self.syntax("generator syntax is not supported here\n");
         $$ = NIL;
       }
     | e1 LeftArrow exp Comma exp DotDot {
-        syntax("iterate-generator syntax is not supported here\n");
+        self.syntax("iterate-generator syntax is not supported here\n");
         $$ = NIL;
       }
     ;
@@ -817,7 +815,7 @@ def:
         r = self.heap.label_ref($5, r);
         /* to help locate type errors */
         declare(l, r);
-        lastname = l;
+        self.last_name = l.into();
       }
 
     | spec {
@@ -899,7 +897,7 @@ def:
         let mut n = 0;
 
         while r_ids!=NIL {
-          r_ids = self.heap[r_ids].tail.into();
+          r_ids = self.heap[r_ids].tail;
           n += 1;
         }
 
@@ -953,39 +951,39 @@ def:
       }
 
     | indent setexp Export parts outdent {
-        inexplist = 0;
-        if (exports!=NIL) {
+        self.inexplist = false;
+        if self.exports != NIL_RAW {
           errs = $2;
           syntax("multiple %export statements are illegal\n");
         } else {
-          if ($4==NIL && exportfiles==NIL && embargoes!=NIL) {
-            exportfiles = self.heap.cons_ref(Combinator::Plus.into(), NIL);
+          if $4 == NIL && self.exportfiles == NIL_RAW && self.embargoes != NIL_RAW {
+            self.exportfiles = self.heap.cons_ref(Combinator::Plus.into(), NIL).into();
           }
-          exports = self.heap.cons_ref($2, $4);  /* self.heap.cons(hereinfo, identifiers) */
+          self.exports = self.heap.cons_ref($2, $4).into();  /* self.heap.cons(hereinfo, identifiers) */
         }
         $$ = self.heap.cons_ref(self.heap.nill, NIL);
       }
 
     | Free here OpenBrace specs CloseBrace {
-        if (freeids!=NIL) {
+        if self.freeids != NIL_RAW {
           errs=$2;
           syntax("multiple %free statements are illegal\n");
         } else {
           let mut x = reverse($4);
           while (x!=NIL&&!SYNERR) {
             specify(hd[hd[x]], tl[tl[hd[x]]], hd[tl[hd[x]]]);
-            freeids = self.heap.cons_ref(head(hd[hd[x]]), freeids);
+            self.freeids = self.heap.cons_ref(head(hd[hd[x]]), self.freeids.into()).into();
             if (tl[tl[hd[x]]]==Type::Type.into()) {
-              t_class(self.heap[freeids].head) = IdentifierValueTypeKind::Free;
+              t_class(self.heap[self.freeids].head) = IdentifierValueTypeKind::Free;
             }
             else {
-              id_val(self.heap[freeids].head) = FREE; /* conventional value */
+              id_val(self.heap[self.freeids].head) = FREE; /* conventional value */
             }
             x = self.heap[x].tail;
           }
           fil_share(self.heap[files].head) = 0; /* parameterised scripts unshareable */
-          freeids = alfasort(freeids);
-          let mut freeid_cursor = freeids;
+          self.freeids = alfasort(self.freeids.into()).into();
+          let mut freeid_cursor = self.freeids;
           while freeid_cursor!=NIL {
             /* each element of freeids is of the form
               self.heap.cons(id, self.heap.cons(original_name, type)) */
@@ -1006,11 +1004,11 @@ def:
         // extern char *dicp;
         // extern word CLASHES, BAD_DUMP;
         /* $1 contains file+hereinfo */
-        includees = self.heap.cons_ref(self.heap.cons_ref($1, self.heap.cons_ref($3, $2)), includees);
+        self.includees = self.heap.cons_ref(self.heap.cons_ref($1, self.heap.cons_ref($3, $2)), self.includees.into()).into();
         $$ = self.heap.cons_ref(self.heap.nill, NIL);
       }
 
-    | here BNF { startbnf(); inbnf = 1; } names outdent productions EndIR {
+    | here BNF { startbnf(); self.inbnf = 1; } names outdent productions EndIR {
         /* fiddle - `indent' done by yylex() while processing directive */
         let mut lhs = NIL;
         let mut p = $6;
@@ -1018,38 +1016,38 @@ def:
         let mut body = NIL;
         let mut startswith = NIL;
         let mut leftrecs = NIL;
-        ihlist = 0;
-        inbnf = 0;
-        nonterminals = UNION(nonterminals, $4);
+        self.ihlist = 0;
+        self.inbnf = 0;
+        self.nonterminals = UNION(self.nonterminals.into(), $4).into();
         while p!=NIL {
           if (dval(self.heap[p].head)==Combinator::Undef.into()) {
-            nonterminals = add1(dlhs(self.heap[p].head), nonterminals);
+            self.nonterminals = add1(dlhs(self.heap[p].head), self.nonterminals.into()).into();
           }
           else{
             lhs = add1(dlhs(self.heap[p].head), lhs);
           }
           p = self.heap[p].tail;
         }
-        nonterminals = setdiff(nonterminals, lhs);
-        if (nonterminals!=NIL) {
+        self.nonterminals = setdiff(self.nonterminals.into(), lhs).into();
+        if self.nonterminals != NIL_RAW {
           errs = $1;
-          member($4, self.heap[nonterminals].head); /*||findnt(self.heap[nonterminals].head)*/
+          member($4, self.heap[self.nonterminals].head); /*||findnt(self.heap[self.nonterminals].head)*/
           printf("%sfatal error in grammar, ", if echoing {"\n"} else {""});
           printf(
             "undefined nonterminal%s: ",
-            if self.heap[nonterminals].tail==NIL {""} else {"s"}
+            if self.heap[self.nonterminals].tail==NIL_RAW {""} else {"s"}
           );
-          printlist("", nonterminals);
+          printlist("", self.nonterminals.into());
           acterror();
         } else { /* compute list of nonterminals admitting empty prodn */
-          eprodnts = NIL;
+          self.eprodnts = NIL_RAW;
           let mut changed = true;
           while changed {
             changed = false;
             p = $6;
             while p!=NIL {
-              if(!member(eprodnts, dlhs(self.heap[p].head)) && eprod(dval(self.heap[p].head))) {
-                eprodnts = self.heap.cons_ref(dlhs(self.heap[p].head), eprodnts);
+              if(!member(self.eprodnts.into(), dlhs(self.heap[p].head)) && eprod(dval(self.heap[p].head))) {
+                self.eprodnts = self.heap.cons_ref(dlhs(self.heap[p].head), self.eprodnts.into()).into();
                 changed = true;
               }
               p = self.heap[p].tail;
@@ -1097,7 +1095,7 @@ def:
           if(start_symbols==NIL) { /* implied start symbol */
             start_symbols = self.heap.cons_ref(dlhs(self.heap[lastlink($6)].head), NIL);
           }
-          fnts = 1; /* fnts is flag indicating %bnf in use */
+          self.fnts = 1; /* fnts is flag indicating %bnf in use */
           if (self.heap[start_symbols].tail==NIL) { /* only one start symbol */
             subjects = getfname(self.heap[start_symbols].head);
             body = self.heap.apply2(Combinator::G_Close.into(), str_conv(get_id(self.heap[start_symbols].head)), self.heap[start_symbols].head);
@@ -1122,7 +1120,7 @@ setexp:
     here {
         /* hack to fix lex analyser */
         $$ = $1;
-        inexplist = 1;
+        self.inexplist = true;
       }
     ;
 
@@ -1207,19 +1205,20 @@ negmod:
 here:
     /* empty */ {
         // extern word line_no;
-        lasth = fileinfo(get_fil(current_file), line_no);
-        $$ = lasth;
+        self.last_here = fileinfo(get_fil(current_file), line_no).into();
+        $$ = self.last_here.into();
         /* (script, line_no) for diagnostics */
       }
     ;
 
 act1:
-    /* empty */ { tvarscope = 1; };
+    /* empty */ { self.tvarscope = true; $$ = NIL; };
 
 act2:
     /* empty */ {
-        tvarscope = 0;
-        idsused = NIL;
+        self.tvarscope = false;
+        self.idsused = NIL_RAW;
+        $$ = NIL;
       }
     ;
 
@@ -1344,15 +1343,15 @@ v2:
 
 v3:
     Name {
-        if (sreds && member(gvars, $1)){
+        if (self.sreds != 0 && member(gvars, $1)){
           syntax("illegal use of $num symbol\n");
         }
         /* cannot use grammar variable in a binding position */
-        if (memb(idsused, $1)) {
+        if (memb(self.idsused.into(), $1)) {
           $$ = self.heap.cons_ref(Token::Constant.into(), $1);
         } /* picks up repeated names in a template */
         else {
-          idsused = self.heap.cons_ref($1, idsused);
+          self.idsused = self.heap.cons_ref($1, self.idsused.into()).into();
         }
       }
     | ConstructorName
@@ -1419,7 +1418,7 @@ argtype:
     Name { $$ = transtypeid($1); }
            /* necessary while prelude not meta_tchecked (for prelude) */
     | typevar {
-        if (tvarscope && !memb(idsused, $1)){
+        if (self.tvarscope && !memb(self.idsused.into(), $1)){
           printf(
             "%ssyntax error: unbound type variable ",
             if echoing {"\n"} else {""}
@@ -1462,22 +1461,22 @@ parts: /* returned in reverse order */
     parts Name { $$ = add1($2, $1); }
     | parts Minus Name {
         $$ = $1;
-        embargoes = add1($3, embargoes);
+        self.embargoes = add1($3, self.embargoes.into()).into();
       }
     | parts PathName { $$ = $1; } /*the pathnames are placed on exportfiles in yylex*/
     | parts Plus {
         $$ = $1;
-        exportfiles = self.heap.cons_ref(Combinator::Plus.into(), exportfiles);
+        self.exportfiles = self.heap.cons_ref(Combinator::Plus.into(), self.exportfiles.into()).into();
       }
     | Name { $$ = add1($1, NIL); }
     | Minus Name {
         $$ = NIL;
-        embargoes = add1($2, embargoes);
+        self.embargoes = add1($2, self.embargoes.into()).into();
       }
     | PathName { $$ = NIL; }
     | Plus {
         $$ = NIL;
-        exportfiles=self.heap.cons_ref(Combinator::Plus.into(), exportfiles);
+        self.exportfiles = self.heap.cons_ref(Combinator::Plus.into(), self.exportfiles.into()).into();
       }
     ;
 
@@ -1536,7 +1535,7 @@ lspecs:  /* returns a list of self.heap.cons(id, self.heap.cons(here, type))
     ;
 
 lspec:
-    namelist indent here {inbnf=0;} ColonColon type outdent { $$ = self.heap.cons_ref($1, self.heap.cons_ref($3, $6)); };
+    namelist indent here {self.inbnf=0;} ColonColon type outdent { $$ = self.heap.cons_ref($1, self.heap.cons_ref($3, $6)); };
 
 namelist:
     Name Comma namelist { $$ = self.heap.cons_ref($1, $3); }
@@ -1552,7 +1551,7 @@ typeform:
     ConstructorName typevars { syntax("upper case identifier out of context\n"); }
     | Name typevars   /* warning if typevar is repeated */ {
         $$ = $1;
-        idsused = $2;
+        self.idsused = $2.into();
         let mut typevars = $2;
         while(typevars!=NIL) {
           $$ = self.heap.apply_ref($$, self.heap[typevars].head.into());
@@ -1563,7 +1562,7 @@ typeform:
         if(eqtvar($1, $3)){
           syntax("repeated type variable in typeform\n");
         }
-        idsused = self.heap.cons_ref($1, self.heap.cons_ref($3, NIL));
+        self.idsused = self.heap.cons_ref($1, self.heap.cons_ref($3, NIL)).into();
         $$ = self.heap.apply2($2, $1, $3);
       }
     | typevar InfixCName typevar {
@@ -1641,11 +1640,11 @@ names:          /* used twice - for bnf list, and for inherited attr list */
             "%ssyntax error: repeated identifier \"%s\" in %s list\n",
             if echoing {"\n"} else {""},
             get_id($2),
-            if inbnf {"bnf"} else {"attribute"}
+            if self.inbnf != 0 {"bnf"} else {"attribute"}
           );
           acterror();
         }
-        $$ = if inbnf {
+        $$ = if self.inbnf != 0 {
           add1($2, $1)
         } else {
           self.heap.cons_ref($2, $1)
@@ -1659,10 +1658,10 @@ productions:
         let mut h = reverse(self.heap[$1].head);
         let hr = hd[tl[$1]];
         let t = tl[tl[$1]];
-        inbnf = 1;
+        self.inbnf = 1;
         $$ = NIL;
         while (h!=NIL && !SYNERR) {
-          ntspecmap = self.heap.cons_ref(self.heap.cons_ref(self.heap[h].head, hr), ntspecmap);
+          self.ntspecmap = self.heap.cons_ref(self.heap.cons_ref(self.heap[h].head, hr), self.ntspecmap.into()).into();
           $$ = add_prod(defn(self.heap[h].head, t, Combinator::Undef.into()), $$, hr);
           h = self.heap[h].tail;
         }
@@ -1672,10 +1671,10 @@ productions:
         let mut h = reverse(self.heap[$2].head);
         let hr = hd[tl[$2]];
         let t = tl[tl[$2]];
-        inbnf = 1;
+        self.inbnf = 1;
         $$=$1;
         while(h!=NIL&&!SYNERR){
-          ntspecmap = self.heap.cons_ref(self.heap.cons_ref(self.heap[h].head, hr), ntspecmap);
+          self.ntspecmap = self.heap.cons_ref(self.heap.cons_ref(self.heap[h].head, hr), self.ntspecmap.into()).into();
           $$ = add_prod(defn(self.heap[h].head, t, Combinator::Undef.into()), $$, hr);
           h = self.heap[h].tail;
         }
@@ -1691,13 +1690,13 @@ production:
     ;
 
 params:   /* places inherited attributes, if any, on ihlist */
-    /* empty */ { ihlist=0; }
-    | { inbnf=0; } OpenParenthesis names CloseParenthesis {
-        inbnf = 1;
+    /* empty */ { self.ihlist=0; $$ = NIL; }
+    | { self.inbnf=0; } OpenParenthesis names CloseParenthesis {
+        self.inbnf = 1;
         if ($3==NIL) {
           syntax("unexpected token CloseParenthesis\n");
         }
-        ihlist=$3;
+        self.ihlist = $3.into();
       }
     ;
 
@@ -1741,10 +1740,10 @@ term:
         syntax("%bnf production lowering is not implemented here\n");
         $$ = NIL;
       }
-    | count_factors {inbnf=2;} indent Equal here rhs outdent {
+    | count_factors {self.inbnf=2;} indent Equal here rhs outdent {
         syntax("%bnf production lowering is not implemented here\n");
-        inbnf = 1;
-        sreds = 0;
+        self.inbnf = 1;
+        self.sreds = 0;
         $$ = NIL;
       }
     ;
@@ -1755,42 +1754,42 @@ error_term:
         $$ = NIL;
       }
     | ErrorSymbol {
-        inbnf = 2;
-        sreds = 2;
+        self.inbnf = 2;
+        self.sreds = 2;
       } indent Equal here rhs outdent {
         syntax("%bnf error productions are not implemented here\n");
-        inbnf = 1;
-        sreds = 0;
+        self.inbnf = 1;
+        self.sreds = 0;
         $$ = NIL;
       }
     ;
 
 count_factors:
     EmptySymbol {
-        sreds = 0;
+        self.sreds = 0;
         $$ = NIL;
       }
     | EmptySymbol factors {
         syntax("unexpected token after empty\n");
-        sreds = 0;
+        self.sreds = 0;
         $$ = NIL;
         }
-    | { open_bracket_count=0; } factors {
+    | { self.open_bracket_count=0; } factors {
         let mut f = $2;
-        if open_bracket_count != 0 {
-          syntax(if open_bracket_count > 0 {
+        if self.open_bracket_count != 0 {
+          syntax(if self.open_bracket_count > 0 {
             "unmatched { in grammar rule\n"
           } else {
             "unmatched } in grammar rule\n"
           });
         }
-        sreds = 0;
+        self.sreds = 0;
         while f != NIL {
-          sreds += 1;
+          self.sreds += 1;
           f = self.heap[f].tail.into();
         }
         if self.heap[$2].head == Combinator::G_End.into() {
-          sreds -= 1;
+          self.sreds -= 1;
         }
         $$ = $2;
       }
@@ -1812,12 +1811,12 @@ factor:
         $$ = self.heap.apply_ref(outdent_fn.into(), self.heap.apply2(indent_fn, getcol_fn(), $2).into());
       }
     | OpenBrace unit {
-        open_bracket_count += 1;
+        self.open_bracket_count += 1;
         $$ = self.heap.apply2(indent_fn, getcol_fn(), $2);
       }
     | unit CloseBrace {
-        open_bracket_count -= 1;
-          if open_bracket_count < 0 {
+        self.open_bracket_count -= 1;
+          if self.open_bracket_count < 0 {
             syntax("unmatched `}' in grammar rule\n");
           }
         $$ = self.heap.apply_ref(outdent_fn.into(), $1);
@@ -1871,7 +1870,7 @@ symbol:
         $$ = self.heap.apply_ref(Combinator::G_Symb.into(), $1);
       }
     | Caret { $$=Combinator::G_State.into(); }
-    | {inbnf=0;} OpenBracket exp {inbnf=1;} CloseBracket { $$ = self.heap.apply_ref(Combinator::G_SuchThat.into(), $3); }
+    | {self.inbnf=0;} OpenBracket exp {self.inbnf=1;} CloseBracket { $$ = self.heap.apply_ref(Combinator::G_SuchThat.into(), $3); }
     | Minus { $$ = Combinator::G_Any.into(); }
     ;
 
@@ -1880,8 +1879,15 @@ symbol:
 
 
 
-impl Parser {
-    pub fn new(lexer: Lexer) -> Self {
+impl<'ctx /* 'fix quotes */> Parser<'ctx /* 'fix quotes */> {
+    pub fn new(lexer: Lexer, activation: ParserActivation<'ctx /* 'fix quotes */>) -> Self {
+      let ParserActivation {
+        heap,
+        vm,
+        session,
+        deferred,
+      } = activation;
+
       Self {
         yy_error_verbose: true,
         yynerrs: 0,
@@ -1890,20 +1896,43 @@ impl Parser {
         debug: false,
         yylexer: lexer,
 
-        lexstates : Combinator::Nil.into(),
-        inbnf: 0,
-        inexplist: false,
-        inlex: 0,
-        tvarscope: false,
-        sreds: 0,
-        open_bracket_count: 0,
+        heap,
+        vm,
+        synerr: false,
+        diagnostics: ParserRunDiagnostics::default(),
 
-        heap: Default::default(),
+        lexstates: session.lexstates,
+        idsused: session.idsused,
+        lexdefs: session.lexdefs,
+        last_name: session.last_name,
+        ihlist: session.ihlist,
+        nonterminals: session.nonterminals,
+        eprodnts: session.eprodnts,
+        ntspecmap: session.ntspecmap,
+        ntmap: session.ntmap,
+        last_here: session.last_here,
+
+        inbnf: session.inbnf,
+        inexplist: session.inexplist,
+        inlex: session.inlex,
+        tvarscope: session.tvarscope,
+        sreds: session.sreds,
+        open_bracket_count: session.open_bracket_count,
+
+        exports: deferred.exports,
+        exportfiles: deferred.exportfiles,
+        embargoes: deferred.embargoes,
+        includees: deferred.includees,
+        freeids: deferred.freeids,
+
+        fnts: 0,
+        dicp: String::new(),
+        dicq: String::new(),
       }
     }
 
 
-    fn next_token(&mut self) -> Token {
+    fn next_token(&mut self) -> ParserLookahead {
       match self.yylexer.yylex() {
         Ok(token) => token,
         Err(error) => {
@@ -1913,11 +1942,47 @@ impl Parser {
         }
       }
     }
+
+    fn syntax(&mut self, message: &str) {
+      let location = Some(self.yylexer.current_loc());
+      let here_info = Some(HereInfo::from_source_location(
+        self.yylexer.source_name(),
+        self.yylexer.source_text(),
+        location,
+      ));
+      self.diagnostics.push(ParserDiagnostic {
+        message: message.trim_end().to_string(),
+        location,
+        here_info,
+      });
+      self.synerr = true;
+    }
     
 
     fn report_syntax_error(&mut self, _yystack: &YYStack, yytoken: &SymbolKind, yylloc: YYLoc) {
         let token_name = SymbolKind::yynames_[i32_to_usize(yytoken.code())];
-        eprintln!("Unexpected token {} at {:?}", token_name, yylloc);
+        let here_info = Some(HereInfo::from_source_location(
+          self.yylexer.source_name(),
+          self.yylexer.source_text(),
+          Some(yylloc),
+        ));
+        self.diagnostics.push(ParserDiagnostic {
+          message: format!("unexpected token {}", token_name),
+          location: Some(yylloc),
+          here_info,
+        });
+        self.synerr = true;
+    }
+
+    pub fn finish_run(self, parse_ok: bool) -> ParserRunResult {
+        if self.synerr || !parse_ok {
+            return ParserRunResult::SyntaxError(self.diagnostics);
+        }
+
+        match self.result {
+            Some(result) => ParserRunResult::ParsedExpression(result),
+            None => ParserRunResult::SyntaxError(self.diagnostics),
+        }
     }
 
 }

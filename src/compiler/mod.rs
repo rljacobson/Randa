@@ -1,8 +1,7 @@
 /*!
-There are mild impedance mismatches between libraries. Logos returns ranges as "spans". Saucepan can make a
-`saucepan::Span` from a range for a `Source` using slice notation: `let span: Span = source[range];`. OTOH, so can
-Logos: `text[range]` gives the token as a slice. The advantage of using Saucepan is that Saucepan keeps track of
-multiple files.
+There are mild impedance mismatches between libraries. Logos returns ranges as byte spans over the source text, and the
+current lexer keeps the source name and source text directly so it can recover token slices and locations without an
+extra source-wrapper dependency.
 
 Bison has distinct notions of token and value. A value wraps a token. Rules produce values. For us, values will be
 AST nodes.
@@ -12,15 +11,22 @@ AST nodes.
 pub(crate) mod bytecode;
 pub mod errors;
 mod lexer;
-// mod parser;
-mod parser_boundary;
+// This clippy lint allow is needed because it triggers on generated skeleton code and thus
+// can't be addressed by fixes in `parser.y`. Since this can hide genuine issues in future edits to
+// `parser.y`, we should periodically disable this allow to check that warnings are only baseline,
+// not real problems in new code.
+#[allow(clippy::clone_on_copy)]
+pub(crate) mod parser;
+mod parser_activation;
 mod parser_session;
+mod parser_support;
 pub mod token;
 
 use crate::data::api::HeapString;
-pub use parser_boundary::{ParserBoundary, ParserSupportError};
-#[allow(unused_imports)]
+pub(crate) use lexer::Lexer;
+pub use parser_activation::{ParserActivation, ParserVmContext};
 pub use parser_session::{ParserDeferredState, ParserSessionState};
+pub use parser_support::{ParserRunDiagnostics, ParserRunResult, ParserSupportError};
 pub use token::Token;
 
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
@@ -90,19 +96,3 @@ mod tests {
         assert_eq!(missing.line_number, 0);
     }
 }
-
-/*
-// Todo: Why only these keywords? This list is from steer.c, line ~1582.
-pub static KEYWORDS: HashMap<&str, u8> = HashMap::from([
-  ("abstype", 21),
-  ("div", 8),
-  ("if", 15),
-  ("mod", 8),
-  ("otherwise", 15),
-  ("readvals", 31),
-  ("show", 23),
-  ("type", 22),
-  ("where", 15),
-  ("with", 21)
-]);
-*/
