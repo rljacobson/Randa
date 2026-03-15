@@ -10,7 +10,7 @@ use std::ops::{Index, IndexMut};
 
 use crate::constants::SIGNBIT;
 use crate::data::api::{
-    ConstructorRef, HeapObjectProxy, IdentifierDefinitionRef, IdentifierRecordRef,
+    ApNodeRef, ConstructorRef, HeapObjectProxy, IdentifierDefinitionRef, IdentifierRecordRef,
 };
 use crate::{
     compiler::Token,
@@ -559,6 +559,43 @@ impl Heap {
         Value::Reference(self.lambda(head.into(), tail.into()))
     }
 
+    /// Lowers a function-form lhs application spine into nested lambdas around `body` and returns
+    /// the lowered lhs/body pair. This exists so parser-facing definition lowering can own
+    /// Miranda's fnform rewrite through one typed helper instead of duplicating `Tag::Ap` walks
+    /// inline. The invariant is that non-constructor `f x y = body` lowers to lhs `f` and body
+    /// `lambda(x, lambda(y, body))`, while non-fnform lhs values stay unchanged.
+    pub fn lower_function_form_lambdas(&mut self, lhs: Value, body: Value) -> (Value, Value) {
+        let mut lhs_ref: RawValue = lhs.into();
+        if lhs_ref < ATOM_LIMIT || self[lhs_ref].tag != Tag::Ap {
+            return (lhs, body);
+        }
+
+        let mut leftmost = ApNodeRef::from_ref(lhs_ref);
+        let mut function_raw = leftmost.function_raw(self);
+        while let Some(nested) = leftmost.function_application(self) {
+            leftmost = nested;
+            function_raw = leftmost.function_raw(self);
+        }
+
+        if function_raw < ATOM_LIMIT || self[function_raw].tag != Tag::Id {
+            return (lhs, body);
+        }
+
+        let function = IdentifierRecordRef::from_ref(function_raw);
+        if is_capitalized(function.get_name(self).as_str()) {
+            return (lhs, body);
+        }
+
+        let mut lowered_body = body;
+        while lhs_ref >= ATOM_LIMIT && self[lhs_ref].tag == Tag::Ap {
+            let application = ApNodeRef::from_ref(lhs_ref);
+            lowered_body = self.lambda_ref(application.argument_raw(self).into(), lowered_body);
+            lhs_ref = application.function_raw(self);
+        }
+
+        (lhs_ref.into(), lowered_body)
+    }
+
     fn let_(&mut self, head: RawValue, tail: RawValue) -> RawValue {
         self.put(Tag::Let, head, tail)
     }
@@ -718,29 +755,38 @@ impl Heap {
     /// Code common to is_arrow_type and is_comma_type is factored out into this auxiliary function. Note that this
     /// function checks that correct tags are present.
     fn is_type_auxiliary(&self, reference: Value, type_required: Type) -> bool {
-        let type_cell: HeapCell = match self.expect(Tag::Ap, reference) {
-            Ok(cell) => cell,
-            Err(_) => return false,
+        if !matches!(reference, Value::Reference(_)) {
+            return false;
+        }
+
+        let reference = RawValue::from(reference);
+
+        if self[reference].tag != Tag::Ap {
+            return false;
+        }
+
+        let type_application = ApNodeRef::from_ref(reference);
+        let Some(operator_application) = type_application.function_application(self) else {
+            return false;
         };
 
-        // The cell referenced by the head of `type_cell`
-        let head_cell: HeapCell = match self.expect(Tag::Ap, type_cell.head.into()) {
-            Ok(cell) => cell,
-            Err(_) => return false,
-        };
-
-        head_cell.head == type_required as RawValue
+        operator_application.function_raw(self) == RawValue::from(type_required)
     }
 
     /// Is the type referenced by reference a list type? Not only checks the type but also that the correct
     /// `HeapCell` `Tag` is present at each level of the composition.
     pub fn is_list_type(&self, reference: Value) -> bool {
-        let type_cell: HeapCell = match self.expect(Tag::Ap, reference) {
-            Ok(cell) => cell,
-            Err(_) => return false,
-        };
+        if !matches!(reference, Value::Reference(_)) {
+            return false;
+        }
 
-        type_cell.head == Type::List as RawValue
+        let reference = RawValue::from(reference);
+
+        if self[reference].tag != Tag::Ap {
+            return false;
+        }
+
+        ApNodeRef::from_ref(reference).function_raw(self) == RawValue::from(Type::List)
     }
 
     pub fn is_type_variable(&self, reference: Value) -> bool {
@@ -754,12 +800,17 @@ impl Heap {
     }
 
     pub fn is_bound_type(&self, reference: Value) -> bool {
-        let type_cell: HeapCell = match self.expect(Tag::Ap, reference) {
-            Ok(cell) => cell,
-            Err(_) => return false,
-        };
+        if !matches!(reference, Value::Reference(_)) {
+            return false;
+        }
 
-        type_cell.head == Type::Bind as RawValue
+        let reference = RawValue::from(reference);
+
+        if self[reference].tag != Tag::Ap {
+            return false;
+        }
+
+        ApNodeRef::from_ref(reference).function_raw(self) == RawValue::from(Type::Bind)
     }
 
     fn arrow_type(&mut self, arg1: Value, arg2: Value) -> RawValue {
@@ -895,5 +946,55 @@ mod tests {
         let ident = id_record.get_data(&heap);
         println!("Identifier:\n\t{}", ident.name);
         assert!(true);
+    }
+
+    #[test]
+    fn type_queries_follow_application_proxy_shape() {
+        let mut heap = Heap::new();
+
+        let arrow = heap.apply2(Type::Arrow.into(), Type::Bool.into(), Type::Char.into());
+        let list = heap.apply_ref(Type::List.into(), Type::Bool.into());
+        let bound = heap.apply_ref(Type::Bind.into(), Type::Bool.into());
+
+        assert!(heap.is_arrow_type(arrow));
+        assert!(heap.is_list_type(list));
+        assert!(heap.is_bound_type(bound));
+    }
+
+    #[test]
+    fn function_form_lowering_wraps_arguments_in_nested_lambdas() {
+        let mut heap = Heap::new();
+        let function = heap.make_empty_identifier("f");
+        let x = heap.make_empty_identifier("x");
+        let y = heap.make_empty_identifier("y");
+        let inner = ApNodeRef::new(&mut heap, function.into(), x.into());
+        let lhs = ApNodeRef::new(&mut heap, inner.into(), y.into());
+        let body = Combinator::Plus.into();
+
+        let (lowered_lhs, lowered_body) = heap.lower_function_form_lambdas(lhs.into(), body);
+
+        assert_eq!(lowered_lhs, function.into());
+        let outer_lambda: RawValue = lowered_body.into();
+        assert_eq!(heap[outer_lambda].tag, Tag::Lambda);
+        assert_eq!(heap[outer_lambda].head, x.get_ref());
+
+        let inner_lambda = heap[outer_lambda].tail;
+        assert_eq!(heap[inner_lambda].tag, Tag::Lambda);
+        assert_eq!(heap[inner_lambda].head, y.get_ref());
+        assert_eq!(heap[inner_lambda].tail, RawValue::from(body));
+    }
+
+    #[test]
+    fn function_form_lowering_skips_constructor_heads() {
+        let mut heap = Heap::new();
+        let constructor = heap.make_empty_identifier("Cons");
+        let argument = heap.make_empty_identifier("x");
+        let lhs = ApNodeRef::new(&mut heap, constructor.into(), argument.into());
+        let body = Combinator::Plus.into();
+
+        let (lowered_lhs, lowered_body) = heap.lower_function_form_lambdas(lhs.into(), body);
+
+        assert_eq!(lowered_lhs, lhs.into());
+        assert_eq!(lowered_body, body);
     }
 }

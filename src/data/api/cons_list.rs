@@ -266,44 +266,33 @@ where
     }
 }
 
-/*
-impl ConsList<RawValue> {
-  /// If `self = cons(head, rest)`, returns `head` and modifies the internal reference to point to `rest`.
-  /// If the list is empty, returns `None`.
-  pub fn pop(&mut self, heap: &Heap) -> Option<RawValue> {
-    if self.reference == Combinator::Nil.into() {
-      None
+impl ConsList<Value> {
+    /// Returns the reversed form of a parser-facing cons-list value.
+    /// This exists so parser-facing code can route `reverse`-style list rewrites through `ConsList` instead of open-coding raw cons traversal.
+    /// The invariant is that the returned list preserves the same elements as `list` in reverse order, with `NIL` remaining the empty list.
+    pub fn reversed_value(heap: &mut Heap, list: Value) -> Value {
+        let list = Self::from_ref(list.into());
+        list.reversed(heap).get_ref().into()
     }
-    else {
-      let head       = self.head_unchecked(heap);
-      self.reference = heap[self.reference].tail;
-      Some(head)
-    }
-  }
-  /// If `self = cons(head, rest)`, returns `head` and modifies the internal reference to point to `rest`.
-  /// This method does not check first if self is empty, nor does it check that `self` is pointing to a well-formed
-  /// cons list.
-  pub fn pop_unchecked(&mut self, heap: &Heap) -> RawValue {
-    let head       = self.head_unchecked(heap);
-    self.reference = heap[self.reference].tail;
-    head
-  }
 
-  #[inline(always)]
-  pub fn head_unchecked(&self, heap: &Heap) -> RawValue {
-    heap[self.reference].head
-  }
-
-  #[inline(always)]
-  pub fn head(&self, heap: &Heap) -> Option<RawValue> {
-    if self.reference == Combinator::Nil.into() {
-      Some(heap[self.reference].head)
-    } else {
-      None
+    /// Returns whether a parser-facing cons-list value contains `item`.
+    /// This exists so parser-facing code can route `member`-style queries through `ConsList` instead of repeating raw list walks.
+    /// The invariant is that the result is true iff one element of `list` is equal to `item`.
+    pub fn contains_value(heap: &Heap, list: Value, item: Value) -> bool {
+        let list = Self::from_ref(list.into());
+        list.contains(heap, item)
     }
-  }
+
+    /// Inserts `item` into a parser-facing cons-list value using Miranda `add1` ordering semantics and returns the updated list.
+    /// This exists so parser-facing code can perform ordered set insertion through `ConsList` instead of mutating raw cons-list references directly.
+    /// The invariant is that insertion preserves ascending raw-address order and suppresses duplicates exactly like Miranda `add1`.
+    pub fn insert_ordered_value(heap: &mut Heap, list: Value, item: Value) -> Value {
+        let mut list = Self::from_ref(list.into());
+        list.insert_ordered(heap, item);
+        list.get_ref().into()
+    }
 }
-*/
+
 
 impl<T> HeapObjectProxy for ConsList<T>
 where
@@ -319,5 +308,52 @@ where
 
     fn get_ref(&self) -> RawValue {
         self.reference
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn value_list_helpers_reverse_and_query_membership() {
+        let mut heap = Heap::new();
+        let alpha = heap.make_empty_identifier("alpha");
+        let beta = heap.make_empty_identifier("beta");
+        let gamma = heap.make_empty_identifier("gamma");
+
+        let tail = heap.cons_ref(beta.into(), Combinator::Nil.into());
+        let list = heap.cons_ref(alpha.into(), tail);
+        let reversed = ConsList::<Value>::reversed_value(&mut heap, list);
+        let mut reversed_list: ConsList<Value> = ConsList::from_ref(reversed.into());
+
+        assert_eq!(reversed_list.pop_value(&heap), Some(beta.into()));
+        assert_eq!(reversed_list.pop_value(&heap), Some(alpha.into()));
+        assert!(ConsList::<Value>::contains_value(&heap, list, alpha.into()));
+        assert!(!ConsList::<Value>::contains_value(
+            &heap,
+            list,
+            gamma.into()
+        ));
+    }
+
+    #[test]
+    fn value_list_helper_inserts_in_add1_order_without_duplicates() {
+        let mut heap = Heap::new();
+        let alpha = heap.make_empty_identifier("alpha");
+        let beta = heap.make_empty_identifier("beta");
+        let gamma = heap.make_empty_identifier("gamma");
+
+        let mut list = Value::from(Combinator::Nil);
+        list = ConsList::<Value>::insert_ordered_value(&mut heap, list, beta.into());
+        list = ConsList::<Value>::insert_ordered_value(&mut heap, list, gamma.into());
+        list = ConsList::<Value>::insert_ordered_value(&mut heap, list, alpha.into());
+        list = ConsList::<Value>::insert_ordered_value(&mut heap, list, beta.into());
+
+        let mut list: ConsList<Value> = ConsList::from_ref(list.into());
+        assert_eq!(list.pop_value(&heap), Some(alpha.into()));
+        assert_eq!(list.pop_value(&heap), Some(beta.into()));
+        assert_eq!(list.pop_value(&heap), Some(gamma.into()));
+        assert_eq!(list.pop_value(&heap), None);
     }
 }

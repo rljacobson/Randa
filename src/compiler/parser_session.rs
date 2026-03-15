@@ -44,10 +44,16 @@ impl Default for ParserSessionState {
 }
 
 impl ParserSessionState {
+    /// Resets every parser-session field back to the canonical NIL/zero defaults.
+    /// This exists so future parser entry/reset sites use one owned state reset path instead of duplicating field-by-field initialization.
+    /// The invariant is that a fresh parse starts with the same parser-local flags and accumulators as `Default::default()`.
     pub fn reset_for_new_parse(&mut self) {
         *self = Self::default();
     }
 
+    /// Resets the expression-path tracking fields without disturbing unrelated deferred parser-mode state.
+    /// This exists so expression-slice resets preserve task-6 parser-session ownership instead of open-coding partial field updates at future call sites.
+    /// The invariant is that `idsused`, `last_name`, `last_here`, `tvarscope`, `sreds`, and `open_bracket_count` return to their canonical empty-state values together.
     pub fn reset_expression_path_state(&mut self) {
         self.idsused = Combinator::Nil.into();
         self.last_name = 0;
@@ -80,6 +86,9 @@ impl Default for ParserDeferredState {
 }
 
 impl ParserDeferredState {
+    /// Clears every deferred parser-output accumulator back to the NIL-backed empty state.
+    /// This exists so deferred directive state has one owner for reset semantics instead of duplicating NIL restoration across future parser handoff sites.
+    /// The invariant is that `exports`, `exportfiles`, `embargoes`, `includees`, and `freeids` always reset together to the same defaults as `Default::default()`.
     pub fn clear(&mut self) {
         *self = Self::default();
     }

@@ -563,6 +563,14 @@ pub enum IdentifierValueData {
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
+pub struct TypeIdentifierValueParts {
+    pub arity: isize,
+    pub show_function: Option<Value>,
+    pub kind: IdentifierValueTypeKind,
+    pub info: Value,
+}
+
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
 /// Reference-semantics view of the identifier value field (`id.tail`).
 ///
 /// Heap shapes mapped by this proxy:
@@ -577,6 +585,20 @@ pub enum IdentifierValueData {
 pub struct IdentifierValueRef(RawValue);
 
 impl IdentifierValueRef {
+    /// Constructs a typed type-identifier value payload from parser-facing parts.
+    /// This exists so parser-facing code can build `make_typ`-style values through an intent-first mixed typed surface instead of open-coding nested cons cells and a zero show-function sentinel.
+    /// The invariant is that the encoded heap shape remains `cons(cons(arity, showfn_or_zero), cons(kind, info))`.
+    pub fn from_type_identifier_parts(
+        heap: &mut Heap,
+        parts: TypeIdentifierValueParts,
+    ) -> IdentifierValueRef {
+        let show_function = parts.show_function.unwrap_or(Value::None);
+        let head = heap.cons_ref(parts.arity.into(), show_function);
+        let tail = heap.cons_ref(Value::Data(parts.kind as RawValue), parts.info);
+
+        IdentifierValueRef::from_ref(heap.cons_ref(head, tail).into())
+    }
+
     /// Constructs a new identifier value on the heap. The shape of this structure depends on `data`.
     pub fn new(heap: &mut Heap, data: IdentifierValueData) -> IdentifierValueRef {
         let reference: RawValue = match data {
@@ -610,7 +632,12 @@ impl IdentifierValueRef {
             // Assume it's a typed value?
             // `cons(cons(arity, showfn), cons(algebraic_t,  constructors))`
             let arity: isize = heap[value_cell.head].head;
-            let show_function = heap[value_cell.head].tail.into();
+            let show_function_raw = heap[value_cell.head].tail;
+            let show_function = if show_function_raw == 0 {
+                Value::None
+            } else {
+                show_function_raw.into()
+            };
             let value_type = IdentifierValueTypeRef::from_ref(value_cell.tail);
 
             IdentifierValueData::Typed {
@@ -784,5 +811,66 @@ impl HeapObjectProxy for IdentifierValueTypeRef {
 
     fn get_ref(&self) -> RawValue {
         self.reference
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn type_identifier_builder_uses_optional_show_function_surface() {
+        let mut heap = Heap::new();
+        let built = IdentifierValueRef::from_type_identifier_parts(
+            &mut heap,
+            TypeIdentifierValueParts {
+                arity: 2,
+                show_function: None,
+                kind: IdentifierValueTypeKind::Synonym,
+                info: Type::Char.into(),
+            },
+        );
+
+        let IdentifierValueData::Typed {
+            arity,
+            show_function,
+            value_type,
+        } = built.get_data(&heap)
+        else {
+            panic!("expected typed identifier value")
+        };
+
+        assert_eq!(arity, 2);
+        assert_eq!(show_function, Value::None);
+        assert_eq!(
+            value_type.get_identifier_value_type_kind(&heap),
+            IdentifierValueTypeKind::Synonym
+        );
+        assert_eq!(heap[value_type.get_ref()].tail, RawValue::from(Type::Char));
+    }
+
+    #[test]
+    fn get_data_decodes_zero_show_function_as_none() {
+        let mut heap = Heap::new();
+        let value_type = IdentifierValueTypeRef::new(
+            &mut heap,
+            IdentifierValueTypeData::Abstract {
+                basis: Combinator::Nil.into(),
+            },
+        );
+        let value = IdentifierValueRef::new(
+            &mut heap,
+            IdentifierValueData::Typed {
+                arity: 0,
+                show_function: Value::None,
+                value_type,
+            },
+        );
+
+        let IdentifierValueData::Typed { show_function, .. } = value.get_data(&heap) else {
+            panic!("expected typed identifier value")
+        };
+
+        assert_eq!(show_function, Value::None);
     }
 }

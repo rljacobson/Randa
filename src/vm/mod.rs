@@ -36,8 +36,8 @@ use crate::{
         api::{
             AliasEntry, ConsList, ConstructorRef, DataPair, FileInfoRef, FileRecord,
             HeapObjectProxy, IdentifierCoreData, IdentifierCoreRef, IdentifierDefinitionRef,
-            IdentifierRecordRef, IdentifierValueData, IdentifierValueRef, IdentifierValueTypeData,
-            IdentifierValueTypeRef, OpenFile, PrivateNameRef,
+            IdentifierRecordRef, IdentifierValueData, IdentifierValueRef, IdentifierValueTypeKind,
+            OpenFile, PrivateNameRef, TypeIdentifierValueParts,
         },
         path::*,
         Combinator, Heap, RawValue, Tag, Type, Value,

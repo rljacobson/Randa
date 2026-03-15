@@ -14,7 +14,7 @@ use std::fmt::{Debug, Formatter};
 use std::ops::Range;
 
 use super::errors::LexerError;
-use super::{line_number_for_location, HereInfo, Loc, Token};
+use super::Token;
 
 pub struct Lexer<'t> {
     token_iterator: SpannedIter<'t, Token>,
@@ -66,16 +66,5 @@ impl<'t> Lexer<'t> {
     /// Returns the span of the last token.
     pub fn span(&self) -> Span {
         self.source.slice(self.span.clone())
-    }
-
-    pub fn loc(&self) -> Loc {
-        Loc::new(self.span.start as u32, self.span.end as u32)
-    }
-
-    pub fn current_here_info(&self) -> HereInfo {
-        HereInfo {
-            script_file: self.source.name().to_string(),
-            line_number: line_number_for_location(self.source.text(), Some(self.loc())),
-        }
     }
 }

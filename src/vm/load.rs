@@ -1,8 +1,6 @@
 use super::diagnostics::{alfasort, printlist, source_update_check};
 use super::*;
-use crate::compiler::{
-    line_number_for_location, HereInfo, Loc, ParserBoundary, ParserDiagnostic, ParserSupportError,
-};
+use crate::compiler::{HereInfo, Loc, ParserBoundary, ParserDiagnostic, ParserSupportError};
 use crate::data::api::IdentifierValueTypeKind;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -305,27 +303,6 @@ impl VM {
         );
 
         ConsList::new(&mut self.heap, source_record)
-    }
-
-    fn record_parser_syntax_diagnostic(&mut self, diagnostic: ParserDiagnostic) {
-        if self.error_line == 0 {
-            if let Some(here_info) = &diagnostic.here_info {
-                if here_info.line_number > 0 {
-                    self.error_line = here_info.line_number as usize;
-                }
-            }
-        }
-
-        if let Some(here_info) = diagnostic.here_info.clone() {
-            let raw_here_info = FileInfoRef::from_script_file(
-                &mut self.heap,
-                here_info.script_file,
-                here_info.line_number,
-            );
-            self.errs.push(raw_here_info.get_ref());
-        }
-
-        self.parser_diagnostics.push(diagnostic);
     }
 
     pub(super) fn apply_syntax_error_fallback(
@@ -994,12 +971,12 @@ impl VM {
             let location = source_text
                 .find(marker)
                 .map(|begin| Loc::new(begin as u32, (begin + marker.len()) as u32));
-            let here_info = self.here_info_for_location(source_path, &source_text, location);
-            self.record_syntax_diagnostic(ParserDiagnostic::syntax(
-                "source contains syntax errors",
+            let here_info = HereInfo::from_source_location(source_path, &source_text, location);
+            self.record_syntax_diagnostic(ParserDiagnostic {
+                message: "source contains syntax errors".to_string(),
                 location,
-                Some(here_info),
-            ));
+                here_info: Some(here_info),
+            });
             return Ok(ParsePhaseOutcome {
                 status: ParsePhaseStatus::SyntaxError,
                 files: placeholder_files,
@@ -1106,19 +1083,24 @@ impl VM {
 
 impl ParserBoundary for VM {
     fn record_syntax_diagnostic(&mut self, diagnostic: ParserDiagnostic) {
-        self.record_parser_syntax_diagnostic(diagnostic);
-    }
-
-    fn here_info_for_location(
-        &self,
-        source_path: &str,
-        source_text: &str,
-        location: Option<Loc>,
-    ) -> HereInfo {
-        HereInfo {
-            script_file: source_path.to_string(),
-            line_number: line_number_for_location(source_text, location),
+        if self.error_line == 0 {
+            if let Some(here_info) = &diagnostic.here_info {
+                if here_info.line_number > 0 {
+                    self.error_line = here_info.line_number as usize;
+                }
+            }
         }
+
+        if let Some(here_info) = diagnostic.here_info.clone() {
+            let raw_here_info = FileInfoRef::from_script_file(
+                &mut self.heap,
+                here_info.script_file,
+                here_info.line_number,
+            );
+            self.errs.push(raw_here_info.get_ref());
+        }
+
+        self.parser_diagnostics.push(diagnostic);
     }
 
     fn intern_identifier(&mut self, name: &str) -> IdentifierRecordRef {

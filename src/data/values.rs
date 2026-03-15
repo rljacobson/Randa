@@ -69,15 +69,18 @@ pub enum Value {
     #[default]
     Stolen,
 
-    Tag(RawValue), // 0..23, distinguished from context.
-    Char(char),    // 0..TOKEN_BASE-1               ==   0..255
+    // ToDo: This should wrap a `crate::data::tag::Tag`.
+    Tag(RawValue),          // 0..23, distinguished from context.
+    Char(char),             // 0..TOKEN_BASE-1               ==   0..255
     /// Required by parser and used by compiler.
-    /// Represents a token that is returned from a Lexer
-    Token(Token), // TOKEN_BASE..COMBINATOR_BASE-1 == 256..305
+    /// Represents a token returned from a Lexer.
+    Token(Token),           // TOKEN_BASE..COMBINATOR_BASE-1 == 256..305
     Combinator(Combinator), // COMBINATOR_BASE..ATOM_LIMIT-1 == 306..446
-    Reference(RawValue), // Reference to another cell.
+    // ToDo: We should probably create a `HeapReference` newtype.
+    /// Reference to another cell.
+    Reference(RawValue),
     Data(RawValue), // Uninterpreted data. Shouldn't use this, as there should be a `Value` variant
-                   // for everything.
+                    // for everything.
 }
 
 impl From<RawValue> for Value {

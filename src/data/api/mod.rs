@@ -22,9 +22,11 @@ like Result<_, ()> should be reserved for boundary checks rather than used in tr
 */
 
 mod alias_entry;
+mod ap_node;
 mod cons_list;
 mod constructor;
 mod data_pair;
+mod definition;
 mod file_info;
 mod file_record;
 mod identifier_record;
@@ -34,9 +36,12 @@ mod str_cons;
 
 // Implementors of HeapObjectProxy (defined below)
 pub(crate) use alias_entry::AliasEntry;
+pub(crate) use ap_node::ApNodeRef;
 pub(crate) use cons_list::ConsList;
 pub(crate) use constructor::ConstructorRef;
 pub(crate) use data_pair::DataPair;
+#[allow(unused_imports)]
+pub(crate) use definition::DefinitionRef;
 pub(crate) use file_info::FileInfoRef;
 pub(crate) use file_record::FileRecord;
 pub(crate) use identifier_record::*;

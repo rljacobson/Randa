@@ -107,16 +107,15 @@ impl VM {
     /// The primdef function just creates an identifier on the heap and appends it to the primitive environment.
     pub(super) fn primitive_synonym_definition(&mut self, name: &str, type_: Type) {
         // self.primdef("num"  , make_typ(0, 0, IdentifierValueType::Synonym, Type::Number), Type::Type);
-        let h_id_value_type = IdentifierValueTypeRef::new(
+        let h_id_value = IdentifierValueRef::from_type_identifier_parts(
             &mut self.heap,
-            IdentifierValueTypeData::Synonym { source_type: type_ },
+            TypeIdentifierValueParts {
+                arity: 0,
+                show_function: None,
+                kind: IdentifierValueTypeKind::Synonym,
+                info: type_.into(),
+            },
         );
-        let h_id_value_data = IdentifierValueData::Typed {
-            arity: 0,
-            show_function: Value::None,
-            value_type: h_id_value_type,
-        };
-        let h_id_value = IdentifierValueRef::new(&mut self.heap, h_id_value_data);
         let h_id = IdentifierRecordRef::new(
             &mut self.heap,
             name.to_string(),

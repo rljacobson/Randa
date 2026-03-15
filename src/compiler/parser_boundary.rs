@@ -6,7 +6,7 @@ use crate::data::{
     Value,
 };
 
-use super::{HereInfo, Loc, ParserDiagnostic};
+use super::ParserDiagnostic;
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ParserSupportError {
@@ -16,13 +16,6 @@ pub enum ParserSupportError {
 
 pub trait ParserBoundary {
     fn record_syntax_diagnostic(&mut self, diagnostic: ParserDiagnostic);
-
-    fn here_info_for_location(
-        &self,
-        source_path: &str,
-        source_text: &str,
-        location: Option<Loc>,
-    ) -> HereInfo;
 
     fn intern_identifier(&mut self, name: &str) -> IdentifierRecordRef;
 
@@ -39,15 +32,6 @@ pub trait ParserBoundary {
     fn numeric_one(&self) -> Value;
 
     fn void_tuple(&self) -> Value;
-
-    fn intern_prefixed_identifier(
-        &mut self,
-        prefix: &str,
-        identifier: IdentifierRecordRef,
-    ) -> IdentifierRecordRef {
-        let full_name = format!("{}{}", prefix, self.identifier_name(identifier));
-        self.intern_identifier(full_name.as_str())
-    }
 
     fn attach_type_show_function(
         &mut self,

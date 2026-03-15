@@ -1,6 +1,6 @@
 use super::*;
 use crate::compiler::{HereInfo, ParserBoundary, ParserSupportError};
-use crate::data::api::IdentifierValueTypeKind;
+use crate::data::api::{IdentifierValueTypeData, IdentifierValueTypeKind, IdentifierValueTypeRef};
 use std::path::PathBuf;
 
 fn unique_test_path(file_name: &str) -> PathBuf {
@@ -383,7 +383,8 @@ fn parser_boundary_supports_type_and_runtime_helpers() {
         Some(custom_type_id_value),
     );
 
-    let show_fn = vm.intern_prefixed_identifier("show", custom_type);
+    let show_fn_name = format!("show{}", vm.identifier_name(custom_type));
+    let show_fn = vm.intern_identifier(show_fn_name.as_str());
     assert_eq!(vm.identifier_name(show_fn), "showThing");
     vm.attach_type_show_function(custom_type, show_fn)
         .expect("expected typed show function attachment to succeed");

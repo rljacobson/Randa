@@ -33,16 +33,37 @@ impl Loc {
     pub const fn new(begin: u32, end: u32) -> Self {
         Self { begin, end }
     }
-
-    pub fn start_offset(self) -> usize {
-        self.begin as usize
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HereInfo {
     pub(crate) script_file: HeapString,
     pub(crate) line_number: isize,
+}
+
+impl HereInfo {
+    /// Constructs `HereInfo` from a source path, source text, and optional parser location.
+    /// This exists so parser diagnostic anchoring owns location-to-line conversion on the `HereInfo` type instead of on unrelated boundary implementors.
+    /// The invariant is that the line number is derived by counting preceding `\n` bytes before `location.begin`, or `0` when no location is present.
+    pub fn from_source_location(
+        source_path: &str,
+        source_text: &str,
+        location: Option<Loc>,
+    ) -> Self {
+        let line_number = location.map_or(0, |location| {
+            let line_count = source_text
+                .bytes()
+                .take((location.begin as usize).min(source_text.len()))
+                .filter(|byte| *byte == b'\n')
+                .count();
+            (line_count + 1) as isize
+        });
+
+        Self {
+            script_file: source_path.to_string(),
+            line_number,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,32 +73,22 @@ pub struct ParserDiagnostic {
     pub here_info: Option<HereInfo>,
 }
 
-impl ParserDiagnostic {
-    pub fn syntax(
-        message: impl Into<String>,
-        location: Option<Loc>,
-        here_info: Option<HereInfo>,
-    ) -> Self {
-        Self {
-            message: message.into(),
-            location,
-            here_info,
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn here_info_from_source_location_counts_lines_and_handles_missing_location() {
+        let source_text = "alpha\nbeta\ngamma\n";
+
+        let here_info =
+            HereInfo::from_source_location("demo.m", source_text, Some(Loc::new(6, 10)));
+        assert_eq!(here_info.script_file, "demo.m");
+        assert_eq!(here_info.line_number, 2);
+
+        let missing = HereInfo::from_source_location("demo.m", source_text, None);
+        assert_eq!(missing.line_number, 0);
     }
-}
-
-pub fn line_number_for_location(source_text: &str, location: Option<Loc>) -> isize {
-    let Some(location) = location else {
-        return 0;
-    };
-
-    let line_count = source_text
-        .bytes()
-        .take(location.start_offset().min(source_text.len()))
-        .filter(|byte| *byte == b'\n')
-        .count();
-
-    (line_count + 1) as isize
 }
 
 /*
