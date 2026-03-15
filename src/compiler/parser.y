@@ -21,14 +21,18 @@ use super::{
   Loc,
   ParserActivation,
   ParserDiagnostic,
+  ParserExportDirectivePayload,
+  ParserIncludeDirectivePayload,
   ParserRunDiagnostics,
   ParserRunResult,
+  ParserTopLevelDirectivePayload,
+  Token,
   ParserVmContext,
 };
 
 use crate::{
     data::{
-        api::{ConsList},
+        api::{ConsList, FileInfoRef, HeapObjectProxy},
         tag::Tag,
         values::{
             Value,
@@ -51,6 +55,8 @@ use crate::{
   vm: ParserVmContext,
   synerr: bool,
   diagnostics: ParserRunDiagnostics,
+  include_export_script_parsed: bool,
+  directive_include_requests: Vec<ParserIncludeDirectivePayload>,
 
   lexstates: RawValue,
   idsused: RawValue,
@@ -184,6 +190,10 @@ parse_entry:
         self.result = Some($1);
         $$ = $1;
       }
+    | include_export_script {
+        self.include_export_script_parsed = true;
+        $$ = NIL;
+      }
     ;
 
 entity:  /* the entity to be parsed is either a definition script or an
@@ -226,6 +236,151 @@ script:
 exp:
     op /* will later suppress in favour of (op) in arg */ { $$ = $1; }
     | e1 { $$ = $1; }
+    ;
+
+/* Only `%include` and `%export` are accepted as top-level directives here.
+   Other top-level forms are classified before parser entry and follow the
+   existing deferred integration path. */
+include_export_script:
+    include_export_item { $$ = NIL; }
+    | include_export_script include_export_item { $$ = NIL; }
+    ;
+
+include_export_item:
+    export_directive directive_terminators { $$ = NIL; }
+    | include_directive directive_terminators { $$ = NIL; }
+    ;
+
+export_anchor:
+    Export {
+        self.inexplist = true;
+        let here_info = HereInfo::from_source_location(
+          self.yylexer.source_name(),
+          self.yylexer.source_text(),
+          Some(self.yylexer.current_loc())
+        );
+        let anchor = FileInfoRef::from_script_file(
+          self.heap,
+          here_info.script_file,
+          here_info.line_number,
+        );
+        $$ = Value::Reference(anchor.get_ref());
+      }
+    ;
+
+export_directive:
+    export_anchor export_items {
+        self.inexplist = false;
+        let export_parts = $2;
+        if self.exports != NIL_RAW {
+          self.syntax("multiple %export statements are illegal\n");
+        } else {
+          if export_parts == NIL && self.exportfiles == NIL_RAW && self.embargoes != NIL_RAW {
+            self.exportfiles = self.heap.cons_ref(Combinator::Plus.into(), NIL).into();
+          }
+          self.exports = self.heap.cons_ref($1, export_parts).into();
+        }
+        $$ = NIL;
+      }
+    ;
+
+export_items:
+    export_items Name { $$ = self.heap.cons_ref($2, $1); }
+    | export_items Minus Name {
+        $$ = $1;
+        self.embargoes = self.heap.cons_ref($3, self.embargoes.into()).into();
+      }
+    | export_items StringLiteral {
+        $$ = $1;
+        self.exportfiles = self.heap.cons_ref($2, self.exportfiles.into()).into();
+      }
+    | export_items Plus {
+        $$ = $1;
+        self.exportfiles = self.heap.cons_ref(Combinator::Plus.into(), self.exportfiles.into()).into();
+      }
+    | Name { $$ = self.heap.cons_ref($1, NIL); }
+    | Minus Name {
+        $$ = NIL;
+        self.embargoes = self.heap.cons_ref($2, self.embargoes.into()).into();
+      }
+    | StringLiteral {
+        $$ = NIL;
+        self.exportfiles = self.heap.cons_ref($1, self.exportfiles.into()).into();
+      }
+    | Plus {
+        $$ = NIL;
+        self.exportfiles = self.heap.cons_ref(Combinator::Plus.into(), self.exportfiles.into()).into();
+      }
+    ;
+
+include_directive:
+    Include include_target include_bindings include_modifiers {
+        let target_ref: RawValue = $2.into();
+        let target_path = self.heap[target_ref].head;
+        let anchor = self.heap[target_ref].tail;
+        self.directive_include_requests.push(ParserIncludeDirectivePayload {
+          anchor,
+          target_path,
+          modifiers: $4.into(),
+          bindings: $3.into(),
+        });
+        $$ = NIL;
+      }
+    ;
+
+include_target:
+    StringLiteral {
+        let here_info = HereInfo::from_source_location(
+          self.yylexer.source_name(),
+          self.yylexer.source_text(),
+          Some(self.yylexer.current_loc())
+        );
+        let anchor = FileInfoRef::from_script_file(
+          self.heap,
+          here_info.script_file,
+          here_info.line_number,
+        );
+        $$ = self.heap.cons_ref($1, Value::Reference(anchor.get_ref()));
+      }
+    ;
+
+include_bindings:
+    /* empty */ { $$ = NIL; }
+    | OpenBrace include_binding_sequence CloseBrace { $$ = $2; }
+    ;
+
+include_binding_sequence:
+    include_binding_sequence include_binding { $$ = self.heap.cons_ref($2, $1); }
+    | include_binding { $$ = self.heap.cons_ref($1, NIL); }
+    ;
+
+include_binding:
+    Name Equal exp { $$ = self.heap.cons_ref($1, $3); }
+    ;
+
+include_modifiers:
+    /* empty */ { $$ = NIL; }
+    | include_modifier_list { $$ = $1; }
+    ;
+
+include_modifier_list:
+    include_modifier_list include_modifier { $$ = self.heap.cons_ref($2, $1); }
+    | include_modifier { $$ = self.heap.cons_ref($1, NIL); }
+    ;
+
+include_modifier:
+    Name Divide Name { $$ = self.heap.cons_ref($1, $3); }
+    | ConstructorName Divide ConstructorName { $$ = self.heap.cons_ref($1, $3); }
+    | Minus Name {
+        let suppression_marker = self.heap.make_private_symbol_ref(Combinator::Undef.into());
+        $$ = self.heap.cons_ref(suppression_marker, $2);
+      }
+    ;
+
+directive_terminators:
+    /* empty */ { $$ = NIL; }
+    | directive_terminators Newline { $$ = NIL; }
+    | directive_terminators separator { $$ = NIL; }
     ;
 
 op:
@@ -275,7 +430,7 @@ eqop:
 rhs:
     cases Where ldefs { $$ = block($3, compose($1), 0); }
     | exp Where ldefs { $$ = block($3, $1, 0); }
-    | exp
+    | exp { $$ = $1; }
     | cases { $$ = compose($1); }
     ;
 
@@ -309,7 +464,7 @@ if:
         // The legacy `strictif` policy hook is not wired in here.
         $$ = NIL;
       }
-    | If
+    | If { $$ = $1; }
     ;
 
 indent:
@@ -330,8 +485,8 @@ outdent:
     ;
 
 separator:
-    Offside
-    | Semicolon
+    Offside { $$ = $1; }
+    | Semicolon { $$ = $1; }
     ;
 
 reindent:
@@ -358,8 +513,8 @@ e1:
     | e1 MinusMinus e1 { $$ = self.heap.apply2(self.vm.listdiff_function(), $1, $3);  }
     | e1 Vel e1 { $$ = self.heap.apply2(Combinator::Or.into(), $1, $3); }
     | e1 Ampersand e1 { $$ = self.heap.apply2(Combinator::And.into(), $1, $3); }
-    | reln
-    | e2
+    | reln { $$ = $1; }
+    | e2 { $$ = $1; }
     ;
 
 es1:                     /* e1 or presection */
@@ -374,8 +529,8 @@ es1:                     /* e1 or presection */
     | e1 Vel { $$ = self.heap.apply_ref(Combinator::Or.into(), $1); }
     | e1 Ampersand e1 { $$ = self.heap.apply2(Combinator::And.into(), $1, $3); }
     | e1 Ampersand { $$ = self.heap.apply_ref(Combinator::And.into(), $1); }
-    | relsn
-    | es2
+    | relsn { $$ = $1; }
+    | es2 { $$ = $1; }
     ;
 
 e2:
@@ -390,7 +545,7 @@ e2:
     | e2 Caret e2 { $$ = self.heap.apply2(Combinator::Power.into(), $1, $3); }
     | e2 Dot e2 { $$ = self.heap.apply2(Combinator::B.into(), $1, $3);  }
     | e2 Bang e2 { $$ = self.heap.apply2(Combinator::Subscript.into(), $3, $1); }
-    | e3
+    | e3 { $$ = $1; }
     ;
 
 es2:               /* e2 or presection */
@@ -414,13 +569,13 @@ es2:               /* e2 or presection */
     | e2 Dot { $$ = self.heap.apply_ref(Combinator::B.into(), $1);  }
     | e2 Bang e2 { $$ = self.heap.apply2(Combinator::Subscript.into(), $3, $1); }
     | e2 Bang { $$ = self.heap.apply2(Combinator::C.into(), Combinator::Subscript.into(), $1); }
-    | es3
+    | es3 { $$ = $1; }
     ;
 
 e3:
     comb InfixName e3 { $$ = self.heap.apply2($2, $1, $3); }
     | comb InfixCName e3 { $$ = self.heap.apply2($2, $1, $3); }
-    | comb
+    | comb { $$ = $1; }
     ;
 
 es3:                     /* e3 or presection */
@@ -428,12 +583,12 @@ es3:                     /* e3 or presection */
     | comb InfixName { $$ = self.heap.apply_ref($2, $1); }
     | comb InfixCName e3 { $$ = self.heap.apply2($2, $1, $3); }
     | comb InfixCName { $$ = self.heap.apply_ref($2, $1); }
-    | comb
+    | comb { $$ = $1; }
     ;
 
 comb:
     comb arg { $$ = self.heap.apply_ref($1, $2); }
-    | arg
+    | arg { $$ = $1; }
     ;
 
 reln:
@@ -482,12 +637,12 @@ arg:
       $$ = NIL;
     }
     Lex {
-        self.syntax("%lex is deferred for the expression-first parser MVP\n");
+        self.syntax("%lex is not supported here\n");
         $$ = NIL;
       }
-    | Name
-    | ConstructorName
-    | Constant
+    | Name { $$ = $1; }
+    | ConstructorName { $$ = $1; }
+    | Constant { $$ = $1; }
     /* Interactive/session-only expression branches are not handled in the
        current parser path. */
     | ReadVals {
@@ -1900,6 +2055,8 @@ impl<'ctx /* 'fix quotes */> Parser<'ctx /* 'fix quotes */> {
         vm,
         synerr: false,
         diagnostics: ParserRunDiagnostics::default(),
+        include_export_script_parsed: false,
+        directive_include_requests: Vec::new(),
 
         lexstates: session.lexstates,
         idsused: session.idsused,
@@ -1934,7 +2091,60 @@ impl<'ctx /* 'fix quotes */> Parser<'ctx /* 'fix quotes */> {
 
     fn next_token(&mut self) -> ParserLookahead {
       match self.yylexer.yylex() {
-        Ok(token) => token,
+        Ok(mut lookahead) => {
+          let source_text = self.yylexer.source_text();
+          let start = (lookahead.loc.begin as usize).min(source_text.len());
+          let end = (lookahead.loc.end as usize).min(source_text.len());
+          let source_slice = &source_text[start..end];
+
+          match lookahead.token {
+            Token::Identifier => {
+              let identifier = self.heap
+                .get_identifier(source_slice)
+                .unwrap_or_else(|| self.heap.make_empty_identifier(source_slice));
+              lookahead.token = Token::Name;
+              lookahead.token_type = Token::Name as i32 + 2;
+              lookahead.value = identifier.into();
+            }
+            Token::ConstructorName => {
+              let identifier = self.heap
+                .get_identifier(source_slice)
+                .unwrap_or_else(|| self.heap.make_empty_identifier(source_slice));
+              lookahead.value = identifier.into();
+            }
+            Token::InfixName | Token::InfixCName => {
+              let identifier_name = source_slice.strip_prefix('$').unwrap_or(source_slice);
+              let identifier = self.heap
+                .get_identifier(identifier_name)
+                .unwrap_or_else(|| self.heap.make_empty_identifier(identifier_name));
+              lookahead.value = identifier.into();
+            }
+            Token::Integer => {
+              if let Ok(integer) = source_slice.parse::<isize>() {
+                lookahead.token = Token::Constant;
+                lookahead.token_type = Token::Constant as i32 + 2;
+                lookahead.value = self.heap.integer_ref(integer);
+              }
+            }
+            Token::Float => {
+              if let Ok(real) = source_slice.parse::<f64>() {
+                lookahead.token = Token::Constant;
+                lookahead.token_type = Token::Constant as i32 + 2;
+                lookahead.value = self.heap.real_ref(real);
+              }
+            }
+            Token::StringLiteral => {
+              let string_contents = source_slice
+                .strip_prefix('"')
+                .and_then(|slice| slice.strip_suffix('"'))
+                .unwrap_or(source_slice);
+              lookahead.value = Value::Reference(self.heap.string(string_contents));
+            }
+            _ => {}
+          }
+
+          lookahead
+        }
         Err(error) => {
           eprintln!("Lexer error: {}", error);
           panic!();
@@ -1977,6 +2187,33 @@ impl<'ctx /* 'fix quotes */> Parser<'ctx /* 'fix quotes */> {
     pub fn finish_run(self, parse_ok: bool) -> ParserRunResult {
         if self.synerr || !parse_ok {
             return ParserRunResult::SyntaxError(self.diagnostics);
+        }
+
+        if self.include_export_script_parsed {
+            let export = if self.exports == NIL_RAW
+                && self.exportfiles == NIL_RAW
+                && self.embargoes == NIL_RAW
+            {
+                None
+            } else {
+                let (anchor, exported_ids) = if self.exports == NIL_RAW {
+                    (NIL_RAW, NIL_RAW)
+                } else {
+                    (self.heap[self.exports].head, self.heap[self.exports].tail)
+                };
+
+                Some(ParserExportDirectivePayload {
+                    anchor,
+                    exported_ids,
+                    pathname_requests: self.exportfiles,
+                    embargoes: self.embargoes,
+                })
+            };
+
+            return ParserRunResult::ParsedDirectiveScript(ParserTopLevelDirectivePayload {
+                include_requests: self.directive_include_requests,
+                export,
+            });
         }
 
         match self.result {

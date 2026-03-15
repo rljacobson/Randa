@@ -277,5 +277,6 @@ impl Token {
 pub struct ParserLookahead {
     pub token_type: i32,
     pub token: Token,
+    pub value: Value,
     pub loc: Loc,
 }

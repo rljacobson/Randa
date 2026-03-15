@@ -2,12 +2,37 @@ use super::diagnostics::{alfasort, printlist, source_update_check};
 use super::*;
 use crate::compiler::{
     parser::Parser, Lexer, ParserActivation, ParserDeferredState, ParserRunDiagnostics,
-    ParserRunResult, ParserSessionState, ParserSupportError, ParserVmContext,
+    ParserRunResult, ParserSessionState, ParserSupportError, ParserTopLevelDirectivePayload,
+    ParserVmContext,
 };
 use crate::compiler::{token::ParserLookahead, Token};
 use crate::data::api::IdentifierValueTypeKind;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(super) enum LoadScriptForm {
+    Expression,
+    IncludeExportDirective,
+    OtherTopLevelForm,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(super) struct CommittedDirectiveState {
+    pub(super) exports: Value,
+    pub(super) exportfiles: Value,
+    pub(super) embargoes: Value,
+}
+
+impl Default for CommittedDirectiveState {
+    fn default() -> Self {
+        Self {
+            exports: NIL,
+            exportfiles: NIL,
+            embargoes: NIL,
+        }
+    }
+}
 
 impl VM {
     /// Loads the object file for `source_path` if it exists and is modified after `source_path`. Otherwise calls
@@ -247,15 +272,24 @@ impl VM {
                 return Ok(());
             }
 
+            let directive_payload = parse_outcome.directive_payload;
             self.files = parse_outcome.files;
             self.record_load_phase("exportfile-checks");
-            self.validate_exportfile_bindings_partial()?;
+            self.validate_exportfile_bindings_partial(directive_payload.as_ref())?;
             self.record_load_phase("include-expansion");
-            self.run_mkincludes_phase()?;
+            let materialized_includees = self.run_mkincludes_phase(directive_payload.as_ref())?;
             self.record_load_phase("typecheck");
             self.run_checktypes_phase()?;
             self.record_load_phase("export-closure");
-            self.run_export_closure_phase_partial()?;
+            let committed_directives = self.run_export_closure_phase_partial(
+                directive_payload.as_ref(),
+                materialized_includees,
+            )?;
+            self.exports = committed_directives.exports;
+            self.exportfiles = committed_directives.exportfiles;
+            self.embargoes = committed_directives.embargoes;
+            self.includees = ConsList::EMPTY;
+            self.mkinclude_files = ConsList::EMPTY;
             self.record_load_phase("bereaved-warnings");
             self.emit_bereaved_warnings_partial();
             self.record_load_phase("unused-diagnostics");
@@ -361,26 +395,70 @@ impl VM {
     /// This implementation is intentionally partial: it covers binding-shape and
     /// include-membership constraints, while parser-driven export semantics remain
     /// deferred to parser/type integration.
-    pub(super) fn validate_exportfile_bindings_partial(&mut self) -> Result<(), BytecodeError> {
-        if self.exportfiles == NIL {
+    pub(super) fn validate_exportfile_bindings_partial(
+        &mut self,
+        directive_payload: Option<&ParserTopLevelDirectivePayload>,
+    ) -> Result<(), BytecodeError> {
+        let Some(directive_payload) = directive_payload else {
+            if self.exportfiles == NIL {
+                return Ok(());
+            }
+
+            let mut exportfiles: ConsList<RawValue> = ConsList::from_ref(self.exportfiles.into());
+            while let Some(entry) = exportfiles.pop_raw(&self.heap) {
+                if entry == Combinator::Plus.into() {
+                    continue;
+                }
+
+                let path = self
+                    .heap
+                    .resolve_string(entry.into())
+                    .map_err(|_| BytecodeError::MalformedExportFileList)?;
+                let mut includee_matches = 0usize;
+                let mut includees = self.includees;
+                while let Some(includee) = includees.pop(&self.heap) {
+                    if includee.get_file_name(&self.heap) == path {
+                        includee_matches += 1;
+                    }
+                }
+
+                if includee_matches == 0 {
+                    return Err(BytecodeError::ExportFileNotIncludedInScript { path });
+                }
+
+                if includee_matches > 1 {
+                    return Err(BytecodeError::ExportFileAmbiguous { path });
+                }
+            }
+
+            return Ok(());
+        };
+
+        let Some(export) = directive_payload.export.as_ref() else {
+            return Ok(());
+        };
+
+        if export.pathname_requests == NIL.into() {
             return Ok(());
         }
 
-        let mut exportfiles: ConsList<RawValue> = ConsList::from_ref(self.exportfiles.into());
+        let mut exportfiles: ConsList<RawValue> = ConsList::from_ref(export.pathname_requests);
         while let Some(entry) = exportfiles.pop_raw(&self.heap) {
             if entry == Combinator::Plus.into() {
                 continue;
             }
 
-            // In this list shape, non-PLUS entries are expected to be heap strings.
             let path = self
                 .heap
                 .resolve_string(entry.into())
                 .map_err(|_| BytecodeError::MalformedExportFileList)?;
             let mut includee_matches = 0usize;
-            let mut includees = self.includees;
-            while let Some(includee) = includees.pop(&self.heap) {
-                if includee.get_file_name(&self.heap) == path {
+            for include_request in &directive_payload.include_requests {
+                let include_path = self
+                    .heap
+                    .resolve_string(include_request.target_path.into())
+                    .map_err(|_| BytecodeError::MalformedExportFileList)?;
+                if include_path == path {
                     includee_matches += 1;
                 }
             }
@@ -407,20 +485,67 @@ impl VM {
     /// - clears `mkinclude_files` bookkeeping for interrupted include loads.
     ///
     /// Real `%include` discovery/compilation remains deferred to parser/typecheck integration.
-    pub(super) fn run_mkincludes_phase(&mut self) -> Result<(), BytecodeError> {
-        if self.includees.is_empty() {
+    pub(super) fn run_mkincludes_phase(
+        &mut self,
+        directive_payload: Option<&ParserTopLevelDirectivePayload>,
+    ) -> Result<ConsList<FileRecord>, BytecodeError> {
+        let Some(directive_payload) = directive_payload else {
+            if self.includees.is_empty() {
+                self.mkinclude_files = ConsList::EMPTY;
+                return Ok(ConsList::EMPTY);
+            }
+
+            let materialized_includees = self.includees;
+            let mut includees = self.includees;
+            while let Some(includee) = includees.pop(&self.heap) {
+                self.files.append(&mut self.heap, includee);
+            }
+
+            self.includees = ConsList::EMPTY;
             self.mkinclude_files = ConsList::EMPTY;
-            return Ok(());
+            return Ok(materialized_includees);
+        };
+
+        if directive_payload.include_requests.is_empty() {
+            self.mkinclude_files = ConsList::EMPTY;
+            return Ok(ConsList::EMPTY);
         }
 
-        let mut includees = self.includees;
-        while let Some(includee) = includees.pop(&self.heap) {
+        let mut materialized_includees = ConsList::EMPTY;
+        for include_request in &directive_payload.include_requests {
+            let path = self
+                .heap
+                .resolve_string(include_request.target_path.into())
+                .map_err(|_| BytecodeError::UnreadableSourceFile {
+                    path: "<invalid include path>".to_string(),
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "include path is not a heap string",
+                    ),
+                })?;
+            let metadata = std::fs::metadata(&path).map_err(|source| {
+                if source.kind() == std::io::ErrorKind::NotFound {
+                    BytecodeError::MissingSourceFile { path: path.clone() }
+                } else {
+                    BytecodeError::UnreadableSourceFile {
+                        path: path.clone(),
+                        source,
+                    }
+                }
+            })?;
+            let modified_time = metadata.modified().unwrap_or_else(|_| SystemTime::now());
+            let includee =
+                FileRecord::new(&mut self.heap, path, modified_time, false, ConsList::EMPTY);
+            materialized_includees.append(&mut self.heap, includee);
+        }
+
+        let mut includees_to_append = materialized_includees;
+        while let Some(includee) = includees_to_append.pop(&self.heap) {
             self.files.append(&mut self.heap, includee);
         }
 
-        self.includees = ConsList::EMPTY;
         self.mkinclude_files = ConsList::EMPTY;
-        Ok(())
+        Ok(materialized_includees)
     }
 
     /// Executes the typecheck gate for the current load cycle.
@@ -450,17 +575,77 @@ impl VM {
     ///
     /// This implementation is intentionally partial: deeper closure/dependency
     /// analysis (for example `deps`-style traversal) remains deferred.
-    pub(super) fn run_export_closure_phase_partial(&mut self) -> Result<(), BytecodeError> {
-        if self.exports == NIL {
-            return Ok(());
-        }
+    pub(super) fn run_export_closure_phase_partial(
+        &mut self,
+        directive_payload: Option<&ParserTopLevelDirectivePayload>,
+        materialized_includees: ConsList<FileRecord>,
+    ) -> Result<CommittedDirectiveState, BytecodeError> {
+        let Some(directive_payload) = directive_payload else {
+            if self.exports == NIL {
+                return Ok(CommittedDirectiveState::default());
+            }
+
+            if !self.undefined_names.is_empty() {
+                self.exports = NIL;
+                return Err(BytecodeError::ExportClosureBlockedByUndefinedNames);
+            }
+
+            return Ok(CommittedDirectiveState {
+                exports: self.exports,
+                exportfiles: self.exportfiles,
+                embargoes: self.embargoes,
+            });
+        };
+
+        let Some(export) = directive_payload.export.as_ref() else {
+            return Ok(CommittedDirectiveState::default());
+        };
 
         if !self.undefined_names.is_empty() {
-            self.exports = NIL;
             return Err(BytecodeError::ExportClosureBlockedByUndefinedNames);
         }
 
-        Ok(())
+        let mut committed_exports = export.exported_ids.into();
+        let mut exportfiles: ConsList<Value> = ConsList::from_ref(export.pathname_requests);
+        while let Some(entry) = exportfiles.pop_value(&self.heap) {
+            if entry == Combinator::Plus.into() {
+                continue;
+            }
+
+            let path = self
+                .heap
+                .resolve_string(entry)
+                .map_err(|_| BytecodeError::MalformedExportFileList)?;
+            let mut includees = materialized_includees;
+            while let Some(includee) = includees.pop(&self.heap) {
+                if includee.get_file_name(&self.heap) != path {
+                    continue;
+                }
+
+                let mut definienda = includee.get_definienda(&self.heap);
+                while let Some(definiendum) = definienda.pop_value(&self.heap) {
+                    committed_exports = ConsList::<Value>::insert_ordered_value(
+                        &mut self.heap,
+                        committed_exports,
+                        definiendum,
+                    );
+                }
+            }
+        }
+
+        let mut filtered_exports = NIL;
+        let mut exports: ConsList<Value> = ConsList::from_ref(committed_exports.into());
+        while let Some(export_id) = exports.pop_value(&self.heap) {
+            if !ConsList::<Value>::contains_value(&self.heap, export.embargoes.into(), export_id) {
+                filtered_exports = self.heap.cons_ref(export_id, filtered_exports);
+            }
+        }
+
+        Ok(CommittedDirectiveState {
+            exports: ConsList::<Value>::reversed_value(&mut self.heap, filtered_exports),
+            exportfiles: export.pathname_requests.into(),
+            embargoes: export.embargoes.into(),
+        })
     }
 
     /// Emits post-export warnings for potentially bereaved/orphaned type information.
@@ -936,18 +1121,12 @@ impl VM {
         })
     }
 
-    /// Parser/openfile load boundary.
+    /// Parses a source file for the load pipeline.
     ///
-    /// C parity target: parser/openfile segment of `loadfile` (`yyparse`-driven source parse).
-    /// Current concrete behavior:
-    /// - reads source bytes and creates a placeholder single-file environment,
-    /// - recognizes explicit test markers (`RANDA_PARSE_OK`, `RANDA_PARSE_SYNTAX_ERROR`)
-    ///   to drive phase orchestration deterministically,
-    /// - returns typed deferral error for all non-marker inputs.
-    ///
-    /// This is an F2 deferred boundary. Full parser invocation, semantic actions,
-    /// and `%include`/`%export` side effects remain deferred to parser integration,
-    /// where this boundary should be removed or replaced by direct parser wiring.
+    /// This recognizes expression input and the supported `%include` / `%export`
+    /// top-level forms. It returns directive payload as provisional parse output;
+    /// later load phases validate and apply that payload before committing
+    /// authoritative VM state.
     pub(super) fn parse_source_script(
         &mut self,
         source_file: &File,
@@ -963,10 +1142,13 @@ impl VM {
             }
         })?;
 
-        if self.looks_like_deferred_top_level_form(source_path, &source_text)? {
-            return Err(BytecodeError::ParserIntegrationDeferred {
-                path: source_path.to_string(),
-            });
+        match self.classify_load_script_form(source_path, &source_text)? {
+            LoadScriptForm::Expression | LoadScriptForm::IncludeExportDirective => {}
+            LoadScriptForm::OtherTopLevelForm => {
+                return Err(BytecodeError::ParserIntegrationDeferred {
+                    path: source_path.to_string(),
+                });
+            }
         }
 
         let placeholder_files = self.empty_environment_for_source(source_path, SystemTime::now());
@@ -981,13 +1163,20 @@ impl VM {
                 Ok(ParsePhaseOutcome {
                     status: ParsePhaseStatus::Parsed,
                     files: placeholder_files,
+                    directive_payload: None,
                 })
             }
+            ParserRunResult::ParsedDirectiveScript(payload) => Ok(ParsePhaseOutcome {
+                status: ParsePhaseStatus::Parsed,
+                files: placeholder_files,
+                directive_payload: Some(payload),
+            }),
             ParserRunResult::SyntaxError(diagnostics) => {
                 self.commit_parser_run_diagnostics(diagnostics);
                 Ok(ParsePhaseOutcome {
                     status: ParsePhaseStatus::SyntaxError,
                     files: placeholder_files,
+                    directive_payload: None,
                 })
             }
         }
@@ -1032,11 +1221,15 @@ impl VM {
         }
     }
 
-    fn looks_like_deferred_top_level_form(
+    /// Classifies a source file by the top-level form at its start.
+    ///
+    /// `%include` and `%export` are accepted as top-level directives here.
+    /// Other top-level forms are left to the existing deferred integration path.
+    pub(super) fn classify_load_script_form(
         &mut self,
         source_path: &str,
         source_text: &str,
-    ) -> Result<bool, BytecodeError> {
+    ) -> Result<LoadScriptForm, BytecodeError> {
         let mut lexer = Lexer::new(source_path, source_text);
         let mut tokens: Vec<Token> = Vec::new();
 
@@ -1061,26 +1254,29 @@ impl VM {
         let first = tokens.first().copied();
         let second = tokens.get(1).copied();
 
-        Ok(matches!(
-            (first, second),
+        Ok(match (first, second) {
+            (Some(Token::Include), _) | (Some(Token::Export), _) => {
+                LoadScriptForm::IncludeExportDirective
+            }
             (Some(Token::Lex), _)
-                | (Some(Token::BNF), _)
-                | (Some(Token::Include), _)
-                | (Some(Token::Export), _)
-                | (Some(Token::Free), _)
-                | (Some(Token::Type), _)
-                | (Some(Token::AbsoluteType), _)
-                | (Some(Token::Value), _)
-                | (Some(Token::Eval), _)
-                | (Some(Token::Identifier), Some(Token::Equal))
-                | (Some(Token::Identifier), Some(Token::ColonColon))
-                | (Some(Token::Identifier), Some(Token::Colon2Equal))
-                | (Some(Token::Name), Some(Token::Equal))
-                | (Some(Token::Name), Some(Token::ColonColon))
-                | (Some(Token::Name), Some(Token::Colon2Equal))
-                | (Some(Token::ConstructorName), Some(Token::Equal))
-                | (Some(Token::ConstructorName), Some(Token::Colon2Equal))
-        ))
+            | (Some(Token::BNF), _)
+            | (Some(Token::Free), _)
+            | (Some(Token::Type), _)
+            | (Some(Token::AbsoluteType), _)
+            | (Some(Token::Value), _)
+            | (Some(Token::Eval), _)
+            | (Some(Token::Identifier), Some(Token::Equal))
+            | (Some(Token::Identifier), Some(Token::ColonColon))
+            | (Some(Token::Identifier), Some(Token::Colon2Equal))
+            | (Some(Token::Name), Some(Token::Equal))
+            | (Some(Token::Name), Some(Token::ColonColon))
+            | (Some(Token::Name), Some(Token::Colon2Equal))
+            | (Some(Token::ConstructorName), Some(Token::Equal))
+            | (Some(Token::ConstructorName), Some(Token::Colon2Equal)) => {
+                LoadScriptForm::OtherTopLevelForm
+            }
+            _ => LoadScriptForm::Expression,
+        })
     }
 
     /// Restores internalized identifiers back to their public lookup shape.

@@ -51,8 +51,7 @@ impl ParserSessionState {
         *self = Self::default();
     }
 
-    /// Resets the expression-path tracking fields without disturbing unrelated deferred parser-mode state.
-    /// This exists so expression-slice resets preserve task-6 parser-session ownership instead of open-coding partial field updates at future call sites.
+    /// Resets the expression-path tracking fields without disturbing unrelated parser-mode state.
     /// The invariant is that `idsused`, `last_name`, `last_here`, `tvarscope`, `sreds`, and `open_bracket_count` return to their canonical empty-state values together.
     pub fn reset_expression_path_state(&mut self) {
         self.idsused = Combinator::Nil.into();

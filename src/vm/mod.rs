@@ -27,7 +27,7 @@ use crate::bytecode_parser::{
     parse_filename_modified_time, parse_string,
 };
 use crate::compiler::bytecode::Bytecode;
-use crate::compiler::ParserDiagnostic;
+use crate::compiler::{ParserDiagnostic, ParserTopLevelDirectivePayload};
 use crate::data::api::IdentifierDefinitionData;
 use crate::{
     compiler::Token,
@@ -225,10 +225,11 @@ enum ParsePhaseStatus {
     SyntaxError,
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Debug)]
 struct ParsePhaseOutcome {
     status: ParsePhaseStatus,
     files: ConsList<FileRecord>,
+    directive_payload: Option<ParserTopLevelDirectivePayload>,
 }
 
 impl Default for VM {

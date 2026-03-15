@@ -9,6 +9,7 @@ use std::fmt::{Debug, Formatter};
 use std::ops::Range;
 
 use super::{errors::LexerError, token::ParserLookahead, Loc, Token};
+use crate::data::Value;
 
 const YYEOF_TOKEN_TYPE: i32 = 0;
 const YYUNDEF_TOKEN_TYPE: i32 = 257;
@@ -65,12 +66,13 @@ impl Lexer {
         let token_type = match token {
             Token::EOF => YYEOF_TOKEN_TYPE,
             Token::Error => YYUNDEF_TOKEN_TYPE,
-            _ => token as i32,
+            _ => token as i32 + 2,
         };
 
         Ok(ParserLookahead {
             token_type,
             token,
+            value: Value::Token(token),
             loc: Loc::new(self.span.start as u32, self.span.end as u32),
         })
     }

@@ -51,7 +51,6 @@ impl From<Value> for RawValue {
     }
 }
 
-
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Default)]
 pub enum Value {
     /// Required by parser.
@@ -63,11 +62,11 @@ pub enum Value {
     Stolen,
 
     // ToDo: This should wrap a `crate::data::tag::Tag`.
-    Tag(RawValue),          // 0..23, distinguished from context.
-    Char(char),             // 0..TOKEN_BASE-1               ==   0..255
+    Tag(RawValue), // 0..23, distinguished from context.
+    Char(char),    // 0..TOKEN_BASE-1               ==   0..255
     /// Required by parser and used by compiler.
     /// Represents a token returned from a Lexer.
-    Token(Token),           // TOKEN_BASE..COMBINATOR_BASE-1 == 256..305
+    Token(Token), // TOKEN_BASE..COMBINATOR_BASE-1 == 256..305
     Combinator(Combinator), // COMBINATOR_BASE..ATOM_LIMIT-1 == 306..446
     // ToDo: We should probably create a `HeapReference` newtype.
     /// Reference to another cell.
@@ -103,10 +102,10 @@ impl Value {
     /// Required method, parser expects it to be defined.
     ///
     /// Constructor for the parser skeleton's shifted-token semantic value. The invariant is that
-    /// this stores the underlying lexical token while leaving token id and location on the
-    /// lookahead wrapper.
+    /// this forwards the semantic payload computed for the lexical token while leaving token id
+    /// and location on the lookahead wrapper.
     pub(crate) fn from_token(value: ParserLookahead) -> Self {
-        Self::Token(value.token)
+        value.value
     }
 
     pub(crate) fn new_uninitialized() -> Self {

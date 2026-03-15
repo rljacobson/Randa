@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::data::Value;
+use crate::data::{RawValue, Value};
 
 use super::ParserDiagnostic;
 
@@ -26,7 +26,30 @@ impl ParserRunDiagnostics {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParserIncludeDirectivePayload {
+    pub anchor: RawValue,
+    pub target_path: RawValue,
+    pub modifiers: RawValue,
+    pub bindings: RawValue,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParserExportDirectivePayload {
+    pub anchor: RawValue,
+    pub exported_ids: RawValue,
+    pub pathname_requests: RawValue,
+    pub embargoes: RawValue,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ParserTopLevelDirectivePayload {
+    pub include_requests: Vec<ParserIncludeDirectivePayload>,
+    pub export: Option<ParserExportDirectivePayload>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParserRunResult {
     ParsedExpression(Value),
+    ParsedDirectiveScript(ParserTopLevelDirectivePayload),
     SyntaxError(ParserRunDiagnostics),
 }

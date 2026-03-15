@@ -26,7 +26,10 @@ use crate::data::api::HeapString;
 pub(crate) use lexer::Lexer;
 pub use parser_activation::{ParserActivation, ParserVmContext};
 pub use parser_session::{ParserDeferredState, ParserSessionState};
-pub use parser_support::{ParserRunDiagnostics, ParserRunResult, ParserSupportError};
+pub use parser_support::{
+    ParserExportDirectivePayload, ParserIncludeDirectivePayload, ParserRunDiagnostics,
+    ParserRunResult, ParserSupportError, ParserTopLevelDirectivePayload,
+};
 pub use token::Token;
 
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]

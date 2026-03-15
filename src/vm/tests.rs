@@ -1,6 +1,10 @@
 use super::*;
-use crate::compiler::{HereInfo, ParserSupportError};
+use crate::compiler::{
+    HereInfo, ParserExportDirectivePayload, ParserIncludeDirectivePayload, ParserSupportError,
+    ParserTopLevelDirectivePayload,
+};
 use crate::data::api::{IdentifierValueTypeData, IdentifierValueTypeKind, IdentifierValueTypeRef};
+use crate::vm::load::LoadScriptForm;
 use std::path::PathBuf;
 
 fn unique_test_path(file_name: &str) -> PathBuf {
@@ -13,6 +17,67 @@ fn unique_test_path(file_name: &str) -> PathBuf {
     std::fs::create_dir_all(&base).expect("failed to create temp test directory");
     base.push(file_name);
     base
+}
+
+fn test_anchor(vm: &mut VM, source_path: &str, line_number: isize) -> RawValue {
+    Value::Reference(
+        FileInfoRef::from_script_file(&mut vm.heap, source_path.to_string(), line_number).get_ref(),
+    )
+    .into()
+}
+
+fn include_request_payload(
+    vm: &mut VM,
+    source_path: &str,
+    line_number: isize,
+    target_path: &str,
+) -> ParserIncludeDirectivePayload {
+    ParserIncludeDirectivePayload {
+        anchor: test_anchor(vm, source_path, line_number),
+        target_path: Value::Reference(vm.heap.string(target_path)).into(),
+        modifiers: NIL.into(),
+        bindings: NIL.into(),
+    }
+}
+
+fn export_payload(
+    vm: &mut VM,
+    source_path: &str,
+    line_number: isize,
+    exported_ids: &[&str],
+    pathname_requests: &[&str],
+    include_current_script: bool,
+    embargoes: &[&str],
+) -> ParserTopLevelDirectivePayload {
+    let exported_ids = exported_ids.iter().rev().fold(NIL, |list, name| {
+        let id = vm.intern_identifier(name);
+        vm.heap.cons_ref(id.into(), list)
+    });
+    let pathname_requests = pathname_requests.iter().rev().fold(
+        if include_current_script {
+            vm.heap.cons_ref(Combinator::Plus.into(), NIL)
+        } else {
+            NIL
+        },
+        |list, path| {
+            let path_ref = vm.heap.string(*path);
+            vm.heap.cons_ref(Value::Reference(path_ref), list)
+        },
+    );
+    let embargoes = embargoes.iter().rev().fold(NIL, |list, name| {
+        let id = vm.intern_identifier(name);
+        vm.heap.cons_ref(id.into(), list)
+    });
+
+    ParserTopLevelDirectivePayload {
+        include_requests: Vec::new(),
+        export: Some(ParserExportDirectivePayload {
+            anchor: test_anchor(vm, source_path, line_number),
+            exported_ids: exported_ids.into(),
+            pathname_requests: pathname_requests.into(),
+            embargoes: embargoes.into(),
+        }),
+    }
 }
 
 #[test]
@@ -163,6 +228,249 @@ fn load_file_normalizes_non_m_source_paths() {
         result,
         Err(BytecodeError::ParserIntegrationDeferred { path }) if path == normalized_path
     ));
+    assert!(!vm.loading);
+}
+
+#[test]
+fn classify_load_script_form_distinguishes_supported_top_level_forms() {
+    let mut vm = VM::new_for_tests();
+
+    assert_eq!(
+        vm.classify_load_script_form("slice.m", "+")
+            .expect("expression input should classify"),
+        LoadScriptForm::Expression
+    );
+    assert_eq!(
+        vm.classify_load_script_form("slice.m", "%export foo")
+            .expect("%export should classify"),
+        LoadScriptForm::IncludeExportDirective
+    );
+    assert_eq!(
+        vm.classify_load_script_form("slice.m", "%include target")
+            .expect("%include should classify"),
+        LoadScriptForm::IncludeExportDirective
+    );
+    assert_eq!(
+        vm.classify_load_script_form("slice.m", "entry = 1")
+            .expect("top-level definition should classify"),
+        LoadScriptForm::OtherTopLevelForm
+    );
+    assert_eq!(
+        vm.classify_load_script_form("slice.m", "%free { x :: num }")
+            .expect("%free should classify"),
+        LoadScriptForm::OtherTopLevelForm
+    );
+}
+
+#[test]
+fn parse_source_script_returns_provisional_payload_for_include_export_directives() {
+    let mut vm = VM::new_for_tests();
+    let source_path = unique_test_path("directive_payload.m");
+    std::fs::write(
+        &source_path,
+        "%include \"inc.m\"\n%export foo \"inc.m\" -bar\n",
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+    let source_file = File::open(&source_path).expect("failed to open source test file");
+
+    let outcome = vm
+        .parse_source_script(&source_file, &source_path_str, false)
+        .expect("expected include/export directives to parse");
+
+    assert_eq!(outcome.status, ParsePhaseStatus::Parsed);
+    let payload = outcome
+        .directive_payload
+        .as_ref()
+        .expect("expected directive payload");
+    assert_eq!(payload.include_requests.len(), 1);
+
+    let include_request = &payload.include_requests[0];
+    assert_eq!(
+        vm.heap
+            .resolve_string(include_request.target_path.into())
+            .expect("include target should be a heap string"),
+        "inc.m"
+    );
+    let Value::Reference(include_anchor_ref) = Value::from(include_request.anchor) else {
+        panic!("expected include anchor reference");
+    };
+    assert_eq!(
+        FileInfoRef::from_ref(include_anchor_ref).line_number(&vm.heap),
+        1
+    );
+
+    let export = payload.export.as_ref().expect("expected export payload");
+    let Value::Reference(export_anchor_ref) = Value::from(export.anchor) else {
+        panic!("expected export anchor reference");
+    };
+    assert_eq!(
+        FileInfoRef::from_ref(export_anchor_ref).line_number(&vm.heap),
+        2
+    );
+    assert_eq!(
+        vm.heap
+            .resolve_string(
+                ConsList::<Value>::from_ref(export.pathname_requests)
+                    .value_head(&vm.heap)
+                    .expect("expected export pathname")
+            )
+            .expect("export pathname should be a heap string"),
+        "inc.m"
+    );
+    assert_eq!(
+        vm.identifier_name(
+            ConsList::<IdentifierRecordRef>::from_ref(export.exported_ids)
+                .head(&vm.heap)
+                .expect("expected exported id")
+        ),
+        "foo"
+    );
+}
+
+#[test]
+fn load_file_runs_include_export_directive_pipeline_and_commits_exports() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("include_export_directive_export_only.m");
+    std::fs::write(&source_path, "%export foo\n").expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(result.is_ok());
+    assert_eq!(
+        vm.last_load_phase_trace,
+        vec![
+            "begin",
+            "parse",
+            "exportfile-checks",
+            "include-expansion",
+            "typecheck",
+            "export-closure",
+            "bereaved-warnings",
+            "unused-diagnostics",
+            "codegen",
+            "dump-visibility",
+            "dump-fixexports",
+            "dump-write",
+            "dump-unfixexports",
+            "success-postlude",
+        ]
+    );
+    assert_ne!(vm.exports, NIL);
+    assert!(!vm.loading);
+}
+
+#[test]
+fn load_file_exportfile_validation_failure_leaves_no_authoritative_commit() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let missing_include_path = unique_test_path("not_included.m");
+    let missing_include_path_str = missing_include_path.to_string_lossy().to_string();
+    let source_path = unique_test_path("exportfile_validation_failure.m");
+    std::fs::write(
+        &source_path,
+        format!("%export foo \"{}\"\n", missing_include_path_str),
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(BytecodeError::ExportFileNotIncludedInScript { path }) if path == missing_include_path_str
+    ));
+    assert_eq!(
+        vm.last_load_phase_trace,
+        vec!["begin", "parse", "exportfile-checks"]
+    );
+    assert_eq!(vm.exports, NIL);
+    assert_eq!(vm.exportfiles, NIL);
+    assert_eq!(vm.embargoes, NIL);
+    assert!(!vm.loading);
+}
+
+#[test]
+fn load_file_include_materialization_failure_leaves_no_authoritative_commit() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let missing_include_path = unique_test_path("missing_include_target.m");
+    let missing_include_path_str = missing_include_path.to_string_lossy().to_string();
+    let source_path = unique_test_path("include_materialization_failure.m");
+    std::fs::write(
+        &source_path,
+        format!("%include \"{}\"\n%export foo\n", missing_include_path_str),
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(BytecodeError::MissingSourceFile { path }) if path == missing_include_path_str
+    ));
+    assert_eq!(
+        vm.last_load_phase_trace,
+        vec!["begin", "parse", "exportfile-checks", "include-expansion"]
+    );
+    assert_eq!(vm.exports, NIL);
+    assert_eq!(vm.exportfiles, NIL);
+    assert_eq!(vm.embargoes, NIL);
+    assert_eq!(vm.files.len(&vm.heap), 1);
+    assert!(!vm.loading);
+}
+
+#[test]
+fn load_file_include_and_exportfile_success_commits_after_validation() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let include_path = unique_test_path("committed_include_target.m");
+    std::fs::write(&include_path, "+\n").expect("failed to write include source test file");
+    let include_path_str = include_path.to_string_lossy().to_string();
+
+    let source_path = unique_test_path("directive_commit_success.m");
+    std::fs::write(
+        &source_path,
+        format!(
+            "%include \"{}\"\n%export foo \"{}\"\n",
+            include_path_str, include_path_str
+        ),
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(result.is_ok());
+    assert_eq!(vm.files.len(&vm.heap), 2);
+    assert_eq!(vm.includees, ConsList::EMPTY);
+    assert_ne!(vm.exports, NIL);
+    assert_ne!(vm.exportfiles, NIL);
+    assert_eq!(
+        vm.identifier_name(
+            ConsList::<IdentifierRecordRef>::from_ref(vm.exports.into())
+                .head(&vm.heap)
+                .expect("expected committed export id")
+        ),
+        "foo"
+    );
+    assert_eq!(
+        vm.heap
+            .resolve_string(
+                ConsList::<Value>::from_ref(vm.exportfiles.into())
+                    .value_head(&vm.heap)
+                    .expect("expected committed exportfile path")
+            )
+            .expect("committed exportfile should be a heap string"),
+        include_path_str
+    );
     assert!(!vm.loading);
 }
 
@@ -468,11 +776,18 @@ fn exportfile_phase_errors_when_path_is_not_in_includees() {
     let path = unique_test_path("exports_only.m")
         .to_string_lossy()
         .to_string();
-    let path_ref = vm.heap.string(path.clone());
-    vm.exportfiles = vm.heap.cons_ref(Value::Reference(path_ref), NIL);
-    vm.includees = ConsList::EMPTY;
+    let mut payload = export_payload(
+        &mut vm,
+        "exports_only.m",
+        1,
+        &["foo"],
+        &[path.as_str()],
+        false,
+        &[],
+    );
+    payload.include_requests = Vec::new();
 
-    let result = vm.validate_exportfile_bindings_partial();
+    let result = vm.validate_exportfile_bindings_partial(Some(&payload));
 
     assert!(matches!(
         result,
@@ -487,27 +802,24 @@ fn exportfile_phase_errors_when_path_binding_is_ambiguous() {
     let path = unique_test_path("ambiguous.m")
         .to_string_lossy()
         .to_string();
-    let path_ref = vm.heap.string(path.clone());
-    vm.exportfiles = vm.heap.cons_ref(Value::Reference(path_ref), NIL);
+    let payload = ParserTopLevelDirectivePayload {
+        include_requests: vec![
+            include_request_payload(&mut vm, "ambiguous.m", 1, &path),
+            include_request_payload(&mut vm, "ambiguous.m", 2, &path),
+        ],
+        export: export_payload(
+            &mut vm,
+            "ambiguous.m",
+            1,
+            &["foo"],
+            &[path.as_str()],
+            false,
+            &[],
+        )
+        .export,
+    };
 
-    let first = FileRecord::new(
-        &mut vm.heap,
-        path.clone(),
-        UNIX_EPOCH,
-        false,
-        ConsList::EMPTY,
-    );
-    let second = FileRecord::new(
-        &mut vm.heap,
-        path.clone(),
-        UNIX_EPOCH,
-        false,
-        ConsList::EMPTY,
-    );
-    vm.includees = ConsList::new(&mut vm.heap, first);
-    vm.includees.push(&mut vm.heap, second);
-
-    let result = vm.validate_exportfile_bindings_partial();
+    let result = vm.validate_exportfile_bindings_partial(Some(&payload));
 
     assert!(matches!(
         result,
@@ -522,13 +834,26 @@ fn exportfile_phase_accepts_unique_included_binding() {
     let path = unique_test_path("included_once.m")
         .to_string_lossy()
         .to_string();
-    let path_ref = vm.heap.string(path.clone());
-    vm.exportfiles = vm.heap.cons_ref(Value::Reference(path_ref), NIL);
+    let payload = ParserTopLevelDirectivePayload {
+        include_requests: vec![include_request_payload(
+            &mut vm,
+            "included_once.m",
+            1,
+            &path,
+        )],
+        export: export_payload(
+            &mut vm,
+            "included_once.m",
+            1,
+            &["foo"],
+            &[path.as_str()],
+            false,
+            &[],
+        )
+        .export,
+    };
 
-    let includee = FileRecord::new(&mut vm.heap, path, UNIX_EPOCH, false, ConsList::EMPTY);
-    vm.includees = ConsList::new(&mut vm.heap, includee);
-
-    let result = vm.validate_exportfile_bindings_partial();
+    let result = vm.validate_exportfile_bindings_partial(Some(&payload));
 
     assert!(result.is_ok());
 }
@@ -546,29 +871,21 @@ fn include_expansion_phase_appends_includees_and_clears_bookkeeping() {
     );
     vm.files = ConsList::new(&mut vm.heap, main_file);
 
-    let include_a = FileRecord::new(
-        &mut vm.heap,
-        unique_test_path("include_a.m")
-            .to_string_lossy()
-            .to_string(),
-        UNIX_EPOCH,
-        false,
-        ConsList::EMPTY,
-    );
-    let include_b = FileRecord::new(
-        &mut vm.heap,
-        unique_test_path("include_b.m")
-            .to_string_lossy()
-            .to_string(),
-        UNIX_EPOCH,
-        false,
-        ConsList::EMPTY,
-    );
-    vm.includees = ConsList::new(&mut vm.heap, include_a);
-    vm.includees.append(&mut vm.heap, include_b);
-    vm.mkinclude_files = ConsList::new(&mut vm.heap, vm.includees);
+    let include_a_path = unique_test_path("include_a.m");
+    std::fs::write(&include_a_path, "+\n").expect("failed to write include_a test file");
+    let include_a_path = include_a_path.to_string_lossy().to_string();
+    let include_b_path = unique_test_path("include_b.m");
+    std::fs::write(&include_b_path, "+\n").expect("failed to write include_b test file");
+    let include_b_path = include_b_path.to_string_lossy().to_string();
+    let payload = ParserTopLevelDirectivePayload {
+        include_requests: vec![
+            include_request_payload(&mut vm, "main.m", 1, &include_a_path),
+            include_request_payload(&mut vm, "main.m", 2, &include_b_path),
+        ],
+        export: None,
+    };
 
-    let result = vm.run_mkincludes_phase();
+    let result = vm.run_mkincludes_phase(Some(&payload));
 
     assert!(result.is_ok());
     assert!(vm.includees.is_empty());
@@ -591,7 +908,7 @@ fn include_expansion_phase_is_noop_when_includees_empty() {
     let include_list = ConsList::new(&mut vm.heap, include_stub);
     vm.mkinclude_files = ConsList::new(&mut vm.heap, include_list);
 
-    let result = vm.run_mkincludes_phase();
+    let result = vm.run_mkincludes_phase(None);
 
     assert!(result.is_ok());
     assert!(vm.files.is_empty());
@@ -626,9 +943,11 @@ fn typecheck_phase_fails_when_undefined_names_present() {
 #[test]
 fn export_closure_phase_is_noop_without_exports() {
     let mut vm = VM::new_for_tests();
-    vm.exports = NIL;
 
-    let result = vm.run_export_closure_phase_partial();
+    let result = vm.run_export_closure_phase_partial(
+        Some(&ParserTopLevelDirectivePayload::default()),
+        ConsList::EMPTY,
+    );
 
     assert!(result.is_ok());
 }
@@ -636,12 +955,19 @@ fn export_closure_phase_is_noop_without_exports() {
 #[test]
 fn export_closure_phase_clears_exports_when_undefined_names_present() {
     let mut vm = VM::new_for_tests();
-    let export_id = vm.heap.make_empty_identifier("exported_name");
-    vm.exports = vm.heap.cons_ref(export_id.into(), NIL);
     let missing_id = vm.heap.make_empty_identifier("missing_name");
     vm.undefined_names = ConsList::new(&mut vm.heap, missing_id);
+    let payload = export_payload(
+        &mut vm,
+        "exported_name.m",
+        1,
+        &["exported_name"],
+        &[],
+        false,
+        &[],
+    );
 
-    let result = vm.run_export_closure_phase_partial();
+    let result = vm.run_export_closure_phase_partial(Some(&payload), ConsList::EMPTY);
 
     assert!(matches!(
         result,
@@ -653,14 +979,22 @@ fn export_closure_phase_clears_exports_when_undefined_names_present() {
 #[test]
 fn export_closure_phase_keeps_exports_when_no_undefined_names() {
     let mut vm = VM::new_for_tests();
-    let export_id = vm.heap.make_empty_identifier("exported_name");
-    vm.exports = vm.heap.cons_ref(export_id.into(), NIL);
     vm.undefined_names = ConsList::EMPTY;
+    let payload = export_payload(
+        &mut vm,
+        "exported_name.m",
+        1,
+        &["exported_name"],
+        &[],
+        false,
+        &[],
+    );
 
-    let result = vm.run_export_closure_phase_partial();
+    let result = vm.run_export_closure_phase_partial(Some(&payload), ConsList::EMPTY);
 
     assert!(result.is_ok());
-    assert_ne!(vm.exports, NIL);
+    let committed = result.expect("expected committed export payload");
+    assert_ne!(committed.exports, NIL);
 }
 
 #[test]
