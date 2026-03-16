@@ -133,11 +133,9 @@ fn undump_propagates_load_file_error_after_bad_dump() {
     let source_path_str = source_path.to_string_lossy().to_string();
     let result = vm.undump(&source_path_str);
 
-    assert!(matches!(
-        result,
-        Err(BytecodeError::ParserIntegrationDeferred { path }) if path == source_path_str
-    ));
+    assert!(result.is_ok());
     assert!(!vm.loading);
+    assert_eq!(vm.files.len(&vm.heap), 1);
 }
 
 #[test]
@@ -157,11 +155,9 @@ fn undump_falls_back_to_load_file_after_wrong_bytecode_version() {
     let source_path_str = source_path.to_string_lossy().to_string();
     let result = vm.undump(&source_path_str);
 
-    assert!(matches!(
-        result,
-        Err(BytecodeError::ParserIntegrationDeferred { path }) if path == source_path_str
-    ));
+    assert!(result.is_ok());
     assert!(!vm.loading);
+    assert_eq!(vm.files.len(&vm.heap), 1);
 }
 
 #[test]
@@ -177,13 +173,28 @@ fn load_file_parser_deferred_keeps_attempted_source_in_old_files() {
 
     let result = vm.load_file(&source_path_str);
 
-    assert!(matches!(
-        result,
-        Err(BytecodeError::ParserIntegrationDeferred { path }) if path == source_path_str
-    ));
-    assert_eq!(vm.last_load_phase_trace, vec!["begin", "parse"]);
+    assert!(result.is_ok());
+    assert_eq!(
+        vm.last_load_phase_trace,
+        vec![
+            "begin",
+            "parse",
+            "exportfile-checks",
+            "include-expansion",
+            "typecheck",
+            "export-closure",
+            "bereaved-warnings",
+            "unused-diagnostics",
+            "codegen",
+            "dump-visibility",
+            "dump-fixexports",
+            "dump-write",
+            "dump-unfixexports",
+            "success-postlude",
+        ]
+    );
     assert!(!vm.loading);
-    assert!(vm.files.is_empty());
+    assert_eq!(vm.files.len(&vm.heap), 1);
     assert!(!vm.old_files.is_empty());
 
     let old_anchor = vm
@@ -227,11 +238,15 @@ fn load_file_normalizes_non_m_source_paths() {
     let normalized_path = source_path_with_m.to_string_lossy().to_string();
     let result = vm.load_file(&requested_path);
 
-    assert!(matches!(
-        result,
-        Err(BytecodeError::ParserIntegrationDeferred { path }) if path == normalized_path
-    ));
+    assert!(result.is_ok());
     assert!(!vm.loading);
+    assert_eq!(vm.files.len(&vm.heap), 1);
+
+    let current_anchor = vm
+        .files
+        .head(&vm.heap)
+        .expect("missing current file anchor");
+    assert_eq!(current_anchor.get_file_name(&vm.heap), normalized_path);
 }
 
 #[test]
@@ -246,17 +261,17 @@ fn classify_load_script_form_distinguishes_supported_top_level_forms() {
     assert_eq!(
         vm.classify_load_script_form("slice.m", "%export foo")
             .expect("%export should classify"),
-        LoadScriptForm::IncludeExportDirective
+        LoadScriptForm::TopLevelScript
     );
     assert_eq!(
         vm.classify_load_script_form("slice.m", "%include target")
             .expect("%include should classify"),
-        LoadScriptForm::IncludeExportDirective
+        LoadScriptForm::TopLevelScript
     );
     assert_eq!(
         vm.classify_load_script_form("slice.m", "entry = 1")
             .expect("top-level definition should classify"),
-        LoadScriptForm::OtherTopLevelForm
+        LoadScriptForm::TopLevelScript
     );
     assert_eq!(
         vm.classify_load_script_form("slice.m", "%free { x :: num }")
@@ -278,17 +293,17 @@ fn parse_source_script_returns_provisional_payload_for_include_export_directives
     let source_file = File::open(&source_path).expect("failed to open source test file");
 
     let outcome = vm
-        .parse_source_script(&source_file, &source_path_str, false)
+        .parse_source_script(&source_file, &source_path_str, UNIX_EPOCH, false)
         .expect("expected include/export directives to parse");
 
     assert_eq!(outcome.status, ParsePhaseStatus::Parsed);
     let payload = outcome
-        .directive_payload
+        .top_level_payload
         .as_ref()
-        .expect("expected directive payload");
-    assert_eq!(payload.include_requests.len(), 1);
+        .expect("expected top-level payload");
+    assert_eq!(payload.directives.include_requests.len(), 1);
 
-    let include_request = &payload.include_requests[0];
+    let include_request = &payload.directives.include_requests[0];
     assert_eq!(
         vm.heap
             .resolve_string(include_request.target_path.into())
@@ -303,7 +318,11 @@ fn parse_source_script_returns_provisional_payload_for_include_export_directives
         1
     );
 
-    let export = payload.export.as_ref().expect("expected export payload");
+    let export = payload
+        .directives
+        .export
+        .as_ref()
+        .expect("expected export payload");
     let Value::Reference(export_anchor_ref) = Value::from(export.anchor) else {
         panic!("expected export anchor reference");
     };
@@ -572,7 +591,7 @@ fn parse_source_script_commits_returned_syntax_diagnostic_before_returning_statu
     let source_file = File::open(&source_path).expect("failed to open source test file");
 
     let outcome = vm
-        .parse_source_script(&source_file, &source_path_str, false)
+        .parse_source_script(&source_file, &source_path_str, UNIX_EPOCH, false)
         .expect("expected parse boundary to return syntax status");
 
     assert_eq!(outcome.status, ParsePhaseStatus::SyntaxError);

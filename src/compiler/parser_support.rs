@@ -41,15 +41,28 @@ pub struct ParserExportDirectivePayload {
     pub embargoes: RawValue,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParserDefinitionPayload {
+    pub identifier: RawValue,
+    pub body: RawValue,
+    pub anchor: RawValue,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ParserTopLevelDirectivePayload {
     pub include_requests: Vec<ParserIncludeDirectivePayload>,
     pub export: Option<ParserExportDirectivePayload>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ParserTopLevelScriptPayload {
+    pub directives: ParserTopLevelDirectivePayload,
+    pub definitions: Vec<ParserDefinitionPayload>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParserRunResult {
     ParsedExpression(Value),
-    ParsedDirectiveScript(ParserTopLevelDirectivePayload),
+    ParsedTopLevelScript(ParserTopLevelScriptPayload),
     SyntaxError(ParserRunDiagnostics),
 }

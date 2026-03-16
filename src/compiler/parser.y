@@ -21,11 +21,13 @@ use super::{
   Loc,
   ParserActivation,
   ParserDiagnostic,
+  ParserDefinitionPayload,
   ParserExportDirectivePayload,
   ParserIncludeDirectivePayload,
   ParserRunDiagnostics,
   ParserRunResult,
   ParserTopLevelDirectivePayload,
+  ParserTopLevelScriptPayload,
   Token,
   ParserVmContext,
 };
@@ -56,8 +58,9 @@ use crate::{
   vm: ParserVmContext,
   syntax_error_found: bool,
   diagnostics: ParserRunDiagnostics,
-  include_export_script_parsed: bool,
+  top_level_script_parsed: bool,
   directive_include_requests: Vec<ParserIncludeDirectivePayload>,
+  definition_payloads: Vec<ParserDefinitionPayload>,
 
   lex_states: RawValue,
   used_identifiers: RawValue,
@@ -191,8 +194,8 @@ parse_entry:
         self.result = Some($1);
         $$ = $1;
       }
-    | include_export_script {
-        self.include_export_script_parsed = true;
+    | top_level_script {
+        self.top_level_script_parsed = true;
         $$ = NIL;
       }
     ;
@@ -239,17 +242,51 @@ exp:
     | e1 { $$ = $1; }
     ;
 
-/* Only `%include` and `%export` are accepted as top-level directives here.
-   Other top-level forms are classified before parser entry and follow the
-   existing deferred integration path. */
-include_export_script:
+/* The active top-level script slice currently accepts `%include`, `%export`,
+   and top-level value/function definitions. Other top-level forms are still
+   classified before parser entry and follow the deferred integration path. */
+top_level_script:
+    top_level_item { $$ = NIL; }
+    | top_level_script top_level_item { $$ = NIL; }
+    ;
+
+top_level_item:
     include_export_item { $$ = NIL; }
-    | include_export_script include_export_item { $$ = NIL; }
+    | top_level_definition_item { $$ = NIL; }
+    ;
+
+top_level_definition_anchor:
+    /* empty */ {
+        let here_info = HereInfo::from_source_location(
+          self.yylexer.source_name(),
+          self.yylexer.source_text(),
+          Some(self.yylexer.current_loc())
+        );
+        let anchor = FileInfoRef::from_script_file(
+          self.heap,
+          here_info.script_file,
+          here_info.line_number,
+        );
+        $$ = Value::Reference(anchor.get_ref());
+      }
     ;
 
 include_export_item:
     export_directive directive_terminators { $$ = NIL; }
     | include_directive directive_terminators { $$ = NIL; }
+    ;
+
+top_level_definition_item:
+    Name top_level_definition_anchor Equal exp directive_terminators {
+        let identifier = $1;
+        self.definition_payloads.push(ParserDefinitionPayload {
+          identifier: identifier.into(),
+          body: $4.into(),
+          anchor: $2.into(),
+        });
+        self.last_identifier = identifier.into();
+        $$ = NIL;
+      }
     ;
 
 export_anchor:
@@ -470,9 +507,9 @@ if:
 
 indent:
     /* empty */ {
-        if(!SYNERR){
-          layout();
-          setlmargin();
+        if !self.syntax_error_found {
+          self.vm.layout_partial();
+          self.vm.set_left_margin_partial();
         }
         $$ = NIL;
       }
@@ -482,7 +519,10 @@ indent:
    - see `production:' for an exception */
 
 outdent:
-    separator { unsetlmargin(); }
+    separator {
+        self.vm.unset_left_margin_partial();
+        $$ = NIL;
+      }
     ;
 
 separator:
@@ -2056,8 +2096,9 @@ impl<'ctx /* 'fix quotes */> Parser<'ctx /* 'fix quotes */> {
         vm,
         syntax_error_found: false,
         diagnostics: ParserRunDiagnostics::default(),
-        include_export_script_parsed: false,
+        top_level_script_parsed: false,
         directive_include_requests: Vec::new(),
+        definition_payloads: Vec::new(),
 
         lex_states: session.lex_states,
         used_identifiers: session.used_identifiers,
@@ -2190,7 +2231,7 @@ impl<'ctx /* 'fix quotes */> Parser<'ctx /* 'fix quotes */> {
             return ParserRunResult::SyntaxError(self.diagnostics);
         }
 
-        if self.include_export_script_parsed {
+        if self.top_level_script_parsed {
             let export = if self.exported_identifiers == NIL_RAW
                 && self.export_path_requests == NIL_RAW
                 && self.export_embargoes == NIL_RAW
@@ -2214,9 +2255,12 @@ impl<'ctx /* 'fix quotes */> Parser<'ctx /* 'fix quotes */> {
                 })
             };
 
-            return ParserRunResult::ParsedDirectiveScript(ParserTopLevelDirectivePayload {
-                include_requests: self.directive_include_requests,
-                export,
+            return ParserRunResult::ParsedTopLevelScript(ParserTopLevelScriptPayload {
+                directives: ParserTopLevelDirectivePayload {
+                    include_requests: self.directive_include_requests,
+                    export,
+                },
+                definitions: self.definition_payloads,
             });
         }
 

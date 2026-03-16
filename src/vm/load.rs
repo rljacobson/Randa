@@ -1,8 +1,9 @@
 use super::diagnostics::{alfasort, printlist, source_update_check};
 use super::*;
 use crate::compiler::{
-    parser::Parser, Lexer, ParserActivation, ParserDeferredState, ParserRunDiagnostics,
-    ParserRunResult, ParserSessionState, ParserSupportError, ParserTopLevelDirectivePayload,
+    parser::Parser, HereInfo, Lexer, ParserActivation, ParserDeferredState,
+    ParserDefinitionPayload, ParserRunDiagnostics, ParserRunResult, ParserSessionState,
+    ParserSupportError, ParserTopLevelDirectivePayload, ParserTopLevelScriptPayload,
     ParserVmContext,
 };
 use crate::compiler::{token::ParserLookahead, Token};
@@ -13,7 +14,7 @@ use std::path::{Path, PathBuf};
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(super) enum LoadScriptForm {
     Expression,
-    IncludeExportDirective,
+    TopLevelScript,
     OtherTopLevelForm,
 }
 
@@ -262,8 +263,12 @@ impl VM {
 
             let is_main_script = !self.initializing && !self.making;
             self.record_load_phase("parse");
-            let parse_outcome =
-                self.parse_source_script(&source_file, &source_path, is_main_script)?;
+            let parse_outcome = self.parse_source_script(
+                &source_file,
+                &source_path,
+                modified_time,
+                is_main_script,
+            )?;
 
             if parse_outcome.status == ParsePhaseStatus::SyntaxError {
                 self.record_load_phase("syntax-fallback");
@@ -272,19 +277,20 @@ impl VM {
                 return Ok(());
             }
 
-            let directive_payload = parse_outcome.directive_payload;
+            let directive_payload = parse_outcome
+                .top_level_payload
+                .as_ref()
+                .map(|payload| &payload.directives);
             self.files = parse_outcome.files;
             self.record_load_phase("exportfile-checks");
-            self.validate_exportfile_bindings_partial(directive_payload.as_ref())?;
+            self.validate_exportfile_bindings_partial(directive_payload)?;
             self.record_load_phase("include-expansion");
-            let materialized_includees = self.run_mkincludes_phase(directive_payload.as_ref())?;
+            let materialized_includees = self.run_mkincludes_phase(directive_payload)?;
             self.record_load_phase("typecheck");
             self.run_checktypes_phase()?;
             self.record_load_phase("export-closure");
-            let committed_directives = self.run_export_closure_phase_partial(
-                directive_payload.as_ref(),
-                materialized_includees,
-            )?;
+            let committed_directives =
+                self.run_export_closure_phase_partial(directive_payload, materialized_includees)?;
             self.exported_identifiers = committed_directives.exported_identifiers;
             self.export_paths = committed_directives.export_paths;
             self.export_embargoes = committed_directives.export_embargoes;
@@ -1132,14 +1138,15 @@ impl VM {
 
     /// Parses a source file for the load pipeline.
     ///
-    /// This recognizes expression input and the supported `%include` / `%export`
-    /// top-level forms. It returns directive payload as provisional parse output;
-    /// later load phases validate and apply that payload before committing
-    /// authoritative VM state.
+    /// This recognizes expression input and the currently supported top-level
+    /// source-script forms. It returns provisional parser payload; later load
+    /// phases validate directives and use the committed file graph as the
+    /// authoritative source-compilation substrate.
     pub(super) fn parse_source_script(
         &mut self,
         source_file: &File,
         source_path: &str,
+        modified_time: SystemTime,
         _is_main_script: bool,
     ) -> Result<ParsePhaseOutcome, BytecodeError> {
         let mut source_text = String::new();
@@ -1152,7 +1159,7 @@ impl VM {
         })?;
 
         match self.classify_load_script_form(source_path, &source_text)? {
-            LoadScriptForm::Expression | LoadScriptForm::IncludeExportDirective => {}
+            LoadScriptForm::Expression | LoadScriptForm::TopLevelScript => {}
             LoadScriptForm::OtherTopLevelForm => {
                 return Err(BytecodeError::ParserIntegrationDeferred {
                     path: source_path.to_string(),
@@ -1160,7 +1167,7 @@ impl VM {
             }
         }
 
-        let placeholder_files = self.empty_environment_for_source(source_path, SystemTime::now());
+        let placeholder_files = self.empty_environment_for_source(source_path, modified_time);
         let lexer = Lexer::new(source_path, &source_text);
         let activation = self.parser_activation();
         let mut parser = Parser::new(lexer, activation);
@@ -1172,23 +1179,82 @@ impl VM {
                 Ok(ParsePhaseOutcome {
                     status: ParsePhaseStatus::Parsed,
                     files: placeholder_files,
-                    directive_payload: None,
+                    top_level_payload: None,
                 })
             }
-            ParserRunResult::ParsedDirectiveScript(payload) => Ok(ParsePhaseOutcome {
-                status: ParsePhaseStatus::Parsed,
-                files: placeholder_files,
-                directive_payload: Some(payload),
-            }),
+            ParserRunResult::ParsedTopLevelScript(payload) => {
+                let committed_files =
+                    self.commit_parsed_top_level_script(source_path, modified_time, &payload);
+                Ok(ParsePhaseOutcome {
+                    status: ParsePhaseStatus::Parsed,
+                    files: committed_files,
+                    top_level_payload: Some(payload),
+                })
+            }
             ParserRunResult::SyntaxError(diagnostics) => {
                 self.commit_parser_run_diagnostics(diagnostics);
                 Ok(ParsePhaseOutcome {
                     status: ParsePhaseStatus::SyntaxError,
                     files: placeholder_files,
-                    directive_payload: None,
+                    top_level_payload: None,
                 })
             }
         }
+    }
+
+    fn commit_parsed_top_level_script(
+        &mut self,
+        source_path: &str,
+        modified_time: SystemTime,
+        payload: &ParserTopLevelScriptPayload,
+    ) -> ConsList<FileRecord> {
+        let files = self.empty_environment_for_source(source_path, modified_time);
+
+        if let Some(current_file) = files.head(&self.heap) {
+            for definition in &payload.definitions {
+                self.commit_top_level_definition_payload(current_file, definition);
+            }
+        }
+
+        files
+    }
+
+    fn commit_top_level_definition_payload(
+        &mut self,
+        current_file: FileRecord,
+        definition: &ParserDefinitionPayload,
+    ) {
+        let identifier = IdentifierRecordRef::from_ref(definition.identifier);
+        let Value::Reference(anchor_ref) = Value::from(definition.anchor) else {
+            return;
+        };
+        let anchor = FileInfoRef::from_ref(anchor_ref);
+        let script_file = anchor.script_file(&self.heap);
+        let line_number = anchor.line_number(&self.heap);
+        let definition_metadata = IdentifierDefinitionRef::new(
+            &mut self.heap,
+            HereInfo {
+                script_file,
+                line_number,
+            },
+            None,
+        );
+
+        identifier.set_definition(&mut self.heap, definition_metadata);
+        identifier.set_type(&mut self.heap, Type::Undefined.into());
+        identifier.set_value_from_data(
+            &mut self.heap,
+            IdentifierValueData::Arbitrary(definition.body.into()),
+        );
+
+        let mut definienda = current_file.get_definienda(&self.heap);
+        while let Some(existing) = definienda.pop_raw(&self.heap) {
+            if existing == definition.identifier {
+                return;
+            }
+        }
+
+        current_file.push_item(&mut self.heap, definition.identifier.into());
     }
 
     fn parser_activation(&mut self) -> ParserActivation<'_> {
@@ -1264,9 +1330,11 @@ impl VM {
         let second = tokens.get(1).copied();
 
         Ok(match (first, second) {
-            (Some(Token::Include), _) | (Some(Token::Export), _) => {
-                LoadScriptForm::IncludeExportDirective
-            }
+            (Some(Token::Include), _)
+            | (Some(Token::Export), _)
+            | (Some(Token::Identifier), Some(Token::Equal))
+            | (Some(Token::Name), Some(Token::Equal))
+            | (Some(Token::ConstructorName), Some(Token::Equal)) => LoadScriptForm::TopLevelScript,
             (Some(Token::Lex), _)
             | (Some(Token::BNF), _)
             | (Some(Token::Free), _)
@@ -1274,13 +1342,10 @@ impl VM {
             | (Some(Token::AbsoluteType), _)
             | (Some(Token::Value), _)
             | (Some(Token::Eval), _)
-            | (Some(Token::Identifier), Some(Token::Equal))
             | (Some(Token::Identifier), Some(Token::ColonColon))
             | (Some(Token::Identifier), Some(Token::Colon2Equal))
-            | (Some(Token::Name), Some(Token::Equal))
             | (Some(Token::Name), Some(Token::ColonColon))
             | (Some(Token::Name), Some(Token::Colon2Equal))
-            | (Some(Token::ConstructorName), Some(Token::Equal))
             | (Some(Token::ConstructorName), Some(Token::Colon2Equal)) => {
                 LoadScriptForm::OtherTopLevelForm
             }

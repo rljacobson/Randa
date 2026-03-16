@@ -27,8 +27,9 @@ pub(crate) use lexer::Lexer;
 pub use parser_activation::{ParserActivation, ParserVmContext};
 pub use parser_session::{ParserDeferredState, ParserSessionState};
 pub use parser_support::{
-    ParserExportDirectivePayload, ParserIncludeDirectivePayload, ParserRunDiagnostics,
-    ParserRunResult, ParserSupportError, ParserTopLevelDirectivePayload,
+    ParserDefinitionPayload, ParserExportDirectivePayload, ParserIncludeDirectivePayload,
+    ParserRunDiagnostics, ParserRunResult, ParserSupportError, ParserTopLevelDirectivePayload,
+    ParserTopLevelScriptPayload,
 };
 pub use token::Token;
 
