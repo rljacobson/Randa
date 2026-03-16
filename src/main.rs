@@ -1,6 +1,7 @@
 #![allow(ambiguous_associated_items)]
 #![allow(dead_code)]
 
+mod big_num;
 mod bytecode_parser;
 mod compiler;
 mod constants;
