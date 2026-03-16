@@ -19,17 +19,17 @@ pub(super) enum LoadScriptForm {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(super) struct CommittedDirectiveState {
-    pub(super) exports: Value,
-    pub(super) exportfiles: Value,
-    pub(super) embargoes: Value,
+    pub(super) exported_identifiers: Value,
+    pub(super) export_paths: Value,
+    pub(super) export_embargoes: Value,
 }
 
 impl Default for CommittedDirectiveState {
     fn default() -> Self {
         Self {
-            exports: NIL,
-            exportfiles: NIL,
-            embargoes: NIL,
+            exported_identifiers: NIL,
+            export_paths: NIL,
+            export_embargoes: NIL,
         }
     }
 }
@@ -285,11 +285,11 @@ impl VM {
                 directive_payload.as_ref(),
                 materialized_includees,
             )?;
-            self.exports = committed_directives.exports;
-            self.exportfiles = committed_directives.exportfiles;
-            self.embargoes = committed_directives.embargoes;
-            self.includees = ConsList::EMPTY;
-            self.mkinclude_files = ConsList::EMPTY;
+            self.exported_identifiers = committed_directives.exported_identifiers;
+            self.export_paths = committed_directives.export_paths;
+            self.export_embargoes = committed_directives.export_embargoes;
+            self.included_files = ConsList::EMPTY;
+            self.include_rollback_files = ConsList::EMPTY;
             self.record_load_phase("bereaved-warnings");
             self.emit_bereaved_warnings_partial();
             self.record_load_phase("unused-diagnostics");
@@ -321,10 +321,10 @@ impl VM {
     pub(super) fn reset_load_phase_state(&mut self) {
         // These parse/load accumulators are rebuilt by each load attempt.
         // Reset them eagerly to avoid carrying stale state across retries.
-        self.embargoes = NIL;
-        self.exportfiles = NIL;
-        self.exports = NIL;
-        self.eprodnts = NIL;
+        self.export_embargoes = NIL;
+        self.export_paths = NIL;
+        self.exported_identifiers = NIL;
+        self.empty_production_nonterminals = NIL;
     }
 
     pub(super) fn empty_environment_for_source(
@@ -380,13 +380,13 @@ impl VM {
 
     pub(super) fn reset_syntax_error_state_for_load(&mut self) {
         self.error_line = 0;
-        self.errs.clear();
+        self.error_locations.clear();
         self.parser_diagnostics.clear();
     }
 
     /// Validates `%export` file-id bindings against the currently tracked include set.
     ///
-    /// C parity target: `loadfile` exportfiles/pathname checks in `steer.c`.
+    /// C parity target: `loadfile` export_paths/pathname checks in `steer.c`.
     /// Current concrete behavior:
     /// - ignores `PLUS` markers (the "include current script" sentinel),
     /// - requires each pathname entry to resolve to exactly one includee,
@@ -400,12 +400,12 @@ impl VM {
         directive_payload: Option<&ParserTopLevelDirectivePayload>,
     ) -> Result<(), BytecodeError> {
         let Some(directive_payload) = directive_payload else {
-            if self.exportfiles == NIL {
+            if self.export_paths == NIL {
                 return Ok(());
             }
 
-            let mut exportfiles: ConsList<RawValue> = ConsList::from_ref(self.exportfiles.into());
-            while let Some(entry) = exportfiles.pop_raw(&self.heap) {
+            let mut export_paths: ConsList<RawValue> = ConsList::from_ref(self.export_paths.into());
+            while let Some(entry) = export_paths.pop_raw(&self.heap) {
                 if entry == Combinator::Plus.into() {
                     continue;
                 }
@@ -415,8 +415,8 @@ impl VM {
                     .resolve_string(entry.into())
                     .map_err(|_| BytecodeError::MalformedExportFileList)?;
                 let mut includee_matches = 0usize;
-                let mut includees = self.includees;
-                while let Some(includee) = includees.pop(&self.heap) {
+                let mut included_files = self.included_files;
+                while let Some(includee) = included_files.pop(&self.heap) {
                     if includee.get_file_name(&self.heap) == path {
                         includee_matches += 1;
                     }
@@ -442,8 +442,8 @@ impl VM {
             return Ok(());
         }
 
-        let mut exportfiles: ConsList<RawValue> = ConsList::from_ref(export.pathname_requests);
-        while let Some(entry) = exportfiles.pop_raw(&self.heap) {
+        let mut export_paths: ConsList<RawValue> = ConsList::from_ref(export.pathname_requests);
+        while let Some(entry) = export_paths.pop_raw(&self.heap) {
             if entry == Combinator::Plus.into() {
                 continue;
             }
@@ -477,12 +477,12 @@ impl VM {
 
     /// Applies the include-expansion phase for the current load cycle.
     ///
-    /// C parity target: `files=append1(files,mkincludes(includees)),includees=NIL; ld_stuff=NIL;`
+    /// C parity target: `files=append1(files,mkincludes(included_files)),included_files=NIL; ld_stuff=NIL;`
     /// from `loadfile`.
     /// Current concrete behavior:
-    /// - appends currently tracked `includees` into `files` in list order,
-    /// - clears `includees` after append,
-    /// - clears `mkinclude_files` bookkeeping for interrupted include loads.
+    /// - appends currently tracked `included_files` into `files` in list order,
+    /// - clears `included_files` after append,
+    /// - clears `include_rollback_files` bookkeeping for interrupted include loads.
     ///
     /// Real `%include` discovery/compilation remains deferred to parser/typecheck integration.
     pub(super) fn run_mkincludes_phase(
@@ -490,24 +490,24 @@ impl VM {
         directive_payload: Option<&ParserTopLevelDirectivePayload>,
     ) -> Result<ConsList<FileRecord>, BytecodeError> {
         let Some(directive_payload) = directive_payload else {
-            if self.includees.is_empty() {
-                self.mkinclude_files = ConsList::EMPTY;
+            if self.included_files.is_empty() {
+                self.include_rollback_files = ConsList::EMPTY;
                 return Ok(ConsList::EMPTY);
             }
 
-            let materialized_includees = self.includees;
-            let mut includees = self.includees;
-            while let Some(includee) = includees.pop(&self.heap) {
+            let materialized_includees = self.included_files;
+            let mut included_files = self.included_files;
+            while let Some(includee) = included_files.pop(&self.heap) {
                 self.files.append(&mut self.heap, includee);
             }
 
-            self.includees = ConsList::EMPTY;
-            self.mkinclude_files = ConsList::EMPTY;
+            self.included_files = ConsList::EMPTY;
+            self.include_rollback_files = ConsList::EMPTY;
             return Ok(materialized_includees);
         };
 
         if directive_payload.include_requests.is_empty() {
-            self.mkinclude_files = ConsList::EMPTY;
+            self.include_rollback_files = ConsList::EMPTY;
             return Ok(ConsList::EMPTY);
         }
 
@@ -544,7 +544,7 @@ impl VM {
             self.files.append(&mut self.heap, includee);
         }
 
-        self.mkinclude_files = ConsList::EMPTY;
+        self.include_rollback_files = ConsList::EMPTY;
         Ok(materialized_includees)
     }
 
@@ -570,8 +570,8 @@ impl VM {
     /// C parity target: export-list checks gated by `ND`/undefined names.
     /// Current concrete behavior:
     /// - if there is no export list, this phase is a no-op,
-    /// - if undefined names are present, drop exports and return a typed blocking error,
-    /// - otherwise keep exports unchanged and continue.
+    /// - if undefined names are present, drop exported_identifiers and return a typed blocking error,
+    /// - otherwise keep exported_identifiers unchanged and continue.
     ///
     /// This implementation is intentionally partial: deeper closure/dependency
     /// analysis (for example `deps`-style traversal) remains deferred.
@@ -581,19 +581,19 @@ impl VM {
         materialized_includees: ConsList<FileRecord>,
     ) -> Result<CommittedDirectiveState, BytecodeError> {
         let Some(directive_payload) = directive_payload else {
-            if self.exports == NIL {
+            if self.exported_identifiers == NIL {
                 return Ok(CommittedDirectiveState::default());
             }
 
             if !self.undefined_names.is_empty() {
-                self.exports = NIL;
+                self.exported_identifiers = NIL;
                 return Err(BytecodeError::ExportClosureBlockedByUndefinedNames);
             }
 
             return Ok(CommittedDirectiveState {
-                exports: self.exports,
-                exportfiles: self.exportfiles,
-                embargoes: self.embargoes,
+                exported_identifiers: self.exported_identifiers,
+                export_paths: self.export_paths,
+                export_embargoes: self.export_embargoes,
             });
         };
 
@@ -606,8 +606,8 @@ impl VM {
         }
 
         let mut committed_exports = export.exported_ids.into();
-        let mut exportfiles: ConsList<Value> = ConsList::from_ref(export.pathname_requests);
-        while let Some(entry) = exportfiles.pop_value(&self.heap) {
+        let mut export_paths: ConsList<Value> = ConsList::from_ref(export.pathname_requests);
+        while let Some(entry) = export_paths.pop_value(&self.heap) {
             if entry == Combinator::Plus.into() {
                 continue;
             }
@@ -616,8 +616,8 @@ impl VM {
                 .heap
                 .resolve_string(entry)
                 .map_err(|_| BytecodeError::MalformedExportFileList)?;
-            let mut includees = materialized_includees;
-            while let Some(includee) = includees.pop(&self.heap) {
+            let mut included_files = materialized_includees;
+            while let Some(includee) = included_files.pop(&self.heap) {
                 if includee.get_file_name(&self.heap) != path {
                     continue;
                 }
@@ -634,17 +634,21 @@ impl VM {
         }
 
         let mut filtered_exports = NIL;
-        let mut exports: ConsList<Value> = ConsList::from_ref(committed_exports.into());
-        while let Some(export_id) = exports.pop_value(&self.heap) {
+        let mut exported_identifiers: ConsList<Value> =
+            ConsList::from_ref(committed_exports.into());
+        while let Some(export_id) = exported_identifiers.pop_value(&self.heap) {
             if !ConsList::<Value>::contains_value(&self.heap, export.embargoes.into(), export_id) {
                 filtered_exports = self.heap.cons_ref(export_id, filtered_exports);
             }
         }
 
         Ok(CommittedDirectiveState {
-            exports: ConsList::<Value>::reversed_value(&mut self.heap, filtered_exports),
-            exportfiles: export.pathname_requests.into(),
-            embargoes: export.embargoes.into(),
+            exported_identifiers: ConsList::<Value>::reversed_value(
+                &mut self.heap,
+                filtered_exports,
+            ),
+            export_paths: export.pathname_requests.into(),
+            export_embargoes: export.embargoes.into(),
         })
     }
 
@@ -652,14 +656,17 @@ impl VM {
     ///
     /// C parity target: the `bereaved` warning block in `loadfile`.
     /// Current concrete behavior:
-    /// - when exports are active and orphan risk was flagged (`unused_types`),
+    /// - when exported_identifiers are active and orphan risk was flagged (`unused_types`),
     ///   emit a warning in verbose/make contexts,
     /// - do not fail the load path for warning-only conditions.
     ///
     /// This implementation is intentionally partial: full bereaved analysis depends
     /// on deferred type/export internals.
     pub(super) fn emit_bereaved_warnings_partial(&mut self) {
-        if self.exports != NIL && self.unused_types && (self.options.verbose || self.making) {
+        if self.exported_identifiers != NIL
+            && self.unused_types
+            && (self.options.verbose || self.making)
+        {
             println!("warning, export list may be incomplete - missing typenames");
         }
     }
@@ -668,18 +675,18 @@ impl VM {
     ///
     /// C parity target: the `detrop` warning block in `loadfile`.
     /// Current concrete behavior:
-    /// - if deferred unused-definition diagnostics are present (`eprodnts != NIL`),
+    /// - if deferred unused-definition diagnostics are present (`empty_production_nonterminals != NIL`),
     ///   emit a warning in verbose/make contexts,
     /// - clear the deferred diagnostics marker once processed for this load cycle.
     ///
     /// This implementation is intentionally partial: full production of these
     /// diagnostics remains deferred to parser/type integration.
     pub(super) fn emit_unused_definition_diagnostics_partial(&mut self) {
-        if self.eprodnts != NIL && (self.options.verbose || self.making) {
+        if self.empty_production_nonterminals != NIL && (self.options.verbose || self.making) {
             println!("warning, script contains deferred unused-definition diagnostics");
         }
 
-        self.eprodnts = NIL;
+        self.empty_production_nonterminals = NIL;
     }
 
     /// Executes the codegen gate across loaded file definitions.
@@ -737,13 +744,13 @@ impl VM {
     /// Runs before dump serialization.
     /// Current concrete behavior:
     /// - computes invocation-scoped `internals` by internalizing non-exported IDs,
-    /// - uses `%export` presence to control export-list mode (`in_export_list`),
+    /// - uses `%export` presence to control export-list mode (`export_list_is_active`),
     /// - preserves existing dump-phase orchestration labels and call structure.
     pub(super) fn fix_exports(&mut self) {
         // Export-list mode mirrors the temporary export gate:
-        // when exports are present we must avoid internalizing those IDs.
-        let has_exports = self.exports != NIL;
-        self.in_export_list = has_exports;
+        // when exported_identifiers are present we must avoid internalizing those IDs.
+        let has_exports = self.exported_identifiers != NIL;
+        self.export_list_is_active = has_exports;
 
         // `internals` is invocation-scoped output from this pass.
         // Shape: cons(internal_id, ...), where each `internal_id` is the
@@ -758,18 +765,20 @@ impl VM {
         // Branch split:
         // - no `%export` directives at all => internalize `%free` formal IDs + subsidiary files,
         // - otherwise => scan all files and skip explicitly exported IDs.
-        let has_export_directive =
-            self.exports != NIL || self.exportfiles != NIL || self.embargoes != NIL;
+        let has_export_directive = self.exported_identifiers != NIL
+            || self.export_paths != NIL
+            || self.export_embargoes != NIL;
 
-        // `exports` is a list of identifier records that must remain public in this pass.
-        let exports: ConsList<IdentifierRecordRef> = ConsList::from_ref(self.exports.into());
+        // `exported_identifiers` is a list of identifier records that must remain public in this pass.
+        let exported_identifiers: ConsList<IdentifierRecordRef> =
+            ConsList::from_ref(self.exported_identifiers.into());
 
         if !has_export_directive {
-            // `free_ids` entries are formal-binding structures; we use `head(head(e))` to reach the ID.
+            // `free_identifiers` entries are formal-binding structures; we use `head(head(e))` to reach the ID.
             // Rust equivalent here:
             //   formal_binding_ref (CONS) -> head (formal tuple) -> head (ID ref).
-            let mut free_ids = self.free_ids;
-            while let Some(formal_binding_ref) = free_ids.pop_raw(&self.heap) {
+            let mut free_identifiers = self.free_identifiers;
+            while let Some(formal_binding_ref) = free_identifiers.pop_raw(&self.heap) {
                 let formal_binding_head = self.heap[formal_binding_ref].head;
                 let formal_id_ref = if self.heap[formal_binding_head].tag == Tag::Cons {
                     self.heap[formal_binding_head].head
@@ -786,16 +795,16 @@ impl VM {
             // This branch scans only subsidiary files (`rest(files)`), not the front script file.
             if let Some(mut subsidiary_files) = self.files.rest(&self.heap) {
                 while let Some(file_record) = subsidiary_files.pop(&self.heap) {
-                    self.collect_internalized_file_defs(file_record, exports);
+                    self.collect_internalized_file_defs(file_record, exported_identifiers);
                 }
             }
             return;
         }
 
-        // Export-active branch: scan every file record, but skip members of `exports`.
+        // Export-active branch: scan every file record, but skip members of `exported_identifiers`.
         let mut files = self.files;
         while let Some(file_record) = files.pop(&self.heap) {
-            self.collect_internalized_file_defs(file_record, exports);
+            self.collect_internalized_file_defs(file_record, exported_identifiers);
         }
     }
 
@@ -929,7 +938,7 @@ impl VM {
     fn collect_internalized_file_defs(
         &mut self,
         file_record: FileRecord,
-        exports: ConsList<IdentifierRecordRef>,
+        exported_identifiers: ConsList<IdentifierRecordRef>,
     ) {
         let mut definienda = file_record.get_definienda(&self.heap);
         while let Some(def_ref) = definienda.pop_raw(&self.heap) {
@@ -938,7 +947,7 @@ impl VM {
             }
 
             let definition_id = IdentifierRecordRef::from_ref(def_ref);
-            if exports.contains(&self.heap, definition_id) {
+            if exported_identifiers.contains(&self.heap, definition_id) {
                 continue;
             }
 
@@ -1214,7 +1223,7 @@ impl VM {
                     here_info.script_file,
                     here_info.line_number,
                 );
-                self.errs.push(raw_here_info.get_ref());
+                self.error_locations.push(raw_here_info.get_ref());
             }
 
             self.parser_diagnostics.push(diagnostic);
@@ -1283,10 +1292,10 @@ impl VM {
     ///
     /// Current concrete behavior:
     /// - exits export-list mode,
-    /// - in exports-only mode, preserves internalized state for export listing,
+    /// - in exported_identifiers-only mode, preserves internalized state for export listing,
     /// - otherwise restores each entry currently tracked in `internals` and clears it.
     pub(super) fn unfix_exports(&mut self) {
-        self.in_export_list = false;
+        self.export_list_is_active = false;
         if !self.options.make_exports.is_empty() {
             return;
         }

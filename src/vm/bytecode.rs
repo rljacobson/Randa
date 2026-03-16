@@ -436,7 +436,7 @@ impl VM {
 
         // Reset per-load suppression bookkeeping before decoding this dump stream.
         self.suppressed = ConsList::EMPTY; // SUPPRESSED  // list of `-id' aliases successfully obeyed
-        self.suppressed_t = ConsList::EMPTY; // TSUPPRESSED // list of -typename aliases (illegal just now)
+        self.suppressed_type_aliases = ConsList::EMPTY; // TSUPPRESSED // list of -typename aliases (illegal just now)
 
         // The following parses the rest of the binary file. See
         // (Serialized Binary Representation.md)[../Serialized Binary Representation.md]
@@ -603,9 +603,9 @@ impl VM {
         }
 
         // Parse DEF_X
-        // Parse free_ids
-        if is_main_script || self.includees.is_empty() {
-            self.free_ids =
+        // Parse free_identifiers
+        if is_main_script || self.included_files.is_empty() {
+            self.free_identifiers =
                 ConsList::from_ref(self.load_defs(&mut byte_iter.by_ref().copied())?.into());
         } else {
             let defs = self.load_defs(&mut byte_iter.by_ref().copied())?;
@@ -767,7 +767,7 @@ impl VM {
                         .start_read_vals_ref(Value::None, previous_value.into());
                     item_stack.push(new_value.into());
 
-                    self.rv_script = true;
+                    self.readvals_script_is_active = true;
                 }
 
                 Bytecode::ID => {
@@ -850,7 +850,7 @@ impl VM {
                     // | 1    | Terminate a list of definitions       | `[definition*] DEF_X`           |
                     // | 2    | Terminate a single identifier record  | `[val] [type] [who] [id] DEF_X` |
                     // | 3    | Terminate a private name              | `[val] [pname] DEF_X`           |
-                    // | 4    | Precedes list of free IDs             | `DEF_X [freeids]`               |
+                    // | 4    | Precedes list of free identifiers     | `DEF_X [free_identifiers]`      |
                     // | 5    | Precedes definition list of internals | `DEF_X [definition-list]`       |
 
                     // The different cases can be partially distinguished by the number of items already read into `defs`.
@@ -922,7 +922,8 @@ impl VM {
                                         if let Some(found_id) =
                                             self.find_alias_source_id_for_target(alias_target)
                                         {
-                                            self.suppressed_t.push(&mut self.heap, found_id);
+                                            self.suppressed_type_aliases
+                                                .push(&mut self.heap, found_id);
                                         }
                                     } else if new_id_value.is_undefined() {
                                         // Special kludge for undefined names, necessary only if we allow names specified

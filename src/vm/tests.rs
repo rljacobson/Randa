@@ -50,7 +50,7 @@ fn export_payload(
     exported_ids: &[&str],
     pathname_requests: &[&str],
     include_current_script: bool,
-    embargoes: &[&str],
+    export_embargoes: &[&str],
 ) -> ParserTopLevelDirectivePayload {
     let exported_ids = exported_ids.iter().rev().fold(NIL, |list, name| {
         let id = vm.intern_identifier(name);
@@ -67,7 +67,7 @@ fn export_payload(
             vm.heap.cons_ref(Value::Reference(path_ref), list)
         },
     );
-    let embargoes = embargoes.iter().rev().fold(NIL, |list, name| {
+    let export_embargoes = export_embargoes.iter().rev().fold(NIL, |list, name| {
         let id = vm.intern_identifier(name);
         vm.heap.cons_ref(id.into(), list)
     });
@@ -78,7 +78,7 @@ fn export_payload(
             anchor: test_anchor(vm, source_path, line_number),
             exported_ids: exported_ids.into(),
             pathname_requests: pathname_requests.into(),
-            embargoes: embargoes.into(),
+            embargoes: export_embargoes.into(),
         }),
     }
 }
@@ -362,7 +362,7 @@ fn load_file_runs_include_export_directive_pipeline_and_commits_exports() {
             "success-postlude",
         ]
     );
-    assert_ne!(vm.exports, NIL);
+    assert_ne!(vm.exported_identifiers, NIL);
     assert!(!vm.loading);
 }
 
@@ -391,9 +391,9 @@ fn load_file_exportfile_validation_failure_leaves_no_authoritative_commit() {
         vm.last_load_phase_trace,
         vec!["begin", "parse", "exportfile-checks"]
     );
-    assert_eq!(vm.exports, NIL);
-    assert_eq!(vm.exportfiles, NIL);
-    assert_eq!(vm.embargoes, NIL);
+    assert_eq!(vm.exported_identifiers, NIL);
+    assert_eq!(vm.export_paths, NIL);
+    assert_eq!(vm.export_embargoes, NIL);
     assert!(!vm.loading);
 }
 
@@ -422,9 +422,9 @@ fn load_file_include_materialization_failure_leaves_no_authoritative_commit() {
         vm.last_load_phase_trace,
         vec!["begin", "parse", "exportfile-checks", "include-expansion"]
     );
-    assert_eq!(vm.exports, NIL);
-    assert_eq!(vm.exportfiles, NIL);
-    assert_eq!(vm.embargoes, NIL);
+    assert_eq!(vm.exported_identifiers, NIL);
+    assert_eq!(vm.export_paths, NIL);
+    assert_eq!(vm.export_embargoes, NIL);
     assert_eq!(vm.files.len(&vm.heap), 1);
     assert!(!vm.loading);
 }
@@ -453,12 +453,12 @@ fn load_file_include_and_exportfile_success_commits_after_validation() {
 
     assert!(result.is_ok());
     assert_eq!(vm.files.len(&vm.heap), 2);
-    assert_eq!(vm.includees, ConsList::EMPTY);
-    assert_ne!(vm.exports, NIL);
-    assert_ne!(vm.exportfiles, NIL);
+    assert_eq!(vm.included_files, ConsList::EMPTY);
+    assert_ne!(vm.exported_identifiers, NIL);
+    assert_ne!(vm.export_paths, NIL);
     assert_eq!(
         vm.identifier_name(
-            ConsList::<IdentifierRecordRef>::from_ref(vm.exports.into())
+            ConsList::<IdentifierRecordRef>::from_ref(vm.exported_identifiers.into())
                 .head(&vm.heap)
                 .expect("expected committed export id")
         ),
@@ -467,7 +467,7 @@ fn load_file_include_and_exportfile_success_commits_after_validation() {
     assert_eq!(
         vm.heap
             .resolve_string(
-                ConsList::<Value>::from_ref(vm.exportfiles.into())
+                ConsList::<Value>::from_ref(vm.export_paths.into())
                     .value_head(&vm.heap)
                     .expect("expected committed exportfile path")
             )
@@ -597,7 +597,7 @@ fn parse_source_script_commits_returned_syntax_diagnostic_before_returning_statu
             .script_file,
         source_path_str
     );
-    assert_eq!(vm.errs.len(), 1);
+    assert_eq!(vm.error_locations.len(), 1);
 }
 
 #[test]
@@ -606,7 +606,7 @@ fn success_postlude_phase_resets_syntax_editor_state() {
     vm.initializing = false;
     vm.sorted = false;
     vm.error_line = 42;
-    vm.errs = vec![Combinator::True.into()];
+    vm.error_locations = vec![Combinator::True.into()];
 
     let source_path = unique_test_path("success_postlude_reset.m");
     std::fs::write(&source_path, "+").expect("failed to write source test file");
@@ -617,7 +617,7 @@ fn success_postlude_phase_resets_syntax_editor_state() {
     assert!(result.is_ok());
     assert!(vm.sorted);
     assert_eq!(vm.error_line, 0);
-    assert!(vm.errs.is_empty());
+    assert!(vm.error_locations.is_empty());
     assert!(vm.parser_diagnostics.is_empty());
     assert!(!vm.old_files.is_empty());
 }
@@ -627,8 +627,8 @@ fn syntax_fallback_resets_syntax_editor_state_outside_initialization() {
     let mut vm = VM::new_for_tests();
     vm.initializing = false;
     vm.error_line = 17;
-    vm.errs = vec![Combinator::False.into()];
-    vm.includees = vm.empty_environment_for_source("stale_includee.m", UNIX_EPOCH);
+    vm.error_locations = vec![Combinator::False.into()];
+    vm.included_files = vm.empty_environment_for_source("stale_includee.m", UNIX_EPOCH);
 
     let source_path = unique_test_path("syntax_reset.m");
     std::fs::write(&source_path, "1 +\n").expect("failed to write source test file");
@@ -638,10 +638,10 @@ fn syntax_fallback_resets_syntax_editor_state_outside_initialization() {
 
     assert!(result.is_ok());
     assert_eq!(vm.error_line, 0);
-    assert!(vm.errs.is_empty());
+    assert!(vm.error_locations.is_empty());
     assert!(vm.parser_diagnostics.is_empty());
     assert!(vm.files.is_empty());
-    assert!(vm.includees.is_empty());
+    assert!(vm.included_files.is_empty());
     assert!(!vm.old_files.is_empty());
 }
 
@@ -891,8 +891,8 @@ fn include_expansion_phase_appends_includees_and_clears_bookkeeping() {
     let result = vm.run_mkincludes_phase(Some(&payload));
 
     assert!(result.is_ok());
-    assert!(vm.includees.is_empty());
-    assert!(vm.mkinclude_files.is_empty());
+    assert!(vm.included_files.is_empty());
+    assert!(vm.include_rollback_files.is_empty());
     assert_eq!(vm.files.len(&vm.heap), 3);
 }
 
@@ -900,7 +900,7 @@ fn include_expansion_phase_appends_includees_and_clears_bookkeeping() {
 fn include_expansion_phase_is_noop_when_includees_empty() {
     let mut vm = VM::new_for_tests();
     vm.files = ConsList::EMPTY;
-    vm.includees = ConsList::EMPTY;
+    vm.included_files = ConsList::EMPTY;
     let include_stub = FileRecord::new(
         &mut vm.heap,
         unique_test_path("ld_stuff.m").to_string_lossy().to_string(),
@@ -909,14 +909,14 @@ fn include_expansion_phase_is_noop_when_includees_empty() {
         ConsList::EMPTY,
     );
     let include_list = ConsList::new(&mut vm.heap, include_stub);
-    vm.mkinclude_files = ConsList::new(&mut vm.heap, include_list);
+    vm.include_rollback_files = ConsList::new(&mut vm.heap, include_list);
 
     let result = vm.run_mkincludes_phase(None);
 
     assert!(result.is_ok());
     assert!(vm.files.is_empty());
-    assert!(vm.includees.is_empty());
-    assert!(vm.mkinclude_files.is_empty());
+    assert!(vm.included_files.is_empty());
+    assert!(vm.include_rollback_files.is_empty());
 }
 
 #[test]
@@ -976,7 +976,7 @@ fn export_closure_phase_clears_exports_when_undefined_names_present() {
         result,
         Err(BytecodeError::ExportClosureBlockedByUndefinedNames)
     ));
-    assert_eq!(vm.exports, NIL);
+    assert_eq!(vm.exported_identifiers, NIL);
 }
 
 #[test]
@@ -997,13 +997,13 @@ fn export_closure_phase_keeps_exports_when_no_undefined_names() {
 
     assert!(result.is_ok());
     let committed = result.expect("expected committed export payload");
-    assert_ne!(committed.exports, NIL);
+    assert_ne!(committed.exported_identifiers, NIL);
 }
 
 #[test]
 fn bereaved_warning_phase_is_noop_without_risk_flag() {
     let mut vm = VM::new_for_tests();
-    vm.exports = NIL;
+    vm.exported_identifiers = NIL;
     vm.unused_types = false;
 
     vm.emit_bereaved_warnings_partial();
@@ -1014,30 +1014,30 @@ fn bereaved_warning_phase_is_noop_without_risk_flag() {
 fn bereaved_warning_phase_returns_ok_when_risk_flagged() {
     let mut vm = VM::new_for_tests();
     let export_id = vm.heap.make_empty_identifier("exported_name");
-    vm.exports = vm.heap.cons_ref(export_id.into(), NIL);
+    vm.exported_identifiers = vm.heap.cons_ref(export_id.into(), NIL);
     vm.unused_types = true;
 
     vm.emit_bereaved_warnings_partial();
     assert!(vm.unused_types);
-    assert_ne!(vm.exports, NIL);
+    assert_ne!(vm.exported_identifiers, NIL);
 }
 
 #[test]
 fn unused_diagnostics_phase_clears_deferred_marker() {
     let mut vm = VM::new_for_tests();
-    vm.eprodnts = Combinator::True.into();
+    vm.empty_production_nonterminals = Combinator::True.into();
 
     vm.emit_unused_definition_diagnostics_partial();
-    assert_eq!(vm.eprodnts, NIL);
+    assert_eq!(vm.empty_production_nonterminals, NIL);
 }
 
 #[test]
 fn unused_diagnostics_phase_is_stable_when_marker_absent() {
     let mut vm = VM::new_for_tests();
-    vm.eprodnts = NIL;
+    vm.empty_production_nonterminals = NIL;
 
     vm.emit_unused_definition_diagnostics_partial();
-    assert_eq!(vm.eprodnts, NIL);
+    assert_eq!(vm.empty_production_nonterminals, NIL);
 }
 
 #[test]
@@ -1417,13 +1417,13 @@ fn source_update_check_is_false_when_dump_timestamp_is_not_older_than_source() {
 fn unfix_exports_clears_export_processing_state() {
     let mut vm = VM::new_for_tests();
 
-    vm.in_export_list = true;
+    vm.export_list_is_active = true;
     let internal = vm.heap.make_empty_identifier("internal_name");
     vm.internals = ConsList::new(&mut vm.heap, internal);
 
     vm.unfix_exports();
 
-    assert!(!vm.in_export_list);
+    assert!(!vm.export_list_is_active);
     assert!(vm.internals.is_empty());
 }
 
@@ -1431,14 +1431,14 @@ fn unfix_exports_clears_export_processing_state() {
 fn unfix_exports_preserves_internals_in_exports_mode() {
     let mut vm = VM::new_for_tests();
 
-    vm.in_export_list = true;
+    vm.export_list_is_active = true;
     vm.options.make_exports.push("script.m".to_string());
     let internal = vm.heap.make_empty_identifier("internal_name");
     vm.internals = ConsList::new(&mut vm.heap, internal);
 
     vm.unfix_exports();
 
-    assert!(!vm.in_export_list);
+    assert!(!vm.export_list_is_active);
     assert!(!vm.internals.is_empty());
 }
 
@@ -1466,11 +1466,11 @@ fn fixexports_internalizes_nested_free_id_bindings() {
         .heap
         .cons_ref(free_binding.into(), Combinator::Nil.into())
         .into();
-    vm.free_ids = ConsList::from_ref(free_ids_list);
+    vm.free_identifiers = ConsList::from_ref(free_ids_list);
 
-    vm.exports = NIL;
-    vm.exportfiles = NIL;
-    vm.embargoes = NIL;
+    vm.exported_identifiers = NIL;
+    vm.export_paths = NIL;
+    vm.export_embargoes = NIL;
 
     vm.fix_exports();
 
@@ -1482,7 +1482,7 @@ fn fixexports_internalizes_nested_free_id_bindings() {
 fn fixexports_internalize_undef_writes_fallback_application_payload() {
     let mut vm = VM::new_for_tests();
 
-    vm.exportfiles = Combinator::True.into();
+    vm.export_paths = Combinator::True.into();
 
     let source_path = unique_test_path("fixexports_undef_payload.m")
         .to_string_lossy()
@@ -1520,7 +1520,7 @@ fn fixexports_internalize_undef_writes_fallback_application_payload() {
 fn fixexports_internalize_type_name_wraps_definition_with_alias_metadata() {
     let mut vm = VM::new_for_tests();
 
-    vm.exportfiles = Combinator::True.into();
+    vm.export_paths = Combinator::True.into();
 
     let source_path = unique_test_path("fixexports_type_metadata.m")
         .to_string_lossy()

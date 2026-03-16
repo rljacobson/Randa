@@ -54,39 +54,39 @@ use crate::{
   /// The heap on which everything is constructed.
   heap: &'ctx /* 'fix quotes */ mut Heap,
   vm: ParserVmContext,
-  synerr: bool,
+  syntax_error_found: bool,
   diagnostics: ParserRunDiagnostics,
   include_export_script_parsed: bool,
   directive_include_requests: Vec<ParserIncludeDirectivePayload>,
 
-  lexstates: RawValue,
-  idsused: RawValue,
-  lexdefs: RawValue,
-  last_name: RawValue,
-  ihlist: RawValue,
+  lex_states: RawValue,
+  used_identifiers: RawValue,
+  lex_rule_definitions: RawValue,
+  last_identifier: RawValue,
+  inherited_attributes: RawValue,
   nonterminals: RawValue,
-  eprodnts: RawValue,
-  ntspecmap: RawValue,
-  ntmap: RawValue,
-  last_here: RawValue,
+  empty_production_nonterminals: RawValue,
+  nonterminal_specification_map: RawValue,
+  nonterminal_map: RawValue,
+  last_diagnostic_location: RawValue,
 
-  inbnf: u8,   // 0=false, 1=true, 2=something about offside rule
-  inexplist: bool,
-  inlex: u8,   // 0=false, 1=true, 2=??
-  tvarscope: bool,
+  bnf_mode: u8,   // 0=false, 1=true, 2=something about offside rule
+  export_list_mode: bool,
+  lex_mode: u8,   // 0=false, 1=true, 2=??
+  type_variable_scope: bool,
 
-  sreds: i16,  // counts something
+  semantic_reduction_count: i16,
   open_bracket_count: i16,
 
-  exports: RawValue,
-  exportfiles: RawValue,
-  embargoes: RawValue,
-  includees: RawValue,
-  freeids: RawValue,
+  exported_identifiers: RawValue,
+  export_path_requests: RawValue,
+  export_embargoes: RawValue,
+  include_requests: RawValue,
+  free_identifiers: RawValue,
 
-  fnts: RawValue,
-  dicp: String,
-  dicq: String,
+  bnf_enabled: RawValue,
+  identifier_dictionary: String,
+  constructor_dictionary: String,
 }
 
 %code {
@@ -254,7 +254,7 @@ include_export_item:
 
 export_anchor:
     Export {
-        self.inexplist = true;
+        self.export_list_mode = true;
         let here_info = HereInfo::from_source_location(
           self.yylexer.source_name(),
           self.yylexer.source_text(),
@@ -271,15 +271,15 @@ export_anchor:
 
 export_directive:
     export_anchor export_items {
-        self.inexplist = false;
+        self.export_list_mode = false;
         let export_parts = $2;
-        if self.exports != NIL_RAW {
+        if self.exported_identifiers != NIL_RAW {
           self.syntax("multiple %export statements are illegal\n");
         } else {
-          if export_parts == NIL && self.exportfiles == NIL_RAW && self.embargoes != NIL_RAW {
-            self.exportfiles = self.heap.cons_ref(Combinator::Plus.into(), NIL).into();
+          if export_parts == NIL && self.export_path_requests == NIL_RAW && self.export_embargoes != NIL_RAW {
+            self.export_path_requests = self.heap.cons_ref(Combinator::Plus.into(), NIL).into();
           }
-          self.exports = self.heap.cons_ref($1, export_parts).into();
+          self.exported_identifiers = self.heap.cons_ref($1, export_parts).into();
         }
         $$ = NIL;
       }
@@ -289,28 +289,28 @@ export_items:
     export_items Name { $$ = self.heap.cons_ref($2, $1); }
     | export_items Minus Name {
         $$ = $1;
-        self.embargoes = self.heap.cons_ref($3, self.embargoes.into()).into();
+        self.export_embargoes = self.heap.cons_ref($3, self.export_embargoes.into()).into();
       }
     | export_items StringLiteral {
         $$ = $1;
-        self.exportfiles = self.heap.cons_ref($2, self.exportfiles.into()).into();
+        self.export_path_requests = self.heap.cons_ref($2, self.export_path_requests.into()).into();
       }
     | export_items Plus {
         $$ = $1;
-        self.exportfiles = self.heap.cons_ref(Combinator::Plus.into(), self.exportfiles.into()).into();
+        self.export_path_requests = self.heap.cons_ref(Combinator::Plus.into(), self.export_path_requests.into()).into();
       }
     | Name { $$ = self.heap.cons_ref($1, NIL); }
     | Minus Name {
         $$ = NIL;
-        self.embargoes = self.heap.cons_ref($2, self.embargoes.into()).into();
+        self.export_embargoes = self.heap.cons_ref($2, self.export_embargoes.into()).into();
       }
     | StringLiteral {
         $$ = NIL;
-        self.exportfiles = self.heap.cons_ref($1, self.exportfiles.into()).into();
+        self.export_path_requests = self.heap.cons_ref($1, self.export_path_requests.into()).into();
       }
     | Plus {
         $$ = NIL;
-        self.exportfiles = self.heap.cons_ref(Combinator::Plus.into(), self.exportfiles.into()).into();
+        self.export_path_requests = self.heap.cons_ref(Combinator::Plus.into(), self.export_path_requests.into()).into();
       }
     ;
 
@@ -631,9 +631,9 @@ relsn:                     /* reln or presection */
 arg:
     /* `%lex` parsing remains outside the current expression-only parser path. */
     /* empty */ {
-      if !self.synerr {
-        self.lexstates = NIL_RAW;
-        self.inlex = 1;
+      if !self.syntax_error_found {
+        self.lex_states = NIL_RAW;
+        self.lex_mode = 1;
       }
       $$ = NIL;
     }
@@ -726,9 +726,9 @@ arg:
     ;
 
 lexrules:
-    lexrules lstart here re indent { if !SYNERR { self.inlex = 2; } }
+    lexrules lstart here re indent { if !SYNERR { self.lex_mode = 2; } }
 
-    Arrow exp lpostfix { if !SYNERR { self.inlex = 1; } } outdent {
+    Arrow exp lpostfix { if !SYNERR { self.lex_mode = 1; } } outdent {
         if $9 < 0 && e_re($4) {
           errs = $3;
           syntax("illegal lex rule - lhs matches empty\n");
@@ -738,7 +738,7 @@ lexrules:
         let cons = self.heap.cons_ref(cons_a, cons_a);
         $$ = self.heap.cons_ref(cons, $1);
       }
-    | lexdefs { $$ = NIL; }
+    | lex_rule_definitions { $$ = NIL; }
     ;
 
 lstart:
@@ -747,7 +747,7 @@ lstart:
         let mut ns = NIL;
         let mut next_item = $2;
     while next_item != NIL {
-      let mut x = &mut self.lexstates;
+      let mut x = &mut self.lex_states;
       let mut i = 1;
 
       loop {
@@ -792,7 +792,7 @@ lpostfix:
         /* empty */ { $$ = RawValue::from(-1).into(); }
         | Begin ConstructorName
         {
-          let mut x = &mut self.lexstates;
+          let mut x = &mut self.lex_states;
           let mut i = 1;
           loop
           {
@@ -819,12 +819,12 @@ lpostfix:
           }
         ;
 
-lexdefs:
-    lexdefs LexDef indent Equal re outdent {
+lex_rule_definitions:
+    lex_rule_definitions LexDef indent Equal re outdent {
             let cons = self.heap.cons_ref($2, $5);
-            self.lexdefs = self.heap.cons_ref(cons, self.lexdefs.into()).into();
+            self.lex_rule_definitions = self.heap.cons_ref(cons, self.lex_rule_definitions.into()).into();
         }
-    | /* empty */ { self.lexdefs = NIL_RAW; }
+    | /* empty */ { self.lex_rule_definitions = NIL_RAW; }
     ;
 
 re:   /* regular expression */
@@ -894,7 +894,7 @@ lunit:
       }
     | Dot { $$ = Combinator::Lex_Dot.into(); }
     | name {
-        let mut x = self.lexdefs;
+        let mut x = self.lex_rule_definitions;
     loop {
         if x == NIL_RAW { break; }
         let hd = self.heap[x].head;
@@ -971,7 +971,7 @@ def:
         r = self.heap.label_ref($5, r);
         /* to help locate type errors */
         declare(l, r);
-        self.last_name = l.into();
+        self.last_identifier = l.into();
       }
 
     | spec {
@@ -1019,13 +1019,13 @@ def:
           );
           tids = self.heap.cons_ref(head(self.heap[x].head), tids);
           /* check for presence of showfunction */
-          // Are  dicp  and  dicq  parts of a hash table?
-          self.dicp = "show".to_string() + get_id(self.heap[tids].head);
+          // Are identifier_dictionary and constructor_dictionary parts of a hash table?
+          self.identifier_dictionary = "show".to_string() + get_id(self.heap[tids].head);
 
       // The original parser builds a temporary dictionary name of the form
       // `show<type>` and resolves it through `name()`. The typed identifier
       // lookup/intern seam for that path is still missing here.
-           self.dicq = dicp + strlen(dicp) + 1;
+           self.constructor_dictionary = String::new();
            let shfn = name();
            if member(ids, shfn) {
             t_showfn(self.heap[tids].head) = shfn;
@@ -1107,41 +1107,41 @@ def:
       }
 
     | indent setexp Export parts outdent {
-        self.inexplist = false;
-        if self.exports != NIL_RAW {
+        self.export_list_mode = false;
+        if self.exported_identifiers != NIL_RAW {
           errs = $2;
           syntax("multiple %export statements are illegal\n");
         } else {
-          if $4 == NIL && self.exportfiles == NIL_RAW && self.embargoes != NIL_RAW {
-            self.exportfiles = self.heap.cons_ref(Combinator::Plus.into(), NIL).into();
+          if $4 == NIL && self.export_path_requests == NIL_RAW && self.export_embargoes != NIL_RAW {
+            self.export_path_requests = self.heap.cons_ref(Combinator::Plus.into(), NIL).into();
           }
-          self.exports = self.heap.cons_ref($2, $4).into();  /* self.heap.cons(hereinfo, identifiers) */
+          self.exported_identifiers = self.heap.cons_ref($2, $4).into();  /* self.heap.cons(hereinfo, identifiers) */
         }
         $$ = self.heap.cons_ref(self.heap.nill, NIL);
       }
 
     | Free here OpenBrace specs CloseBrace {
-        if self.freeids != NIL_RAW {
+        if self.free_identifiers != NIL_RAW {
           errs=$2;
           syntax("multiple %free statements are illegal\n");
         } else {
           let mut x = reverse($4);
           while (x!=NIL&&!SYNERR) {
             specify(hd[hd[x]], tl[tl[hd[x]]], hd[tl[hd[x]]]);
-            self.freeids = self.heap.cons_ref(head(hd[hd[x]]), self.freeids.into()).into();
+            self.free_identifiers = self.heap.cons_ref(head(hd[hd[x]]), self.free_identifiers.into()).into();
             if (tl[tl[hd[x]]]==Type::Type.into()) {
-              t_class(self.heap[self.freeids].head) = IdentifierValueTypeKind::Free;
+              t_class(self.heap[self.free_identifiers].head) = IdentifierValueTypeKind::Free;
             }
             else {
-              id_val(self.heap[self.freeids].head) = FREE; /* conventional value */
+              id_val(self.heap[self.free_identifiers].head) = FREE; /* conventional value */
             }
             x = self.heap[x].tail;
           }
           fil_share(self.heap[files].head) = 0; /* parameterised scripts unshareable */
-          self.freeids = alfasort(self.freeids.into()).into();
-          let mut freeid_cursor = self.freeids;
+          self.free_identifiers = alfasort(self.free_identifiers.into()).into();
+          let mut freeid_cursor = self.free_identifiers;
           while freeid_cursor!=NIL {
-            /* each element of freeids is of the form
+            /* each element of free_identifiers is of the form
               self.heap.cons(id, self.heap.cons(original_name, type)) */
             self.heap[freeid_cursor].head = self.heap.cons_ref(
               self.heap[freeid_cursor].head,
@@ -1160,11 +1160,11 @@ def:
         // extern char *dicp;
         // extern word CLASHES, BAD_DUMP;
         /* $1 contains file+hereinfo */
-        self.includees = self.heap.cons_ref(self.heap.cons_ref($1, self.heap.cons_ref($3, $2)), self.includees.into()).into();
+        self.include_requests = self.heap.cons_ref(self.heap.cons_ref($1, self.heap.cons_ref($3, $2)), self.include_requests.into()).into();
         $$ = self.heap.cons_ref(self.heap.nill, NIL);
       }
 
-    | here BNF { startbnf(); self.inbnf = 1; } names outdent productions EndIR {
+    | here BNF { startbnf(); self.bnf_mode = 1; } names outdent productions EndIR {
         /* fiddle - `indent' done by yylex() while processing directive */
         let mut lhs = NIL;
         let mut p = $6;
@@ -1172,8 +1172,8 @@ def:
         let mut body = NIL;
         let mut startswith = NIL;
         let mut leftrecs = NIL;
-        self.ihlist = 0;
-        self.inbnf = 0;
+        self.inherited_attributes = 0;
+        self.bnf_mode = 0;
         self.nonterminals = UNION(self.nonterminals.into(), $4).into();
         while p!=NIL {
           if (dval(self.heap[p].head)==Combinator::Undef.into()) {
@@ -1196,14 +1196,14 @@ def:
           printlist("", self.nonterminals.into());
           acterror();
         } else { /* compute list of nonterminals admitting empty prodn */
-          self.eprodnts = NIL_RAW;
+          self.empty_production_nonterminals = NIL_RAW;
           let mut changed = true;
           while changed {
             changed = false;
             p = $6;
             while p!=NIL {
-              if(!member(self.eprodnts.into(), dlhs(self.heap[p].head)) && eprod(dval(self.heap[p].head))) {
-                self.eprodnts = self.heap.cons_ref(dlhs(self.heap[p].head), self.eprodnts.into()).into();
+              if(!member(self.empty_production_nonterminals.into(), dlhs(self.heap[p].head)) && eprod(dval(self.heap[p].head))) {
+                self.empty_production_nonterminals = self.heap.cons_ref(dlhs(self.heap[p].head), self.empty_production_nonterminals.into()).into();
                 changed = true;
               }
               p = self.heap[p].tail;
@@ -1251,7 +1251,7 @@ def:
           if(start_symbols==NIL) { /* implied start symbol */
             start_symbols = self.heap.cons_ref(dlhs(self.heap[lastlink($6)].head), NIL);
           }
-          self.fnts = 1; /* fnts is flag indicating %bnf in use */
+          self.bnf_enabled = 1; /* `%bnf` is enabled for this parser run. */
           if (self.heap[start_symbols].tail==NIL) { /* only one start symbol */
             subjects = getfname(self.heap[start_symbols].head);
             body = self.heap.apply2(Combinator::G_Close.into(), str_conv(get_id(self.heap[start_symbols].head)), self.heap[start_symbols].head);
@@ -1276,7 +1276,7 @@ setexp:
     here {
         /* hack to fix lex analyser */
         $$ = $1;
-        self.inexplist = true;
+        self.export_list_mode = true;
       }
     ;
 
@@ -1361,19 +1361,19 @@ negmod:
 here:
     /* empty */ {
         // extern word line_no;
-        self.last_here = fileinfo(get_fil(current_file), line_no).into();
-        $$ = self.last_here.into();
+        self.last_diagnostic_location = fileinfo(get_fil(current_file), line_no).into();
+        $$ = self.last_diagnostic_location.into();
         /* (script, line_no) for diagnostics */
       }
     ;
 
 act1:
-    /* empty */ { self.tvarscope = true; $$ = NIL; };
+    /* empty */ { self.type_variable_scope = true; $$ = NIL; };
 
 act2:
     /* empty */ {
-        self.tvarscope = false;
-        self.idsused = NIL_RAW;
+        self.type_variable_scope = false;
+        self.used_identifiers = NIL_RAW;
         $$ = NIL;
       }
     ;
@@ -1499,15 +1499,15 @@ v2:
 
 v3:
     Name {
-        if (self.sreds != 0 && member(gvars, $1)){
+        if (self.semantic_reduction_count != 0 && member(gvars, $1)){
           syntax("illegal use of $num symbol\n");
         }
         /* cannot use grammar variable in a binding position */
-        if (memb(self.idsused.into(), $1)) {
+        if (memb(self.used_identifiers.into(), $1)) {
           $$ = self.heap.cons_ref(Token::Constant.into(), $1);
         } /* picks up repeated names in a template */
         else {
-          self.idsused = self.heap.cons_ref($1, self.idsused.into()).into();
+          self.used_identifiers = self.heap.cons_ref($1, self.used_identifiers.into()).into();
         }
       }
     | ConstructorName
@@ -1574,7 +1574,7 @@ argtype:
     Name { $$ = transtypeid($1); }
            /* necessary while prelude not meta_tchecked (for prelude) */
     | typevar {
-        if (self.tvarscope && !memb(self.idsused.into(), $1)){
+        if (self.type_variable_scope && !memb(self.used_identifiers.into(), $1)){
           printf(
             "%ssyntax error: unbound type variable ",
             if echoing {"\n"} else {""}
@@ -1617,22 +1617,22 @@ parts: /* returned in reverse order */
     parts Name { $$ = add1($2, $1); }
     | parts Minus Name {
         $$ = $1;
-        self.embargoes = add1($3, self.embargoes.into()).into();
+        self.export_embargoes = add1($3, self.export_embargoes.into()).into();
       }
-    | parts PathName { $$ = $1; } /*the pathnames are placed on exportfiles in yylex*/
+    | parts PathName { $$ = $1; } /* the pathnames are placed on export_path_requests in yylex */
     | parts Plus {
         $$ = $1;
-        self.exportfiles = self.heap.cons_ref(Combinator::Plus.into(), self.exportfiles.into()).into();
+        self.export_path_requests = self.heap.cons_ref(Combinator::Plus.into(), self.export_path_requests.into()).into();
       }
     | Name { $$ = add1($1, NIL); }
     | Minus Name {
         $$ = NIL;
-        self.embargoes = add1($2, self.embargoes.into()).into();
+        self.export_embargoes = add1($2, self.export_embargoes.into()).into();
       }
     | PathName { $$ = NIL; }
     | Plus {
         $$ = NIL;
-        self.exportfiles = self.heap.cons_ref(Combinator::Plus.into(), self.exportfiles.into()).into();
+        self.export_path_requests = self.heap.cons_ref(Combinator::Plus.into(), self.export_path_requests.into()).into();
       }
     ;
 
@@ -1691,7 +1691,7 @@ lspecs:  /* returns a list of self.heap.cons(id, self.heap.cons(here, type))
     ;
 
 lspec:
-    namelist indent here {self.inbnf=0;} ColonColon type outdent { $$ = self.heap.cons_ref($1, self.heap.cons_ref($3, $6)); };
+    namelist indent here {self.bnf_mode=0;} ColonColon type outdent { $$ = self.heap.cons_ref($1, self.heap.cons_ref($3, $6)); };
 
 namelist:
     Name Comma namelist { $$ = self.heap.cons_ref($1, $3); }
@@ -1707,7 +1707,7 @@ typeform:
     ConstructorName typevars { syntax("upper case identifier out of context\n"); }
     | Name typevars   /* warning if typevar is repeated */ {
         $$ = $1;
-        self.idsused = $2.into();
+        self.used_identifiers = $2.into();
         let mut typevars = $2;
         while(typevars!=NIL) {
           $$ = self.heap.apply_ref($$, self.heap[typevars].head.into());
@@ -1718,7 +1718,7 @@ typeform:
         if(eqtvar($1, $3)){
           syntax("repeated type variable in typeform\n");
         }
-        self.idsused = self.heap.cons_ref($1, self.heap.cons_ref($3, NIL)).into();
+        self.used_identifiers = self.heap.cons_ref($1, self.heap.cons_ref($3, NIL)).into();
         $$ = self.heap.apply2($2, $1, $3);
       }
     | typevar InfixCName typevar {
@@ -1796,11 +1796,11 @@ names:          /* used twice - for bnf list, and for inherited attr list */
             "%ssyntax error: repeated identifier \"%s\" in %s list\n",
             if echoing {"\n"} else {""},
             get_id($2),
-            if self.inbnf != 0 {"bnf"} else {"attribute"}
+            if self.bnf_mode != 0 {"bnf"} else {"attribute"}
           );
           acterror();
         }
-        $$ = if self.inbnf != 0 {
+        $$ = if self.bnf_mode != 0 {
           add1($2, $1)
         } else {
           self.heap.cons_ref($2, $1)
@@ -1814,10 +1814,10 @@ productions:
         let mut h = reverse(self.heap[$1].head);
         let hr = hd[tl[$1]];
         let t = tl[tl[$1]];
-        self.inbnf = 1;
+        self.bnf_mode = 1;
         $$ = NIL;
         while (h!=NIL && !SYNERR) {
-          self.ntspecmap = self.heap.cons_ref(self.heap.cons_ref(self.heap[h].head, hr), self.ntspecmap.into()).into();
+          self.nonterminal_specification_map = self.heap.cons_ref(self.heap.cons_ref(self.heap[h].head, hr), self.nonterminal_specification_map.into()).into();
           $$ = add_prod(defn(self.heap[h].head, t, Combinator::Undef.into()), $$, hr);
           h = self.heap[h].tail;
         }
@@ -1827,10 +1827,10 @@ productions:
         let mut h = reverse(self.heap[$2].head);
         let hr = hd[tl[$2]];
         let t = tl[tl[$2]];
-        self.inbnf = 1;
+        self.bnf_mode = 1;
         $$=$1;
         while(h!=NIL&&!SYNERR){
-          self.ntspecmap = self.heap.cons_ref(self.heap.cons_ref(self.heap[h].head, hr), self.ntspecmap.into()).into();
+          self.nonterminal_specification_map = self.heap.cons_ref(self.heap.cons_ref(self.heap[h].head, hr), self.nonterminal_specification_map.into()).into();
           $$ = add_prod(defn(self.heap[h].head, t, Combinator::Undef.into()), $$, hr);
           h = self.heap[h].tail;
         }
@@ -1845,14 +1845,14 @@ production:
       }
     ;
 
-params:   /* places inherited attributes, if any, on ihlist */
-    /* empty */ { self.ihlist=0; $$ = NIL; }
-    | { self.inbnf=0; } OpenParenthesis names CloseParenthesis {
-        self.inbnf = 1;
+params:   /* places inherited attributes, if any, on inherited_attributes */
+    /* empty */ { self.inherited_attributes=0; $$ = NIL; }
+    | { self.bnf_mode=0; } OpenParenthesis names CloseParenthesis {
+        self.bnf_mode = 1;
         if ($3==NIL) {
           syntax("unexpected token CloseParenthesis\n");
         }
-        self.ihlist = $3.into();
+        self.inherited_attributes = $3.into();
       }
     ;
 
@@ -1896,10 +1896,10 @@ term:
         syntax("%bnf production lowering is not implemented here\n");
         $$ = NIL;
       }
-    | count_factors {self.inbnf=2;} indent Equal here rhs outdent {
+    | count_factors {self.bnf_mode=2;} indent Equal here rhs outdent {
         syntax("%bnf production lowering is not implemented here\n");
-        self.inbnf = 1;
-        self.sreds = 0;
+        self.bnf_mode = 1;
+        self.semantic_reduction_count = 0;
         $$ = NIL;
       }
     ;
@@ -1910,24 +1910,24 @@ error_term:
         $$ = NIL;
       }
     | ErrorSymbol {
-        self.inbnf = 2;
-        self.sreds = 2;
+        self.bnf_mode = 2;
+        self.semantic_reduction_count = 2;
       } indent Equal here rhs outdent {
         syntax("%bnf error productions are not implemented here\n");
-        self.inbnf = 1;
-        self.sreds = 0;
+        self.bnf_mode = 1;
+        self.semantic_reduction_count = 0;
         $$ = NIL;
       }
     ;
 
 count_factors:
     EmptySymbol {
-        self.sreds = 0;
+        self.semantic_reduction_count = 0;
         $$ = NIL;
       }
     | EmptySymbol factors {
         syntax("unexpected token after empty\n");
-        self.sreds = 0;
+        self.semantic_reduction_count = 0;
         $$ = NIL;
         }
     | { self.open_bracket_count=0; } factors {
@@ -1939,13 +1939,13 @@ count_factors:
             "unmatched } in grammar rule\n"
           });
         }
-        self.sreds = 0;
+        self.semantic_reduction_count = 0;
         while f != NIL {
-          self.sreds += 1;
+          self.semantic_reduction_count += 1;
           f = self.heap[f].tail.into();
         }
         if self.heap[$2].head == Combinator::G_End.into() {
-          self.sreds -= 1;
+          self.semantic_reduction_count -= 1;
         }
         $$ = $2;
       }
@@ -2008,7 +2008,7 @@ unit:
 symbol:
     Name {
         // The original `%bnf` path records the symbol in `nonterminals` and
-        // conditionally appends to `ntmap` through the `NEW` side channel.
+        // conditionally appends to `nonterminal_map` through the `NEW` side channel.
         // That bookkeeping is still not wired here.
         $$ = $1;
       }
@@ -2026,7 +2026,7 @@ symbol:
         $$ = self.heap.apply_ref(Combinator::G_Symb.into(), $1);
       }
     | Caret { $$=Combinator::G_State.into(); }
-    | {self.inbnf=0;} OpenBracket exp {self.inbnf=1;} CloseBracket { $$ = self.heap.apply_ref(Combinator::G_SuchThat.into(), $3); }
+    | {self.bnf_mode=0;} OpenBracket exp {self.bnf_mode=1;} CloseBracket { $$ = self.heap.apply_ref(Combinator::G_SuchThat.into(), $3); }
     | Minus { $$ = Combinator::G_Any.into(); }
     ;
 
@@ -2054,38 +2054,38 @@ impl<'ctx /* 'fix quotes */> Parser<'ctx /* 'fix quotes */> {
 
         heap,
         vm,
-        synerr: false,
+        syntax_error_found: false,
         diagnostics: ParserRunDiagnostics::default(),
         include_export_script_parsed: false,
         directive_include_requests: Vec::new(),
 
-        lexstates: session.lexstates,
-        idsused: session.idsused,
-        lexdefs: session.lexdefs,
-        last_name: session.last_name,
-        ihlist: session.ihlist,
+        lex_states: session.lex_states,
+        used_identifiers: session.used_identifiers,
+        lex_rule_definitions: session.lex_rule_definitions,
+        last_identifier: session.last_identifier,
+        inherited_attributes: session.inherited_attributes,
         nonterminals: session.nonterminals,
-        eprodnts: session.eprodnts,
-        ntspecmap: session.ntspecmap,
-        ntmap: session.ntmap,
-        last_here: session.last_here,
+        empty_production_nonterminals: session.empty_production_nonterminals,
+        nonterminal_specification_map: session.nonterminal_specification_map,
+        nonterminal_map: session.nonterminal_map,
+        last_diagnostic_location: session.last_diagnostic_location,
 
-        inbnf: session.inbnf,
-        inexplist: session.inexplist,
-        inlex: session.inlex,
-        tvarscope: session.tvarscope,
-        sreds: session.sreds,
+        bnf_mode: session.bnf_mode,
+        export_list_mode: session.export_list_mode,
+        lex_mode: session.lex_mode,
+        type_variable_scope: session.type_variable_scope,
+        semantic_reduction_count: session.semantic_reduction_count,
         open_bracket_count: session.open_bracket_count,
 
-        exports: deferred.exports,
-        exportfiles: deferred.exportfiles,
-        embargoes: deferred.embargoes,
-        includees: deferred.includees,
-        freeids: deferred.freeids,
+        exported_identifiers: deferred.exported_identifiers,
+        export_path_requests: deferred.export_path_requests,
+        export_embargoes: deferred.export_embargoes,
+        include_requests: deferred.include_requests,
+        free_identifiers: deferred.free_identifiers,
 
-        fnts: 0,
-        dicp: String::new(),
-        dicq: String::new(),
+        bnf_enabled: 0,
+        identifier_dictionary: String::new(),
+        constructor_dictionary: String::new(),
       }
     }
 
@@ -2166,7 +2166,7 @@ impl<'ctx /* 'fix quotes */> Parser<'ctx /* 'fix quotes */> {
         location,
         here_info,
       });
-      self.synerr = true;
+      self.syntax_error_found = true;
     }
     
 
@@ -2182,32 +2182,35 @@ impl<'ctx /* 'fix quotes */> Parser<'ctx /* 'fix quotes */> {
           location: Some(yylloc),
           here_info,
         });
-        self.synerr = true;
+        self.syntax_error_found = true;
     }
 
     pub fn finish_run(self, parse_ok: bool) -> ParserRunResult {
-        if self.synerr || !parse_ok {
+        if self.syntax_error_found || !parse_ok {
             return ParserRunResult::SyntaxError(self.diagnostics);
         }
 
         if self.include_export_script_parsed {
-            let export = if self.exports == NIL_RAW
-                && self.exportfiles == NIL_RAW
-                && self.embargoes == NIL_RAW
+            let export = if self.exported_identifiers == NIL_RAW
+                && self.export_path_requests == NIL_RAW
+                && self.export_embargoes == NIL_RAW
             {
                 None
             } else {
-                let (anchor, exported_ids) = if self.exports == NIL_RAW {
+                let (anchor, exported_ids) = if self.exported_identifiers == NIL_RAW {
                     (NIL_RAW, NIL_RAW)
                 } else {
-                    (self.heap[self.exports].head, self.heap[self.exports].tail)
+                    (
+                        self.heap[self.exported_identifiers].head,
+                        self.heap[self.exported_identifiers].tail,
+                    )
                 };
 
                 Some(ParserExportDirectivePayload {
                     anchor,
                     exported_ids,
-                    pathname_requests: self.exportfiles,
-                    embargoes: self.embargoes,
+                    pathname_requests: self.export_path_requests,
+                    embargoes: self.export_embargoes,
                 })
             };
 

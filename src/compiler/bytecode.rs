@@ -38,7 +38,7 @@
 |                             | `[definition-list]`                       | (algshfns)              |
 |                             | `[ND] or [True]`                          | (see below)             |
 |                             | `DEF_X`                                   |                         |
-|                             | `[freeids]`                               |                         |
+|                             | `[free_identifiers]`                      |                         |
 |                             | `DEF_X`                                   |                         |
 |                             | `[definition-list]`                       | (internals)             |
 | type-error script           | `__WORDSIZE`                              |                         |

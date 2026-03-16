@@ -5,7 +5,7 @@ impl VM {
     pub(super) fn unload(&mut self) {
         self.sorted = false;
         self.spec_location = ConsList::EMPTY;
-        self.rv_script = false;
+        self.readvals_script_is_active = false;
         self.algebraic_show_functions = ConsList::EMPTY;
         self.heap.private_symbols.clear();
 
@@ -13,14 +13,14 @@ impl VM {
         self.unset_ids(self.new_type_names);
         self.new_type_names = ConsList::EMPTY;
 
-        self.unset_ids(self.free_ids);
-        self.free_ids = ConsList::EMPTY;
+        self.unset_ids(self.free_identifiers);
+        self.free_identifiers = ConsList::EMPTY;
         self.detritus_parameter_bindings = ConsList::EMPTY;
         self.missing_parameter_bindings = ConsList::EMPTY;
         self.free_binding_sets = ConsList::EMPTY;
 
         self.sui_generis_constructors = ConsList::EMPTY;
-        self.includees = ConsList::EMPTY;
+        self.included_files = ConsList::EMPTY;
         self.type_abstractions = ConsList::EMPTY;
         self.undefined_names = ConsList::EMPTY;
 
@@ -42,9 +42,9 @@ impl VM {
             file.clear_definienda(&mut self.heap); // fil_defs(hd[files]) = NIL;
         }
 
-        // Remember `self.mkinclude_files` is a nested list of lists.
-        while !self.mkinclude_files.is_empty() {
-            let mut file_list = self.mkinclude_files.pop(&self.heap).unwrap();
+        // Remember `self.include_rollback_files` is a nested list of lists.
+        while !self.include_rollback_files.is_empty() {
+            let mut file_list = self.include_rollback_files.pop(&self.heap).unwrap();
 
             while !file_list.is_empty() {
                 let file: FileRecord = file_list.pop(&self.heap).unwrap();

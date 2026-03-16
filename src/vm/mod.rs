@@ -79,17 +79,20 @@ pub struct VM {
     command_mode: bool,
 
     sorted: bool, // Are the file definitions sorted?
-    in_export_list: bool,
+    /// True while dump visibility rewriting is processing an explicit `%export` list.
+    export_list_is_active: bool,
     in_semantic_redeclaration: bool,
-    rv_script: bool,    // Flags readvals in use (for garbage collector)
+    /// True when readvals state is live and must be preserved for GC/rooting.
+    readvals_script_is_active: bool,
     unused_types: bool, // There are orphaned types (Miranda's TORPHANS)
 
     in_file: Option<Box<dyn BufRead>>,
 
-    /// Tells editor where to find error: `errline` contains location of 1st error in main script, `errs` is `hereinfo`
-    /// of up to one error in `%insert` script (each is 0 if not set). Some errors can set both.
+    /// Tells the editor where to find syntax/load errors.
+    /// `error_line` records the first main-script line, while `error_locations`
+    /// stores heap-backed secondary locations such as `%insert`-origin errors.
     error_line: usize,
-    errs: Vec<RawValue>, // Todo: What is this holding? It is `char[24]` in Miranda.
+    error_locations: Vec<RawValue>,
     parser_diagnostics: Vec<ParserDiagnostic>,
 
     last_expression: Value, // A reference to the last expression evaluated.
@@ -106,14 +109,14 @@ pub struct VM {
     // ToDo: Why is this on the heap? Can we just use a vector?
     prefix_stack: ConsList, // Paths are made relative to current file. If we descend into another file, need to record
     // prefix.
-    col_fn: Value,
-    embargoes: Value,
-    eprodnts: Value,
-    exportfiles: Value,
-    exports: Value,
-    fnts: Value,       // `fnts` is flag indicating %bnf in use. Treated as Value?
-    aliases: ConsList, // Not `IdentifierRecordRef`, because `hold` is not an `Identifier`.
-    free_ids: ConsList<IdentifierRecordRef>,
+    bnf_column_function: Value,
+    export_embargoes: Value,
+    empty_production_nonterminals: Value,
+    export_paths: Value,
+    exported_identifiers: Value,
+    bnf_enabled: Value, // Miranda's `fnts`, a heap-backed `%bnf`-enabled flag.
+    aliases: ConsList,  // Not `IdentifierRecordRef`, because `hold` is not an `Identifier`.
+    free_identifiers: ConsList<IdentifierRecordRef>,
     // Miranda's DETROP, list of illegal `%free` actual bindings from `bindparams`.
     // Elements are either an identifier (`name not %free`) or `cons(id, datapair(fa, ta))`
     // for wrong-kind/wrong-arity `==` bindings.
@@ -125,18 +128,18 @@ pub struct VM {
     // `bindparams` pushes raw formals list entries; include/type phases may later attach hereinfo.
     free_binding_sets: ConsList,
     internals: ConsList<IdentifierRecordRef>, // list of names not exported, used by fix/unfixexports
-    idsused: ConsList<IdentifierRecordRef>,
+    used_identifiers: ConsList<IdentifierRecordRef>,
     clashes: ConsList<IdentifierRecordRef>,
     suppressed: ConsList<IdentifierValueRef>, // list of `-id` aliases successfully obeyed (raw targets; may be non-ID)
-    suppressed_t: ConsList<IdentifierRecordRef>, // list of -typename aliases (illegal just now)
-    ihlist: Value,
-    includees: ConsList<FileRecord>,
-    lasth: Value,
-    last_name: Value,
-    lexdefs: Value,
+    suppressed_type_aliases: ConsList<IdentifierRecordRef>, // list of `-typename` aliases (illegal just now)
+    inherited_attributes: Value,
+    included_files: ConsList<FileRecord>,
+    last_diagnostic_location: Value,
+    last_identifier: Value,
+    lex_rule_definitions: Value,
     nonterminals: Value,
-    ntmap: Value,
-    ntspecmap: Value,
+    nonterminal_map: Value,
+    nonterminal_specification_map: Value,
 
     /// A cons list of identifiers in the primitive environment.
     primitive_environment: ConsList<IdentifierRecordRef>,
@@ -157,8 +160,8 @@ pub struct VM {
      */
     files: ConsList<FileRecord>,
     old_files: ConsList<FileRecord>, // most recent set of sources, in case of interrupted or failed compilation
-    // list of a list of files to be unloaded if `mkincludes` is interrupted (Miranda's ld_stuff).
-    mkinclude_files: ConsList<ConsList<FileRecord>>,
+    // List of file groups to unload if `mkincludes` is interrupted (Miranda's `ld_stuff`).
+    include_rollback_files: ConsList<ConsList<FileRecord>>,
 
     sui_generis_constructors: ConsList, // user defined sui-generis constructors (Miranda's SGC)
     type_abstractions: ConsList,        // cons list of abstype declarations (Miranda's TABSTR)
@@ -168,7 +171,7 @@ pub struct VM {
     special_show_forms: ConsList, // all occurrences of special forms (show) encountered during type check
 
     // `spec_location` is a list of `cons(id,hereinfo)` giving location of `spec` for ids both defined and specified.
-    // Needed to locate errs in `meta_tcheck`, `abstr_mcheck`.
+    // Needed to locate error_locations in `meta_tcheck`, `abstr_mcheck`.
     spec_location: ConsList,
 
     // endregion
@@ -262,13 +265,13 @@ impl VM {
             command_mode: false,
             sorted: false,
             // type check
-            in_export_list: false,
+            export_list_is_active: false,
             in_semantic_redeclaration: false,
-            rv_script: false,    // Flags readvals in use (for garbage collector)
-            unused_types: false, // There are orphaned types
+            readvals_script_is_active: false, // Flags readvals in use (for garbage collector)
+            unused_types: false,              // There are orphaned types
             in_file: None,
             error_line: 0,
-            errs: vec![],
+            error_locations: vec![],
             parser_diagnostics: vec![],
             last_expression: Value::None, // A reference to the last expression evaluated.
             private_symbol_base_index: 0,
@@ -298,30 +301,30 @@ impl VM {
 
             primitive_environment: ConsList::EMPTY,
 
-            col_fn: Value::None,
-            embargoes: NIL,
-            eprodnts: NIL,
-            exportfiles: NIL,
-            exports: NIL,
-            fnts: NIL,
+            bnf_column_function: Value::None,
+            export_embargoes: NIL,
+            empty_production_nonterminals: NIL,
+            export_paths: NIL,
+            exported_identifiers: NIL,
+            bnf_enabled: NIL,
             aliases: ConsList::EMPTY,
-            free_ids: ConsList::EMPTY,
+            free_identifiers: ConsList::EMPTY,
             detritus_parameter_bindings: ConsList::EMPTY,
             missing_parameter_bindings: ConsList::EMPTY,
             free_binding_sets: ConsList::EMPTY,
             internals: ConsList::EMPTY,
-            idsused: ConsList::EMPTY,
+            used_identifiers: ConsList::EMPTY,
             clashes: ConsList::EMPTY,
             suppressed: ConsList::EMPTY,
-            suppressed_t: ConsList::EMPTY,
-            ihlist: Value::None,
-            includees: ConsList::EMPTY,
-            lasth: Value::None,
-            last_name: Value::None,
-            lexdefs: NIL,
+            suppressed_type_aliases: ConsList::EMPTY,
+            inherited_attributes: Value::None,
+            included_files: ConsList::EMPTY,
+            last_diagnostic_location: Value::None,
+            last_identifier: Value::None,
+            lex_rule_definitions: NIL,
             nonterminals: NIL,
-            ntmap: NIL,
-            ntspecmap: NIL,
+            nonterminal_map: NIL,
+            nonterminal_specification_map: NIL,
 
             sui_generis_constructors: ConsList::EMPTY, // user defined sui-generis constructors (Miranda's SGC)
             type_abstractions: ConsList::EMPTY, // cons list of abstype declarations (Miranda's TABSTR)
@@ -333,7 +336,7 @@ impl VM {
 
             files: ConsList::EMPTY, // The cons list files is also called the environment
             old_files: ConsList::EMPTY, // most recent set of sources, in case of interrupted or failed compilation
-            mkinclude_files: ConsList::EMPTY, // list of files to be unloaded if `mkincludes` is interrupted (Miranda's ld_stuff).
+            include_rollback_files: ConsList::EMPTY, // list of files to be unloaded if `mkincludes` is interrupted (Miranda's ld_stuff).
 
             // endregion
 
