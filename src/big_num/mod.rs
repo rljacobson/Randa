@@ -21,3 +21,5 @@ mod constants;
 mod integer_ref;
 mod internal;
 mod text;
+
+pub(crate) use integer_ref::IntegerRef;

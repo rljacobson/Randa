@@ -1,4 +1,4 @@
-//! Miranda integer representation constants shared by the dormant bigint port.
+//! Miranda integer representation constants shared by the bigint port.
 
 use crate::data::RawValue;
 

@@ -1,9 +1,12 @@
 use super::*;
+use crate::big_num::IntegerRef;
 use crate::compiler::{
     HereInfo, ParserExportDirectivePayload, ParserIncludeDirectivePayload, ParserSupportError,
     ParserTopLevelDirectivePayload,
 };
-use crate::data::api::{IdentifierValueTypeData, IdentifierValueTypeKind, IdentifierValueTypeRef};
+use crate::data::api::{
+    HeapObjectProxy, IdentifierValueTypeData, IdentifierValueTypeKind, IdentifierValueTypeRef,
+};
 use crate::vm::load::LoadScriptForm;
 use std::path::PathBuf;
 
@@ -1244,6 +1247,55 @@ fn load_script_consumes_dump_shape_written_by_dump_visibility_phase() {
 }
 
 #[test]
+fn load_defs_decodes_short_integer_through_integerref_boundary() {
+    let mut vm = VM::new_for_tests();
+    let bytes = vec![Bytecode::Short.code(), 0x80, Bytecode::Definition.code()];
+    let value = vm
+        .load_defs(&mut bytes.into_iter())
+        .expect("expected short integer payload to decode");
+    let integer = IntegerRef::from_ref(value.into());
+
+    assert_eq!(integer.to_i64_lossy(&vm.heap), -128);
+}
+
+#[test]
+fn load_defs_decodes_int_x_multi_cell_chain_through_integerref_boundary() {
+    let mut vm = VM::new_for_tests();
+    let mut bytes = vec![Bytecode::Integer.code()];
+    for word in [1isize, 2, 3, -1] {
+        bytes.extend_from_slice(&word.to_le_bytes());
+    }
+    bytes.push(Bytecode::Definition.code());
+
+    let value = vm
+        .load_defs(&mut bytes.into_iter())
+        .expect("expected INT_X payload to decode");
+    let integer = IntegerRef::from_ref(value.into());
+
+    assert_eq!(
+        integer.encode_for_dump_bytecode(&vm.heap),
+        vec![1, 2, 3, -1]
+    );
+}
+
+#[test]
+fn load_defs_preserves_int_x_first_word_negative_one() {
+    let mut vm = VM::new_for_tests();
+    let mut bytes = vec![Bytecode::Integer.code()];
+    for word in [-1isize, -1] {
+        bytes.extend_from_slice(&word.to_le_bytes());
+    }
+    bytes.push(Bytecode::Definition.code());
+
+    let value = vm
+        .load_defs(&mut bytes.into_iter())
+        .expect("expected INT_X payload with first-word -1 to decode");
+    let integer = IntegerRef::from_ref(value.into());
+
+    assert_eq!(integer.encode_for_dump_bytecode(&vm.heap), vec![-1, -1]);
+}
+
+#[test]
 fn alfasort_is_deterministic_for_diagnostic_identifier_lists() {
     let mut vm = VM::new_for_tests();
 
@@ -1511,9 +1563,9 @@ fn hdsort_orders_free_binding_pairs_by_identifier_name() {
     let alpha = vm.heap.make_empty_identifier("alpha");
     let beta = vm.heap.make_empty_identifier("beta");
 
-    let gamma_payload = vm.heap.integer_ref(1);
-    let alpha_payload = vm.heap.integer_ref(2);
-    let beta_payload = vm.heap.integer_ref(3);
+    let gamma_payload: Value = IntegerRef::from_i64(&mut vm.heap, 1).into();
+    let alpha_payload: Value = IntegerRef::from_i64(&mut vm.heap, 2).into();
+    let beta_payload: Value = IntegerRef::from_i64(&mut vm.heap, 3).into();
     let gamma_pair: RawValue = vm.heap.cons_ref(gamma.into(), gamma_payload).into();
     let alpha_pair: RawValue = vm.heap.cons_ref(alpha.into(), alpha_payload).into();
     let beta_pair: RawValue = vm.heap.cons_ref(beta.into(), beta_payload).into();
@@ -1561,8 +1613,8 @@ fn bindparams_records_missing_and_extra_bindings_and_writes_matches() {
     formal_list.append(&mut vm.heap, x_formal_binding);
     formal_list.append(&mut vm.heap, y_formal_binding);
 
-    let x_payload = vm.heap.integer_ref(42);
-    let z_payload = vm.heap.integer_ref(7);
+    let x_payload: Value = IntegerRef::from_i64(&mut vm.heap, 42).into();
+    let z_payload: Value = IntegerRef::from_i64(&mut vm.heap, 7).into();
     let x_actual_binding: RawValue = vm.heap.cons_ref(x.into(), x_payload).into();
     let z_actual_binding: RawValue = vm.heap.cons_ref(z.into(), z_payload).into();
 

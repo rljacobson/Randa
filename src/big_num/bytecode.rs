@@ -1,4 +1,4 @@
-//! Dormant bytecode codec support for Miranda integers.
+//! Bytecode codec support for Miranda integers.
 
 use super::integer_ref::IntegerRef;
 use crate::data::{api::HeapObjectProxy, Heap};

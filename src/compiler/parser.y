@@ -31,6 +31,7 @@ use super::{
 };
 
 use crate::{
+    big_num::IntegerRef,
     data::{
         api::{ConsList, FileInfoRef, HeapObjectProxy},
         tag::Tag,
@@ -2120,10 +2121,10 @@ impl<'ctx /* 'fix quotes */> Parser<'ctx /* 'fix quotes */> {
               lookahead.value = identifier.into();
             }
             Token::Integer => {
-              if let Ok(integer) = source_slice.parse::<isize>() {
+              if let Ok(integer) = source_slice.parse::<i64>() {
                 lookahead.token = Token::Constant;
                 lookahead.token_type = Token::Constant as i32 + 2;
-                lookahead.value = self.heap.integer_ref(integer);
+                lookahead.value = IntegerRef::from_i64(self.heap, integer).into();
               }
             }
             Token::Float => {

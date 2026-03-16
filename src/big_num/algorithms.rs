@@ -1,4 +1,4 @@
-//! Dormant home for faithful Rust ports of `miralib/big.c` helper families.
+//! Faithful Rust ports of `miralib/big.c` helper families.
 
 use super::constants::{BIGINT_DIGIT_BASE, BIGINT_DIGIT_BITS, BIGINT_DIGIT_MASK, SIGN_BIT_MASK};
 use super::integer_ref::IntegerRef;
@@ -300,8 +300,7 @@ fn subtract_larger_magnitude_digits(larger: &[isize], smaller: &[isize]) -> Vec<
     let mut result = Vec::with_capacity(larger.len());
     let mut borrow = 0isize;
 
-    for index in 0..larger.len() {
-        let minuend = larger[index];
+    for (index, &minuend) in larger.iter().enumerate() {
         let subtrahend = smaller.get(index).copied().unwrap_or(0);
         let difference = minuend - subtrahend - borrow;
 

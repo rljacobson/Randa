@@ -1,4 +1,4 @@
-//! Dormant text parse and format support for Miranda integers.
+//! Text parse and format support for Miranda integers.
 
 use super::constants::{
     DECIMAL_CHUNK_BASE, DECIMAL_CHUNK_WIDTH, HEX_CHUNK_BASE, OCTAL_CHUNK_BASE, SIGN_BIT_MASK,

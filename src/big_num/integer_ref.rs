@@ -1,4 +1,4 @@
-//! Future heap proxy for Miranda `Tag::Int` objects.
+//! Heap proxy for Miranda `Tag::Int` objects.
 
 use super::constants::{BIGINT_DIGIT_BASE, SIGN_BIT_MASK};
 use crate::data::{api::HeapObjectProxy, Heap, RawValue, Tag, Value};
@@ -338,7 +338,7 @@ impl IntegerRef {
     /// This is Miranda's `bigtodbl`, used for numeric coercions and comparisons while
     /// preserving the original base-`2^15` accumulation order.
     /// Mutation/allocation: non-mutating; reads existing heap integers and allocates nothing.
-    pub(crate) fn to_f64_lossy(&self, heap: &Heap) -> f64 {
+    pub(crate) fn to_f64_lossy(self, heap: &Heap) -> f64 {
         let negative = self.is_negative(heap);
         let mut scale = 1.0f64;
         let mut value = self.low_digit(heap) as f64;
@@ -374,11 +374,7 @@ impl IntegerRef {
             digits.push(digit as isize);
         }
 
-        Self::build_integer_from_digits(
-            heap,
-            &digits,
-            if negative { SIGN_BIT_MASK as isize } else { 0 },
-        )
+        Self::build_integer_from_digits(heap, &digits, if negative { SIGN_BIT_MASK } else { 0 })
     }
 
     /// Computes the natural logarithm of a positive trusted integer.
@@ -431,7 +427,7 @@ impl IntegerRef {
 
     /// Constructs a normalized heap integer from a host `i64`.
     ///
-    /// This is Miranda's `sto_int`, giving the dormant subsystem a scalar ingress path
+    /// This is Miranda's `sto_int`, giving the bigint subsystem a scalar ingress path
     /// that preserves Miranda's canonical little-endian digit-chain shape.
     /// Mutation/allocation: allocates a fresh normalized heap integer; does not mutate any existing integer cells.
     pub(crate) fn from_i64(heap: &mut Heap, value: i64) -> IntegerRef {
@@ -452,11 +448,7 @@ impl IntegerRef {
             magnitude /= BIGINT_DIGIT_BASE as i128;
         }
 
-        Self::build_integer_from_digits(
-            heap,
-            &digits,
-            if negative { SIGN_BIT_MASK as isize } else { 0 },
-        )
+        Self::build_integer_from_digits(heap, &digits, if negative { SIGN_BIT_MASK } else { 0 })
     }
 
     /// Extracts a lossy or saturating host `i64` from a trusted heap integer.
@@ -464,11 +456,11 @@ impl IntegerRef {
     /// This is Miranda's `get_int`, including Miranda's bounded extraction behavior
     /// when the bigint exceeds the representable shifted-digit range.
     /// Mutation/allocation: non-mutating; reads existing heap integers and allocates nothing.
-    pub(crate) fn to_i64_lossy(&self, heap: &Heap) -> i64 {
+    pub(crate) fn to_i64_lossy(self, heap: &Heap) -> i64 {
         let mut value = 0i64;
         let mut factor = 1i64;
         let mut digits_seen = 0usize;
-        let mut current = Some(*self);
+        let mut current = Some(self);
 
         while let Some(cell) = current {
             if digits_seen == 4 {
@@ -825,6 +817,26 @@ mod tests {
         let d1 = int_ref(&mut heap, 1, d2.get_ref());
         let huge = int_ref(&mut heap, SIGN_BIT_MASK | 1, d1.get_ref());
         assert_eq!(huge.to_i64_lossy(&heap), -(1i64 << 60));
+    }
+
+    #[test]
+    fn from_i64_encodes_negative_single_cell_shape_internally() {
+        let mut heap = Heap::default();
+        let value = IntegerRef::from_i64(&mut heap, -42);
+
+        assert_eq!(heap[value.get_ref()].tag, Tag::Int);
+        assert_eq!(heap[value.get_ref()].head, SIGN_BIT_MASK | 42);
+        assert_eq!(heap[value.get_ref()].tail, 0);
+    }
+
+    #[test]
+    fn from_i64_keeps_negative_short_boundary_in_single_cell_shape() {
+        let mut heap = Heap::default();
+        let value = IntegerRef::from_i64(&mut heap, -128);
+
+        assert_eq!(heap[value.get_ref()].tag, Tag::Int);
+        assert_eq!(heap[value.get_ref()].head, SIGN_BIT_MASK | 128);
+        assert_eq!(heap[value.get_ref()].tail, 0);
     }
 
     #[test]

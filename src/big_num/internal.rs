@@ -1,4 +1,4 @@
-//! Shared internal helpers for dormant bigint construction and digit-vector work.
+//! Shared internal helpers for bigint construction and digit-vector work.
 
 use super::constants::{BIGINT_DIGIT_BASE, BIGINT_DIGIT_BITS, BIGINT_DIGIT_MASK};
 use super::integer_ref::IntegerRef;
@@ -24,7 +24,7 @@ impl IntegerRef {
 
     /// Builds a trusted integer chain from little-endian magnitude digits and a root sign bit.
     ///
-    /// This helper centralizes first-cell sign encoding for dormant bigint internals
+    /// This helper centralizes first-cell sign encoding for bigint internals
     /// so algorithms and codecs produce the same normalized heap shape.
     /// Mutation/allocation: allocates a fresh heap integer chain; does not mutate any pre-existing integer cells.
     pub(super) fn build_integer_from_digits(
@@ -49,7 +49,7 @@ impl IntegerRef {
 
 /// Trims redundant high zero digits while preserving canonical zero.
 ///
-/// This helper keeps dormant digit-vector computations aligned with the bigint
+/// This helper keeps digit-vector computations aligned with the bigint
 /// normalization contract before they are reified back into heap objects.
 /// Mutation/allocation: mutates the provided host-side digit vector in place; touches no heap data.
 pub(super) fn normalize_digit_vec(digits: &mut Vec<isize>) {
@@ -97,7 +97,7 @@ pub(super) fn shift_digits_left(digits: &[isize], shift: usize) -> Vec<isize> {
 
 /// Divides a little-endian magnitude digit vector by a small divisor and returns the remainder.
 ///
-/// This helper is shared by dormant formatting code and single-digit arithmetic
+/// This helper is shared by formatting code and single-digit arithmetic
 /// helpers so quotient normalization remains consistent across modules.
 /// Mutation/allocation: mutates the provided host-side digit vector in place to hold the quotient; allocates only temporary host-side scratch data.
 pub(super) fn divide_digit_vec_by_small(digits: &mut Vec<isize>, divisor: isize) -> isize {

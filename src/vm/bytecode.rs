@@ -1,4 +1,5 @@
 use super::*;
+use crate::big_num::IntegerRef;
 use crate::data::api::HeapString;
 
 /// Recursively sorts `%free` actual-binding cons cells by binding-name key.
@@ -674,36 +675,24 @@ impl VM {
                     item_stack.push(type_var.into());
                 }
 
-                // Preserve Miranda short-integer decode path for dump compatibility.
                 Bytecode::Short => {
-                    let mut v = next(byte_iter)?;
-                    if (v & 128u8) != 0 {
-                        v |= !127u8;
-                    }
-                    item_stack.push(self.heap.small_int_ref(v as RawValue).into());
+                    let encoded = next(byte_iter)?;
+                    let integer = IntegerRef::decode_short_bytecode(&mut self.heap, encoded);
+                    item_stack.push(integer.get_ref());
                 }
 
                 Bytecode::Integer => {
-                    // Allow the very first value to be -1.
-                    let mut v: RawValue = get_word_raw_value(byte_iter)?;
-                    let int_list: RawValue = self.heap.integer_ref(v).into();
-
-                    item_stack.push(int_list);
-
-                    // The list of ints is constructed from the head to the tail, the opposite from if we used `push`.
-                    // `cursor_ref` points to the cell whose tail is the next insertion point.
-                    let mut cursor_ref: RawValue = int_list;
-                    v = get_word_raw_value(byte_iter)?;
-
-                    while v != -1 {
-                        // Construct a boxed integer and store it in the tail of the previous boxed integer
-                        let new_cell_ref: RawValue = self.heap.integer_ref(v).into();
-                        self.heap[cursor_ref].tail = new_cell_ref;
-                        // Read the next integer from the byte iterator
-                        v = get_word_raw_value(byte_iter)?;
-                        // Update the cursor to point to the tail of the newly constructed boxed integer
-                        cursor_ref = new_cell_ref;
+                    let mut words = vec![get_word_raw_value(byte_iter)?];
+                    loop {
+                        let word = get_word_raw_value(byte_iter)?;
+                        words.push(word);
+                        if word == -1 {
+                            break;
+                        }
                     }
+
+                    let integer = IntegerRef::decode_int_x_bytecode(&mut self.heap, &words);
+                    item_stack.push(integer.get_ref());
                 }
 
                 Bytecode::Double => {

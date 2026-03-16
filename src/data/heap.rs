@@ -8,7 +8,6 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::ops::{Index, IndexMut};
 
-use crate::constants::SIGNBIT;
 use crate::data::api::{
     ApNodeRef, ConstructorRef, HeapObjectProxy, IdentifierDefinitionRef, IdentifierRecordRef,
 };
@@ -476,29 +475,6 @@ impl Heap {
         self.strings.push(text);
 
         string_ref
-    }
-
-    fn small_int(&mut self, value: RawValue) -> RawValue {
-        let v = match value < 0 {
-            true => SIGNBIT | (-value),
-            false => value,
-        };
-
-        self.put(Tag::Int, v, 0)
-    }
-
-    pub fn small_int_ref(&mut self, value: isize) -> Value {
-        Value::Reference(self.small_int(value))
-    }
-
-    /// Creates a `HeapCell` with tag `Tag::Int`, head `value`, and tail `NIL`.
-    /// This does _not_ create a cons list of ints.
-    fn integer(&mut self, value: RawValue) -> RawValue {
-        self.put(Tag::Int, value, 0)
-    }
-
-    pub fn integer_ref(&mut self, value: isize) -> Value {
-        Value::Reference(self.integer(value))
     }
 
     fn identifier(&mut self, head: RawValue, tail: RawValue) -> RawValue {
