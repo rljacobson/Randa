@@ -21,13 +21,17 @@ use super::{
   Loc,
   ParserActivation,
   ParserDiagnostic,
+  ParserConstructorPayload,
   ParserDefinitionPayload,
   ParserExportDirectivePayload,
+  ParserFreeBindingPayload,
   ParserIncludeDirectivePayload,
   ParserRunDiagnostics,
   ParserRunResult,
+  ParserSpecificationPayload,
   ParserTopLevelDirectivePayload,
   ParserTopLevelScriptPayload,
+  ParserTypeDeclarationPayload,
   Token,
   ParserVmContext,
 };
@@ -35,7 +39,7 @@ use super::{
 use crate::{
     big_num::IntegerRef,
     data::{
-        api::{ConsList, FileInfoRef, HeapObjectProxy},
+        api::{ConsList, FileInfoRef, HeapObjectProxy, IdentifierValueTypeKind},
         tag::Tag,
         values::{
             Value,
@@ -43,6 +47,7 @@ use crate::{
         },
         combinator::Combinator,
         Heap,
+        Type,
     }
 };
 
@@ -61,6 +66,10 @@ use crate::{
   top_level_script_parsed: bool,
   directive_include_requests: Vec<ParserIncludeDirectivePayload>,
   definition_payloads: Vec<ParserDefinitionPayload>,
+  specification_payloads: Vec<ParserSpecificationPayload>,
+  type_declaration_payloads: Vec<ParserTypeDeclarationPayload>,
+  constructor_payloads: Vec<ParserConstructorPayload>,
+  free_binding_payloads: Vec<ParserFreeBindingPayload>,
 
   lex_states: RawValue,
   used_identifiers: RawValue,
@@ -253,6 +262,10 @@ top_level_script:
 top_level_item:
     include_export_item { $$ = NIL; }
     | top_level_definition_item { $$ = NIL; }
+    | top_level_specification_item { $$ = NIL; }
+    | top_level_synonym_type_item { $$ = NIL; }
+    | top_level_algebraic_type_item { $$ = NIL; }
+    | top_level_free_item { $$ = NIL; }
     ;
 
 top_level_definition_anchor:
@@ -271,6 +284,38 @@ top_level_definition_anchor:
       }
     ;
 
+top_level_type_expr:
+    Name { $$ = $1; }
+    | Type { $$ = Type::Type.into(); }
+    ;
+
+top_level_free_type_expr:
+    Name { $$ = $1; }
+    ;
+
+top_level_constructor_list:
+    ConstructorName { $$ = self.heap.cons_ref($1, NIL); }
+    | top_level_constructor_list Pipe ConstructorName { $$ = self.heap.cons_ref($3, $1); }
+    ;
+
+top_level_free_item:
+    Free OpenBrace Name top_level_definition_anchor ColonColon top_level_free_type_expr CloseBrace directive_terminators {
+        let identifier = $3;
+        let anchor = $4;
+        let type_expr = $6;
+        if !self.free_binding_payloads.is_empty() {
+          self.syntax("multiple %free statements are illegal\n");
+        } else {
+          self.free_binding_payloads.push(ParserFreeBindingPayload {
+            identifier: identifier.into(),
+            type_expr,
+            anchor: anchor.into(),
+          });
+        }
+        $$ = NIL;
+      }
+    ;
+
 include_export_item:
     export_directive directive_terminators { $$ = NIL; }
     | include_directive directive_terminators { $$ = NIL; }
@@ -285,6 +330,59 @@ top_level_definition_item:
           anchor: $2.into(),
         });
         self.last_identifier = identifier.into();
+        $$ = NIL;
+      }
+    ;
+
+top_level_specification_item:
+    Name top_level_definition_anchor ColonColon top_level_type_expr directive_terminators {
+        let identifier = $1;
+        let anchor = $2;
+        let type_expr = $4;
+        self.specification_payloads.push(ParserSpecificationPayload {
+          identifier: identifier.into(),
+          type_expr,
+          anchor: anchor.into(),
+        });
+        $$ = NIL;
+      }
+    ;
+
+top_level_synonym_type_item:
+    Name top_level_definition_anchor EqualEqual top_level_type_expr directive_terminators {
+        let type_identifier = $1;
+        let anchor = $2;
+        let info = $4;
+        self.type_declaration_payloads.push(ParserTypeDeclarationPayload {
+          type_identifier: type_identifier.into(),
+          kind: IdentifierValueTypeKind::Synonym,
+          info,
+          anchor: anchor.into(),
+        });
+        $$ = NIL;
+      }
+    ;
+
+top_level_algebraic_type_item:
+    Name top_level_definition_anchor Colon2Equal top_level_constructor_list directive_terminators {
+        let type_identifier = $1;
+        let anchor = $2;
+        let constructor_list = $4;
+        let mut constructors: RawValue = constructor_list.into();
+        while constructors!=NIL_RAW {
+          self.constructor_payloads.push(ParserConstructorPayload {
+            constructor: self.heap[constructors].head,
+            parent_type: type_identifier.into(),
+            anchor: anchor.into(),
+          });
+          constructors = self.heap[constructors].tail;
+        }
+        self.type_declaration_payloads.push(ParserTypeDeclarationPayload {
+          type_identifier: type_identifier.into(),
+          kind: IdentifierValueTypeKind::Algebraic,
+          info: constructor_list,
+          anchor: anchor.into(),
+        });
         $$ = NIL;
       }
     ;
@@ -2099,6 +2197,10 @@ impl<'ctx /* 'fix quotes */> Parser<'ctx /* 'fix quotes */> {
         top_level_script_parsed: false,
         directive_include_requests: Vec::new(),
         definition_payloads: Vec::new(),
+        specification_payloads: Vec::new(),
+        type_declaration_payloads: Vec::new(),
+        constructor_payloads: Vec::new(),
+        free_binding_payloads: Vec::new(),
 
         lex_states: session.lex_states,
         used_identifiers: session.used_identifiers,
@@ -2261,6 +2363,10 @@ impl<'ctx /* 'fix quotes */> Parser<'ctx /* 'fix quotes */> {
                     export,
                 },
                 definitions: self.definition_payloads,
+                specifications: self.specification_payloads,
+                type_declarations: self.type_declaration_payloads,
+                constructor_declarations: self.constructor_payloads,
+                free_bindings: self.free_binding_payloads,
             });
         }
 

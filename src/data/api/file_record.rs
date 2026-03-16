@@ -1,13 +1,12 @@
 /*!
 
- From Miranda:
+From Miranda:
 
-`files` is a cons list of elements, each of which is of the form
-  `cons(cons(fileinfo(filename,mtime),share),definienda)`
-where `share` (=0,1) says if repeated instances are shareable. Current script at
-the front followed by subsidiary files due to `%insert` and `%include` elements due
-to `%insert` have `self.nill` `definienda` (they are attributed to the inserting script).
-
+    `files` is a cons list of elements, each of which is of the form
+      `cons(cons(fileinfo(filename,mtime),share),definienda)`
+    where `share` (=0,1) says if repeated instances are shareable. Current script at
+    the front followed by subsidiary files due to `%insert` and `%include` elements due
+    to `%insert` have `self.nill` `definienda` (they are attributed to the inserting script).
 
 The "definienda" is itself a cons list of items (types, identifiers, etc.) that are defined in the current file.
 (A definiendum is a term that is being defined or clarified. The plural form of definiendum is definienda.)
@@ -104,14 +103,22 @@ impl FileRecord {
         heap[header_cons_ref].tail == Combinator::True.into()
     }
 
+    pub fn set_shareable(&self, heap: &mut Heap, shareable: bool) {
+        let header_cons_ref = self.header_cons_ref(heap);
+        heap[header_cons_ref].tail = if shareable {
+            Combinator::True.into()
+        } else {
+            Combinator::False.into()
+        };
+    }
+
     /// Sets definienda to NIL
-    #[inline(always)]
     pub fn clear_definienda(&self, heap: &mut Heap) {
         self.set_definienda_value(heap, Combinator::Nil.into());
     }
 
-    #[inline(always)]
-    pub fn push_item(&self, heap: &mut Heap, item: Value) {
+    /// Pushes `item` onto the definienda, which is a cons list of items defined in this file.
+    pub fn push_item_onto_definienda(&self, heap: &mut Heap, item: Value) {
         // Works even if definienda is NIL.
         let definienda_tail: Value = self.definienda_value(heap);
         let new_list: Value = heap.cons_ref(item, definienda_tail);

@@ -1,5 +1,6 @@
 use thiserror::Error;
 
+use crate::data::api::IdentifierValueTypeKind;
 use crate::data::{RawValue, Value};
 
 use super::ParserDiagnostic;
@@ -48,6 +49,35 @@ pub struct ParserDefinitionPayload {
     pub anchor: RawValue,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParserSpecificationPayload {
+    pub identifier: RawValue,
+    pub type_expr: Value,
+    pub anchor: RawValue,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParserTypeDeclarationPayload {
+    pub type_identifier: RawValue,
+    pub kind: IdentifierValueTypeKind,
+    pub info: Value,
+    pub anchor: RawValue,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParserConstructorPayload {
+    pub constructor: RawValue,
+    pub parent_type: RawValue,
+    pub anchor: RawValue,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParserFreeBindingPayload {
+    pub identifier: RawValue,
+    pub type_expr: Value,
+    pub anchor: RawValue,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ParserTopLevelDirectivePayload {
     pub include_requests: Vec<ParserIncludeDirectivePayload>,
@@ -58,6 +88,10 @@ pub struct ParserTopLevelDirectivePayload {
 pub struct ParserTopLevelScriptPayload {
     pub directives: ParserTopLevelDirectivePayload,
     pub definitions: Vec<ParserDefinitionPayload>,
+    pub specifications: Vec<ParserSpecificationPayload>,
+    pub type_declarations: Vec<ParserTypeDeclarationPayload>,
+    pub constructor_declarations: Vec<ParserConstructorPayload>,
+    pub free_bindings: Vec<ParserFreeBindingPayload>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

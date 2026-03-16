@@ -49,7 +49,6 @@ where
     };
 
     /// Constructs a new cons list on the heap with the given initial value.
-    #[inline(always)]
     pub fn new(heap: &mut Heap, initial_value: T) -> Self {
         let reference = heap.cons_ref(Into::<Value>::into(initial_value), Combinator::Nil.into());
 
@@ -59,7 +58,6 @@ where
         }
     }
 
-    #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.reference == Combinator::Nil.into()
     }
@@ -73,14 +71,12 @@ where
         }
     }
 
-    #[inline(always)]
     pub fn push(&mut self, heap: &mut Heap, item: T) {
         let new_list = heap.cons_ref(item.into(), self.reference.into());
 
         self.reference = new_list.into();
     }
 
-    #[inline(always)]
     pub fn push_raw(&mut self, heap: &mut Heap, item: RawValue) {
         let new_list = heap.cons_ref(Value::from(item), self.reference.into());
 
@@ -89,7 +85,6 @@ where
 
     /// Like push, but places the new item at the rear of the list instead of on the front.
     /// Miranda's `append1`
-    #[inline(always)]
     pub fn append(&mut self, heap: &mut Heap, item: T) {
         // Special case, as there is no tail.
         if self.is_empty() {
@@ -130,14 +125,13 @@ where
         self.raw_head(heap).map(Into::into)
     }
 
-    // Does not check if `self` is empty.
-    #[inline(always)]
+    /// Returns the tail of this cons list without checking if `self` is empty.
     pub fn rest_unchecked(&self, heap: &Heap) -> Self {
         let rest: RawValue = heap[self.reference].tail;
         Self::from_ref(rest)
     }
 
-    #[inline(always)]
+    /// Returns the tail of this cons list, if it exists.
     pub fn rest(&self, heap: &Heap) -> Option<Self> {
         if self.reference == Combinator::NIL.into() {
             None

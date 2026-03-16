@@ -1,9 +1,10 @@
 use super::diagnostics::{alfasort, printlist, source_update_check};
 use super::*;
 use crate::compiler::{
-    parser::Parser, HereInfo, Lexer, ParserActivation, ParserDeferredState,
-    ParserDefinitionPayload, ParserRunDiagnostics, ParserRunResult, ParserSessionState,
-    ParserSupportError, ParserTopLevelDirectivePayload, ParserTopLevelScriptPayload,
+    parser::Parser, HereInfo, Lexer, ParserActivation, ParserConstructorPayload,
+    ParserDeferredState, ParserDefinitionPayload, ParserFreeBindingPayload, ParserRunDiagnostics,
+    ParserRunResult, ParserSessionState, ParserSpecificationPayload, ParserSupportError,
+    ParserTopLevelDirectivePayload, ParserTopLevelScriptPayload, ParserTypeDeclarationPayload,
     ParserVmContext,
 };
 use crate::compiler::{token::ParserLookahead, Token};
@@ -1214,6 +1215,18 @@ impl VM {
             for definition in &payload.definitions {
                 self.commit_top_level_definition_payload(current_file, definition);
             }
+            for specification in &payload.specifications {
+                self.commit_top_level_specification_payload(current_file, specification);
+            }
+            for type_declaration in &payload.type_declarations {
+                self.commit_top_level_type_declaration_payload(current_file, type_declaration);
+            }
+            for constructor in &payload.constructor_declarations {
+                self.commit_top_level_constructor_payload(current_file, constructor);
+            }
+            if !payload.free_bindings.is_empty() {
+                self.commit_top_level_free_bindings_payload(current_file, &payload.free_bindings);
+            }
         }
 
         files
@@ -1225,20 +1238,7 @@ impl VM {
         definition: &ParserDefinitionPayload,
     ) {
         let identifier = IdentifierRecordRef::from_ref(definition.identifier);
-        let Value::Reference(anchor_ref) = Value::from(definition.anchor) else {
-            return;
-        };
-        let anchor = FileInfoRef::from_ref(anchor_ref);
-        let script_file = anchor.script_file(&self.heap);
-        let line_number = anchor.line_number(&self.heap);
-        let definition_metadata = IdentifierDefinitionRef::new(
-            &mut self.heap,
-            HereInfo {
-                script_file,
-                line_number,
-            },
-            None,
-        );
+        let definition_metadata = self.definition_metadata_from_anchor(definition.anchor);
 
         identifier.set_definition(&mut self.heap, definition_metadata);
         identifier.set_type(&mut self.heap, Type::Undefined.into());
@@ -1247,14 +1247,126 @@ impl VM {
             IdentifierValueData::Arbitrary(definition.body.into()),
         );
 
+        self.push_definiendum_once(current_file, definition.identifier);
+    }
+
+    fn commit_top_level_specification_payload(
+        &mut self,
+        current_file: FileRecord,
+        specification: &ParserSpecificationPayload,
+    ) {
+        let identifier = IdentifierRecordRef::from_ref(specification.identifier);
+        identifier.set_type(&mut self.heap, specification.type_expr);
+
+        self.push_definiendum_once(current_file, specification.identifier);
+    }
+
+    fn commit_top_level_type_declaration_payload(
+        &mut self,
+        current_file: FileRecord,
+        type_declaration: &ParserTypeDeclarationPayload,
+    ) {
+        let type_identifier = IdentifierRecordRef::from_ref(type_declaration.type_identifier);
+        let definition_metadata = self.definition_metadata_from_anchor(type_declaration.anchor);
+        type_identifier.set_definition(&mut self.heap, definition_metadata);
+        type_identifier.set_type(&mut self.heap, Type::Type.into());
+        let value = IdentifierValueRef::from_type_identifier_parts(
+            &mut self.heap,
+            TypeIdentifierValueParts {
+                arity: 0,
+                show_function: None,
+                kind: type_declaration.kind,
+                info: type_declaration.info,
+            },
+        );
+        type_identifier.set_value(&mut self.heap, value);
+
+        self.push_definiendum_once(current_file, type_declaration.type_identifier);
+    }
+
+    fn commit_top_level_constructor_payload(
+        &mut self,
+        current_file: FileRecord,
+        constructor_payload: &ParserConstructorPayload,
+    ) {
+        let constructor = IdentifierRecordRef::from_ref(constructor_payload.constructor);
+        let definition_metadata = self.definition_metadata_from_anchor(constructor_payload.anchor);
+        constructor.set_definition(&mut self.heap, definition_metadata);
+        constructor.set_type(&mut self.heap, constructor_payload.parent_type.into());
+
+        self.push_definiendum_once(current_file, constructor_payload.constructor);
+    }
+
+    fn commit_top_level_free_bindings_payload(
+        &mut self,
+        current_file: FileRecord,
+        free_bindings: &[ParserFreeBindingPayload],
+    ) {
+        let mut formal_bindings: ConsList = ConsList::EMPTY;
+
+        for free_binding in free_bindings {
+            let identifier = IdentifierRecordRef::from_ref(free_binding.identifier);
+            let definition_metadata = self.definition_metadata_from_anchor(free_binding.anchor);
+            identifier.set_definition(&mut self.heap, definition_metadata);
+            identifier.set_type(&mut self.heap, free_binding.type_expr);
+
+            if RawValue::from(free_binding.type_expr) == RawValue::from(Type::Type) {
+                let free_type = IdentifierValueRef::from_type_identifier_parts(
+                    &mut self.heap,
+                    TypeIdentifierValueParts {
+                        arity: 0,
+                        show_function: None,
+                        kind: IdentifierValueTypeKind::Free,
+                        info: Combinator::Nil.into(),
+                    },
+                );
+                identifier.set_value(&mut self.heap, free_type);
+            }
+
+            let original_name_ref = self.heap.string(identifier.get_name(&self.heap));
+            let original_name = self.heap.data_pair_ref(original_name_ref.into(), 0.into());
+            let formal_payload = self.heap.cons_ref(original_name, free_binding.type_expr);
+            let formal_binding: RawValue = self
+                .heap
+                .cons_ref(free_binding.identifier.into(), formal_payload)
+                .into();
+            formal_bindings.push_raw(&mut self.heap, formal_binding);
+            self.push_definiendum_once(current_file, free_binding.identifier);
+        }
+
+        self.free_identifiers = ConsList::from_ref(super::bytecode::hdsort_binding_list_ref(
+            &mut self.heap,
+            formal_bindings.get_ref(),
+        ));
+        current_file.set_shareable(&mut self.heap, false);
+    }
+
+    fn definition_metadata_from_anchor(&mut self, anchor_raw: RawValue) -> IdentifierDefinitionRef {
+        let Value::Reference(anchor_ref) = Value::from(anchor_raw) else {
+            return IdentifierDefinitionRef::undefined();
+        };
+        let anchor = FileInfoRef::from_ref(anchor_ref);
+        let script_file = anchor.script_file(&self.heap);
+        let line_number = anchor.line_number(&self.heap);
+        IdentifierDefinitionRef::new(
+            &mut self.heap,
+            HereInfo {
+                script_file,
+                line_number,
+            },
+            None,
+        )
+    }
+
+    fn push_definiendum_once(&mut self, current_file: FileRecord, identifier_ref: RawValue) {
         let mut definienda = current_file.get_definienda(&self.heap);
         while let Some(existing) = definienda.pop_raw(&self.heap) {
-            if existing == definition.identifier {
+            if existing == identifier_ref {
                 return;
             }
         }
 
-        current_file.push_item(&mut self.heap, definition.identifier.into());
+        current_file.push_item_onto_definienda(&mut self.heap, identifier_ref.into());
     }
 
     fn parser_activation(&mut self) -> ParserActivation<'_> {
@@ -1333,19 +1445,21 @@ impl VM {
             (Some(Token::Include), _)
             | (Some(Token::Export), _)
             | (Some(Token::Identifier), Some(Token::Equal))
+            | (Some(Token::Identifier), Some(Token::ColonColon))
+            | (Some(Token::Identifier), Some(Token::EqualEqual))
+            | (Some(Token::Identifier), Some(Token::Colon2Equal))
             | (Some(Token::Name), Some(Token::Equal))
-            | (Some(Token::ConstructorName), Some(Token::Equal)) => LoadScriptForm::TopLevelScript,
+            | (Some(Token::Name), Some(Token::ColonColon))
+            | (Some(Token::Name), Some(Token::EqualEqual))
+            | (Some(Token::Name), Some(Token::Colon2Equal))
+            | (Some(Token::ConstructorName), Some(Token::Equal))
+            | (Some(Token::Free), _) => LoadScriptForm::TopLevelScript,
             (Some(Token::Lex), _)
             | (Some(Token::BNF), _)
-            | (Some(Token::Free), _)
             | (Some(Token::Type), _)
             | (Some(Token::AbsoluteType), _)
             | (Some(Token::Value), _)
             | (Some(Token::Eval), _)
-            | (Some(Token::Identifier), Some(Token::ColonColon))
-            | (Some(Token::Identifier), Some(Token::Colon2Equal))
-            | (Some(Token::Name), Some(Token::ColonColon))
-            | (Some(Token::Name), Some(Token::Colon2Equal))
             | (Some(Token::ConstructorName), Some(Token::Colon2Equal)) => {
                 LoadScriptForm::OtherTopLevelForm
             }

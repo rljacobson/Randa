@@ -274,10 +274,123 @@ fn classify_load_script_form_distinguishes_supported_top_level_forms() {
         LoadScriptForm::TopLevelScript
     );
     assert_eq!(
+        vm.classify_load_script_form("slice.m", "entry :: type")
+            .expect("top-level specification should classify"),
+        LoadScriptForm::TopLevelScript
+    );
+    assert_eq!(
+        vm.classify_load_script_form("slice.m", "thing == type")
+            .expect("top-level synonym should classify"),
+        LoadScriptForm::TopLevelScript
+    );
+    assert_eq!(
+        vm.classify_load_script_form("slice.m", "maybe ::= Just | Nothing")
+            .expect("top-level algebraic type should classify"),
+        LoadScriptForm::TopLevelScript
+    );
+    assert_eq!(
         vm.classify_load_script_form("slice.m", "%free { x :: num }")
             .expect("%free should classify"),
-        LoadScriptForm::OtherTopLevelForm
+        LoadScriptForm::TopLevelScript
     );
+}
+
+#[test]
+fn load_file_commits_narrow_spec_and_type_substrate_into_current_file() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("narrow_type_substrate.m");
+    std::fs::write(
+        &source_path,
+        "entry :: type\nthing == type\nmaybe ::= Just | Nothing\n",
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(result.is_ok());
+
+    let entry = vm
+        .heap
+        .get_identifier("entry")
+        .expect("expected entry identifier to exist");
+    let thing = vm
+        .heap
+        .get_identifier("thing")
+        .expect("expected thing identifier to exist");
+    let maybe = vm
+        .heap
+        .get_identifier("maybe")
+        .expect("expected maybe identifier to exist");
+    let just = vm
+        .heap
+        .get_identifier("Just")
+        .expect("expected Just constructor to exist");
+    let nothing = vm
+        .heap
+        .get_identifier("Nothing")
+        .expect("expected Nothing constructor to exist");
+
+    let entry_type_raw: RawValue = entry.get_type(&vm.heap).into();
+    assert_eq!(entry_type_raw, Type::Type.into());
+    assert_eq!(
+        thing
+            .get_value(&vm.heap)
+            .expect("expected typed synonym value")
+            .typed_kind(&vm.heap),
+        Some(IdentifierValueTypeKind::Synonym)
+    );
+    assert_eq!(
+        maybe
+            .get_value(&vm.heap)
+            .expect("expected typed algebraic value")
+            .typed_kind(&vm.heap),
+        Some(IdentifierValueTypeKind::Algebraic)
+    );
+    assert_eq!(just.get_type(&vm.heap), maybe.into());
+    assert_eq!(nothing.get_type(&vm.heap), maybe.into());
+
+    let current_file = vm.files.head(&vm.heap).expect("expected current file");
+    assert_eq!(current_file.get_definienda(&vm.heap).len(&vm.heap), 5);
+}
+
+#[test]
+fn parse_source_script_commits_narrow_free_substrate_and_marks_file_unshareable() {
+    let mut vm = VM::new_for_tests();
+
+    let source_path = unique_test_path("narrow_free_substrate.m");
+    std::fs::write(&source_path, "%free { x :: num }\n").expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+    let source_file = File::open(&source_path).expect("failed to open source test file");
+
+    let result = vm.parse_source_script(&source_file, &source_path_str, UNIX_EPOCH, false);
+
+    assert!(result.is_ok());
+
+    let x = vm
+        .heap
+        .get_identifier("x")
+        .expect("expected free identifier to exist");
+    let num = vm
+        .heap
+        .get_identifier("num")
+        .expect("expected num identifier");
+    let x_type_raw: RawValue = x.get_type(&vm.heap).into();
+    assert_eq!(x_type_raw, num.get_ref());
+
+    assert_eq!(vm.free_identifiers.len(&vm.heap), 1);
+    let formal_list_ref = vm.free_identifiers.get_ref();
+    let formal_binding_ref = vm.heap[formal_list_ref].head;
+    assert_eq!(vm.heap[formal_binding_ref].head, x.get_ref());
+
+    let current_file = result
+        .expect("expected parse outcome")
+        .files
+        .head(&vm.heap)
+        .expect("expected current file");
+    assert!(!current_file.is_shareable(&vm.heap));
 }
 
 #[test]
