@@ -411,15 +411,15 @@ impl VM {
                 return Ok(());
             }
 
-            let mut export_paths: ConsList<RawValue> = ConsList::from_ref(self.export_paths.into());
-            while let Some(entry) = export_paths.pop_raw(&self.heap) {
+            let mut export_paths: ConsList<Value> = ConsList::from_ref(self.export_paths.into());
+            while let Some(entry) = export_paths.pop_value(&self.heap) {
                 if entry == Combinator::Plus.into() {
                     continue;
                 }
 
                 let path = self
                     .heap
-                    .resolve_string(entry.into())
+                    .resolve_string(entry)
                     .map_err(|_| BytecodeError::MalformedExportFileList)?;
                 let mut includee_matches = 0usize;
                 let mut included_files = self.included_files;
@@ -449,15 +449,15 @@ impl VM {
             return Ok(());
         }
 
-        let mut export_paths: ConsList<RawValue> = ConsList::from_ref(export.pathname_requests);
-        while let Some(entry) = export_paths.pop_raw(&self.heap) {
+        let mut export_paths: ConsList<Value> = ConsList::from_ref(export.pathname_requests);
+        while let Some(entry) = export_paths.pop_value(&self.heap) {
             if entry == Combinator::Plus.into() {
                 continue;
             }
 
             let path = self
                 .heap
-                .resolve_string(entry.into())
+                .resolve_string(entry)
                 .map_err(|_| BytecodeError::MalformedExportFileList)?;
             let mut includee_matches = 0usize;
             for include_request in &directive_payload.include_requests {
@@ -785,7 +785,8 @@ impl VM {
             // Rust equivalent here:
             //   formal_binding_ref (CONS) -> head (formal tuple) -> head (ID ref).
             let mut free_identifiers = self.free_identifiers;
-            while let Some(formal_binding_ref) = free_identifiers.pop_raw(&self.heap) {
+            while let Some(formal_binding_ref) = free_identifiers.pop_value(&self.heap) {
+                let formal_binding_ref: RawValue = formal_binding_ref.into();
                 let formal_binding_head = self.heap[formal_binding_ref].head;
                 let formal_id_ref = if self.heap[formal_binding_head].tag == Tag::Cons {
                     self.heap[formal_binding_head].head
@@ -948,12 +949,12 @@ impl VM {
         exported_identifiers: ConsList<IdentifierRecordRef>,
     ) {
         let mut definienda = file_record.get_definienda(&self.heap);
-        while let Some(def_ref) = definienda.pop_raw(&self.heap) {
+        while let Some(definition_id) = definienda.pop(&self.heap) {
+            let def_ref = definition_id.get_ref();
             if self.heap[def_ref].tag != Tag::Id {
                 continue;
             }
 
-            let definition_id = IdentifierRecordRef::from_ref(def_ref);
             if exported_identifiers.contains(&self.heap, definition_id) {
                 continue;
             }
@@ -1302,7 +1303,7 @@ impl VM {
         current_file: FileRecord,
         free_bindings: &[ParserFreeBindingPayload],
     ) {
-        let mut formal_bindings: ConsList = ConsList::EMPTY;
+        let mut formal_bindings: ConsList<Value> = ConsList::EMPTY;
 
         for free_binding in free_bindings {
             let identifier = IdentifierRecordRef::from_ref(free_binding.identifier);
@@ -1326,11 +1327,11 @@ impl VM {
             let original_name_ref = self.heap.string(identifier.get_name(&self.heap));
             let original_name = self.heap.data_pair_ref(original_name_ref.into(), 0.into());
             let formal_payload = self.heap.cons_ref(original_name, free_binding.type_expr);
-            let formal_binding: RawValue = self
+            let formal_binding: Value = self
                 .heap
                 .cons_ref(free_binding.identifier.into(), formal_payload)
                 .into();
-            formal_bindings.push_raw(&mut self.heap, formal_binding);
+            formal_bindings.push(&mut self.heap, formal_binding);
             self.push_definiendum_once(current_file, free_binding.identifier);
         }
 
@@ -1360,13 +1361,14 @@ impl VM {
 
     fn push_definiendum_once(&mut self, current_file: FileRecord, identifier_ref: RawValue) {
         let mut definienda = current_file.get_definienda(&self.heap);
-        while let Some(existing) = definienda.pop_raw(&self.heap) {
-            if existing == identifier_ref {
+        let identifier = IdentifierRecordRef::from_ref(identifier_ref);
+        while let Some(existing) = definienda.pop(&self.heap) {
+            if existing == identifier {
                 return;
             }
         }
 
-        current_file.push_item_onto_definienda(&mut self.heap, identifier_ref.into());
+        current_file.push_item_onto_definienda(&mut self.heap, identifier);
     }
 
     fn parser_activation(&mut self) -> ParserActivation<'_> {

@@ -1708,10 +1708,11 @@ fn hdsort_orders_free_binding_pairs_by_identifier_name() {
     unsorted.append(&mut vm.heap, beta_pair);
 
     let sorted_ref = super::bytecode::hdsort_binding_list_ref(&mut vm.heap, unsorted.get_ref());
-    let mut sorted: ConsList = ConsList::from_ref(sorted_ref);
+    let mut sorted: ConsList<Value> = ConsList::from_ref(sorted_ref);
 
     let mut names: Vec<String> = vec![];
-    while let Some(binding_pair_ref) = sorted.pop_raw(&vm.heap) {
+    while let Some(binding_pair_ref) = sorted.pop_value(&vm.heap) {
+        let binding_pair_ref: RawValue = binding_pair_ref.into();
         let id_ref = IdentifierRecordRef::from_ref(vm.heap[binding_pair_ref].head);
         names.push(id_ref.get_name(&vm.heap));
     }
@@ -1760,20 +1761,20 @@ fn bindparams_records_missing_and_extra_bindings_and_writes_matches() {
 
     assert_eq!(vm.missing_parameter_bindings.len(&vm.heap), 1);
     assert_eq!(
-        vm.missing_parameter_bindings.raw_head(&vm.heap),
-        Some(y_original.get_ref())
+        vm.missing_parameter_bindings.value_head(&vm.heap),
+        Some(y_original.get_ref().into())
     );
 
     assert_eq!(vm.detritus_parameter_bindings.len(&vm.heap), 1);
     assert_eq!(
-        vm.detritus_parameter_bindings.raw_head(&vm.heap),
-        Some(z.get_ref())
+        vm.detritus_parameter_bindings.value_head(&vm.heap),
+        Some(z.get_ref().into())
     );
 
     assert_eq!(vm.free_binding_sets.len(&vm.heap), 1);
     assert_eq!(
-        vm.free_binding_sets.raw_head(&vm.heap),
-        Some(formal_list.get_ref())
+        vm.free_binding_sets.value_head(&vm.heap),
+        Some(formal_list.get_ref().into())
     );
 }
 
@@ -1822,10 +1823,11 @@ fn bindparams_records_wrong_arity_in_detritus_and_still_writes_formal_value() {
     vm.bindparams(formal_list.get_ref().into(), actual_list.get_ref().into());
 
     assert_eq!(vm.detritus_parameter_bindings.len(&vm.heap), 1);
-    let detritus_entry = vm
+    let detritus_entry: RawValue = vm
         .detritus_parameter_bindings
-        .raw_head(&vm.heap)
-        .expect("expected one detritus entry");
+        .value_head(&vm.heap)
+        .expect("expected one detritus entry")
+        .into();
     assert_eq!(vm.heap[detritus_entry].tag, Tag::Cons);
     assert_eq!(vm.heap[detritus_entry].head, t.get_ref());
 

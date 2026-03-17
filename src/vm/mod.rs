@@ -120,13 +120,13 @@ pub struct VM {
     // Miranda's DETROP, list of illegal `%free` actual bindings from `bindparams`.
     // Elements are either an identifier (`name not %free`) or `cons(id, datapair(fa, ta))`
     // for wrong-kind/wrong-arity `==` bindings.
-    detritus_parameter_bindings: ConsList,
+    detritus_parameter_bindings: ConsList<Value>,
     // Miranda's MISSING, list of missing `%free` formal bindings from `bindparams`.
     // Elements are formal original-name datapairs.
-    missing_parameter_bindings: ConsList,
+    missing_parameter_bindings: ConsList<Value>,
     // Miranda's FBS, stack/list of formal-binding sets introduced by parameterized includes.
-    // `bindparams` pushes raw formals list entries; include/type phases may later attach hereinfo.
-    free_binding_sets: ConsList,
+    // `bindparams` pushes formal-list references as heap values; include/type phases may later attach hereinfo.
+    free_binding_sets: ConsList<Value>,
     internals: ConsList<IdentifierRecordRef>, // list of names not exported, used by fix/unfixexports
     used_identifiers: ConsList<IdentifierRecordRef>,
     clashes: ConsList<IdentifierRecordRef>,

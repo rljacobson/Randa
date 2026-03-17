@@ -34,9 +34,7 @@ impl VM {
 
             let definienda = file.get_definienda(&self.heap);
             if !definienda.is_empty() {
-                self.unset_ids(ConsList::<IdentifierRecordRef>::from_ref(
-                    definienda.get_ref(),
-                ))
+                self.unset_ids(definienda)
                 // unsetids(fil_defs(hd[files]));
             }
             file.clear_definienda(&mut self.heap); // fil_defs(hd[files]) = NIL;
@@ -48,14 +46,12 @@ impl VM {
 
             while !file_list.is_empty() {
                 let file: FileRecord = file_list.pop(&self.heap).unwrap();
-                let definienda: ConsList = file.get_definienda(&self.heap);
+                let definienda = file.get_definienda(&self.heap);
 
                 if !definienda.is_empty() {
                     // Todo: Miranda checks that the item has Tag::Id and just continues if not.
                     //       Do we expect everything in `id_list` to be an identifier?
-                    self.unset_ids(ConsList::<IdentifierRecordRef>::from_ref(
-                        definienda.get_ref(),
-                    ))
+                    self.unset_ids(definienda)
                     // unsetids(fil_defs(hd[files]));
                 }
             }

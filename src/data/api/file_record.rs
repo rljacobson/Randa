@@ -93,7 +93,7 @@ impl FileRecord {
         }
     }
 
-    pub fn get_definienda(&self, heap: &Heap) -> ConsList {
+    pub fn get_definienda(&self, heap: &Heap) -> ConsList<IdentifierRecordRef> {
         // cons(  cons(  fileinfo(filename,mtime),  share),    definienda)
         ConsList::from_ref(self.definienda_value(heap).into())
     }
@@ -118,10 +118,10 @@ impl FileRecord {
     }
 
     /// Pushes `item` onto the definienda, which is a cons list of items defined in this file.
-    pub fn push_item_onto_definienda(&self, heap: &mut Heap, item: Value) {
+    pub fn push_item_onto_definienda(&self, heap: &mut Heap, item: IdentifierRecordRef) {
         // Works even if definienda is NIL.
         let definienda_tail: Value = self.definienda_value(heap);
-        let new_list: Value = heap.cons_ref(item, definienda_tail);
+        let new_list: Value = heap.cons_ref(item.into(), definienda_tail);
         self.set_definienda_value(heap, new_list);
     }
 }

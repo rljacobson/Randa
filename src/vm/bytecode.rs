@@ -207,10 +207,10 @@ impl VM {
     /// - `pair.tail`: bound payload value (value-binding payload, or AP/type payload for `==` bindings)
     ///
     /// Side-channel heap shapes written by this method:
-    /// - `missing_parameter_bindings`: list of `datapair(original_name, 0)`
-    /// - `detritus_parameter_bindings`: list items are either `actual_name_id` or
-    ///   `cons(actual_name_id, datapair(formal_arity, actual_arity))`
-    /// - `free_binding_sets`: stack/list of raw `formal` list refs
+    /// - `missing_parameter_bindings`: list of `datapair(original_name, 0)` values
+    /// - `detritus_parameter_bindings`: list items are either `actual_name_id` values or
+    ///   `cons(actual_name_id, datapair(formal_arity, actual_arity))` values
+    /// - `free_binding_sets`: stack/list of `formal` list-reference values
     ///
     /// Invariant: matched names always update formal value payloads; mismatch diagnostics are
     /// accumulated without aborting this phase.
@@ -220,13 +220,13 @@ impl VM {
         let mut formal_cursor: RawValue = formal.into();
         let mut actual_cursor: RawValue = actual.into();
         // Stage wrong-kind/wrong-arity entries, then append them into detritus at the end.
-        let mut badkind: ConsList = ConsList::EMPTY;
+        let mut badkind: ConsList<Value> = ConsList::EMPTY;
 
         // Each call starts with fresh diagnostics and records this include's formal set.
         self.detritus_parameter_bindings = ConsList::EMPTY;
         self.missing_parameter_bindings = ConsList::EMPTY;
         self.free_binding_sets
-            .push_raw(&mut self.heap, formal_cursor);
+            .push(&mut self.heap, formal_cursor.into());
 
         loop {
             // Advance through formals that have no matching actual yet.
@@ -246,7 +246,7 @@ impl VM {
                 if actual_cursor == nil {
                     // No actuals left: every remaining formal is missing.
                     self.missing_parameter_bindings
-                        .push_raw(&mut self.heap, formal_original_name_ref);
+                        .push(&mut self.heap, formal_original_name_ref.into());
                     formal_cursor = self.heap[formal_cursor].tail;
                     continue;
                 }
@@ -261,7 +261,7 @@ impl VM {
                 if formal_name < actual_name {
                     // Formal key sorts before actual key: record missing formal and keep scanning formals.
                     self.missing_parameter_bindings
-                        .push_raw(&mut self.heap, formal_original_name_ref);
+                        .push(&mut self.heap, formal_original_name_ref.into());
                     formal_cursor = self.heap[formal_cursor].tail;
                 } else {
                     // Either equal (potential match) or actual is earlier (handled in outer flow).
@@ -281,7 +281,7 @@ impl VM {
             if formal_cursor == nil {
                 // Actual has no corresponding formal: detritus entry is just the actual name id.
                 self.detritus_parameter_bindings
-                    .push_raw(&mut self.heap, actual_name_ref);
+                    .push(&mut self.heap, actual_name_ref.into());
                 actual_cursor = self.heap[actual_cursor].tail;
                 continue;
             }
@@ -298,7 +298,7 @@ impl VM {
             if formal_name != actual_name {
                 // Name mismatch with both streams present means actual name is not `%free` in this file.
                 self.detritus_parameter_bindings
-                    .push_raw(&mut self.heap, actual_name_ref);
+                    .push(&mut self.heap, actual_name_ref.into());
                 actual_cursor = self.heap[actual_cursor].tail;
                 continue;
             }
@@ -344,7 +344,7 @@ impl VM {
                     .heap
                     .cons_ref(actual_name_ref.into(), arity_pair.into())
                     .into();
-                badkind.push_raw(&mut self.heap, badkind_entry);
+                badkind.push(&mut self.heap, badkind_entry.into());
             }
 
             // For matched names, copy payload by writing `formal_id.tail = actual_binding.tail`.
@@ -358,9 +358,9 @@ impl VM {
         }
 
         // Finalize by appending staged wrong-kind entries into the detritus channel.
-        while let Some(badkind_entry) = badkind.pop_raw(&self.heap) {
+        while let Some(badkind_entry) = badkind.pop_value(&self.heap) {
             self.detritus_parameter_bindings
-                .push_raw(&mut self.heap, badkind_entry);
+                .push(&mut self.heap, badkind_entry);
         }
     }
 

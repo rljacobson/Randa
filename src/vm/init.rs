@@ -172,7 +172,7 @@ impl VM {
         //     first == cons(cons(fileinfo(filename, mtime), share), definienda)
         //     tail( first  ) == definienda
         if let Some(current_file) = self.files.head(&self.heap) {
-            current_file.push_item_onto_definienda(&mut self.heap, item.into());
+            current_file.push_item_onto_definienda(&mut self.heap, item);
         }
     }
 

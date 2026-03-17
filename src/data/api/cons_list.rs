@@ -77,7 +77,7 @@ where
         self.reference = new_list.into();
     }
 
-    pub fn push_raw(&mut self, heap: &mut Heap, item: RawValue) {
+    fn push_raw(&mut self, heap: &mut Heap, item: RawValue) {
         let new_list = heap.cons_ref(Value::from(item), self.reference.into());
 
         self.reference = new_list.into();
@@ -105,16 +105,16 @@ where
         }
     }
 
-    pub fn raw_head_unchecked(&self, heap: &Heap) -> RawValue {
+    fn raw_head_unchecked(&self, heap: &Heap) -> RawValue {
         heap[self.reference].head
     }
 
-    pub fn value_head_unchecked(&self, heap: &Heap) -> Value {
+    fn value_head_unchecked(&self, heap: &Heap) -> Value {
         self.raw_head_unchecked(heap).into()
     }
 
-    pub fn raw_head(&self, heap: &Heap) -> Option<RawValue> {
-        if self.reference == Combinator::Nil.into() {
+    fn raw_head(&self, heap: &Heap) -> Option<RawValue> {
+        if self.is_empty() {
             None
         } else {
             Some(heap[self.reference].head)
@@ -126,14 +126,14 @@ where
     }
 
     /// Returns the tail of this cons list without checking if `self` is empty.
-    pub fn rest_unchecked(&self, heap: &Heap) -> Self {
+    fn rest_unchecked(&self, heap: &Heap) -> Self {
         let rest: RawValue = heap[self.reference].tail;
         Self::from_ref(rest)
     }
 
     /// Returns the tail of this cons list, if it exists.
     pub fn rest(&self, heap: &Heap) -> Option<Self> {
-        if self.reference == Combinator::NIL.into() {
+        if self.is_empty() {
             None
         } else {
             let rest: RawValue = heap[self.reference].tail;
@@ -197,8 +197,8 @@ where
 
     /// If `self = cons(head, rest)`, returns `head` and modifies the internal reference to point to `rest`.
     /// If the list is empty, returns `None`.
-    pub fn pop_raw(&mut self, heap: &Heap) -> Option<RawValue> {
-        if self.reference == Combinator::Nil.into() {
+    fn pop_raw(&mut self, heap: &Heap) -> Option<RawValue> {
+        if self.is_empty() {
             None
         } else {
             let head = self.raw_head_unchecked(heap);
@@ -217,8 +217,8 @@ where
         let item_value: Value = item.into();
         let mut cursor = *self;
 
-        while let Some(next) = cursor.pop_raw(heap) {
-            if Value::from(next) == item_value {
+        while let Some(next) = cursor.pop_value(heap) {
+            if next == item_value {
                 return true;
             }
         }
@@ -233,7 +233,7 @@ where
     /// If `self = cons(head, rest)`, returns `head` and modifies the internal reference to point to `rest`.
     /// If the list is empty, returns `None`.
     pub fn pop(&mut self, heap: &Heap) -> Option<T> {
-        if self.reference == Combinator::Nil.into() {
+        if self.is_empty() {
             None
         } else {
             let head = self.head_unchecked(heap);
@@ -244,19 +244,14 @@ where
     }
 
     #[inline(always)]
-    pub fn head_unchecked(&self, heap: &Heap) -> T {
+    fn head_unchecked(&self, heap: &Heap) -> T {
         let head = heap[self.reference].head;
         T::from_ref(head)
     }
 
     #[inline(always)]
     pub fn head(&self, heap: &Heap) -> Option<T> {
-        if self.reference != Combinator::Nil.into() {
-            let head = heap[self.reference].head;
-            Some(T::from_ref(head))
-        } else {
-            None
-        }
+        self.raw_head(heap).map(T::from_ref)
     }
 }
 
@@ -286,7 +281,6 @@ impl ConsList<Value> {
         list.get_ref().into()
     }
 }
-
 
 impl<T> HeapObjectProxy for ConsList<T>
 where
