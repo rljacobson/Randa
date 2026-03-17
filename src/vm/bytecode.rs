@@ -61,18 +61,19 @@ pub(super) fn hdsort_binding_list_ref(heap: &mut Heap, mut list_ref: RawValue) -
         remaining = heap[remaining].tail;
     }
 
-    let merged_reversed_list: ConsList = ConsList::from_ref(merged_reversed);
+    let merged_reversed_list: ConsList<FreeFormalBindingRef> = ConsList::from_ref(merged_reversed);
     merged_reversed_list.reversed(heap).get_ref()
 }
 
 /// Returns the lexical sort key for one `%free` binding pair.
 ///
 /// `hdsort` compares `get_id(hd[hd[pair]])`; this helper projects the same key through
-/// `IdentifierRecordRef` to keep C key semantics at the Rust boundary.
+/// `FreeFormalBindingRef` to keep C key semantics at the Rust boundary.
 /// Invariant: key identity matches the name of the pair-head identifier.
 fn binding_name_for_hdsort(heap: &Heap, binding_pair_ref: RawValue) -> HeapString {
-    let name_identifier_ref = heap[binding_pair_ref].head;
-    IdentifierRecordRef::from_ref(name_identifier_ref).get_name(heap)
+    FreeFormalBindingRef::from_ref(binding_pair_ref)
+        .identifier(heap)
+        .get_name(heap)
 }
 
 impl VM {

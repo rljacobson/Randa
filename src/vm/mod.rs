@@ -35,9 +35,9 @@ use crate::{
     data::{
         api::{
             AliasEntry, ConsList, ConstructorRef, DataPair, FileInfoRef, FileRecord,
-            HeapObjectProxy, IdentifierCoreData, IdentifierCoreRef, IdentifierDefinitionRef,
-            IdentifierRecordRef, IdentifierValueData, IdentifierValueRef, IdentifierValueTypeKind,
-            OpenFile, PrivateNameRef, TypeIdentifierValueParts,
+            FreeFormalBindingRef, HeapObjectProxy, IdentifierCoreData, IdentifierCoreRef,
+            IdentifierDefinitionRef, IdentifierRecordRef, IdentifierValueData, IdentifierValueRef,
+            IdentifierValueTypeKind, OpenFile, PrivateNameRef, TypeIdentifierValueParts,
         },
         path::*,
         Combinator, Heap, RawValue, Tag, Type, Value,
@@ -116,7 +116,8 @@ pub struct VM {
     exported_identifiers: Value,
     bnf_enabled: Value, // Miranda's `fnts`, a heap-backed `%bnf`-enabled flag.
     aliases: ConsList,  // Not `IdentifierRecordRef`, because `hold` is not an `Identifier`.
-    free_identifiers: ConsList<IdentifierRecordRef>,
+    // Miranda `%free` formals, each `cons(id, cons(datapair(original_name, 0), type))`.
+    free_identifiers: ConsList<FreeFormalBindingRef>,
     // Miranda's DETROP, list of illegal `%free` actual bindings from `bindparams`.
     // Elements are either an identifier (`name not %free`) or `cons(id, datapair(fa, ta))`
     // for wrong-kind/wrong-arity `==` bindings.

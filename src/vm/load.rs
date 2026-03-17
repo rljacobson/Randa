@@ -781,23 +781,11 @@ impl VM {
             ConsList::from_ref(self.exported_identifiers.into());
 
         if !has_export_directive {
-            // `free_identifiers` entries are formal-binding structures; we use `head(head(e))` to reach the ID.
-            // Rust equivalent here:
-            //   formal_binding_ref (CONS) -> head (formal tuple) -> head (ID ref).
             let mut free_identifiers = self.free_identifiers;
-            while let Some(formal_binding_ref) = free_identifiers.pop_value(&self.heap) {
-                let formal_binding_ref: RawValue = formal_binding_ref.into();
-                let formal_binding_head = self.heap[formal_binding_ref].head;
-                let formal_id_ref = if self.heap[formal_binding_head].tag == Tag::Cons {
-                    self.heap[formal_binding_head].head
-                } else {
-                    formal_binding_head
-                };
-                if self.heap[formal_id_ref].tag == Tag::Id {
-                    self.internalize_identifier_for_dump_visibility(IdentifierRecordRef::from_ref(
-                        formal_id_ref,
-                    ));
-                }
+            while let Some(formal_binding) = free_identifiers.pop(&self.heap) {
+                self.internalize_identifier_for_dump_visibility(
+                    formal_binding.identifier(&self.heap),
+                );
             }
 
             // This branch scans only subsidiary files (`rest(files)`), not the front script file.
@@ -1303,7 +1291,7 @@ impl VM {
         current_file: FileRecord,
         free_bindings: &[ParserFreeBindingPayload],
     ) {
-        let mut formal_bindings: ConsList<Value> = ConsList::EMPTY;
+        let mut formal_bindings: ConsList<FreeFormalBindingRef> = ConsList::EMPTY;
 
         for free_binding in free_bindings {
             let identifier = IdentifierRecordRef::from_ref(free_binding.identifier);
@@ -1325,12 +1313,13 @@ impl VM {
             }
 
             let original_name_ref = self.heap.string(identifier.get_name(&self.heap));
-            let original_name = self.heap.data_pair_ref(original_name_ref.into(), 0.into());
-            let formal_payload = self.heap.cons_ref(original_name, free_binding.type_expr);
-            let formal_binding: Value = self
-                .heap
-                .cons_ref(free_binding.identifier.into(), formal_payload)
-                .into();
+            let original_name = DataPair::new(&mut self.heap, original_name_ref.into(), 0.into());
+            let formal_binding = FreeFormalBindingRef::new(
+                &mut self.heap,
+                identifier,
+                original_name,
+                free_binding.type_expr,
+            );
             formal_bindings.push(&mut self.heap, formal_binding);
             self.push_definiendum_once(current_file, free_binding.identifier);
         }

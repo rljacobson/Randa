@@ -5,7 +5,8 @@ use crate::compiler::{
     ParserTopLevelDirectivePayload,
 };
 use crate::data::api::{
-    HeapObjectProxy, IdentifierValueTypeData, IdentifierValueTypeKind, IdentifierValueTypeRef,
+    DataPair, FreeFormalBindingRef, HeapObjectProxy, IdentifierValueTypeData,
+    IdentifierValueTypeKind, IdentifierValueTypeRef,
 };
 use crate::vm::load::LoadScriptForm;
 use std::path::PathBuf;
@@ -381,9 +382,19 @@ fn parse_source_script_commits_narrow_free_substrate_and_marks_file_unshareable(
     assert_eq!(x_type_raw, num.get_ref());
 
     assert_eq!(vm.free_identifiers.len(&vm.heap), 1);
-    let formal_list_ref = vm.free_identifiers.get_ref();
-    let formal_binding_ref = vm.heap[formal_list_ref].head;
-    assert_eq!(vm.heap[formal_binding_ref].head, x.get_ref());
+    let free_binding = vm
+        .free_identifiers
+        .head(&vm.heap)
+        .expect("expected one free formal binding");
+    assert_eq!(free_binding.identifier(&vm.heap), x);
+    assert_eq!(free_binding.type_expr(&vm.heap), num.into());
+    let original_name = free_binding.original_name_metadata(&vm.heap);
+    assert_eq!(original_name.right_value(&vm.heap), 0.into());
+    let expected_original_name_ref = vm.heap.string(x.get_name(&vm.heap));
+    assert_eq!(
+        vm.heap[original_name.get_ref()].head,
+        expected_original_name_ref
+    );
 
     let current_file = result
         .expect("expected parse outcome")
@@ -1590,15 +1601,12 @@ fn fixexports_internalizes_nested_free_id_bindings() {
     vm.files = ConsList::new(&mut vm.heap, source_file);
 
     let free_id = vm.heap.make_empty_identifier("free_param");
-    let free_binding: RawValue = vm
-        .heap
-        .cons_ref(free_id.get_ref().into(), Combinator::Nil.into())
-        .into();
-    let free_ids_list: RawValue = vm
-        .heap
-        .cons_ref(free_binding.into(), Combinator::Nil.into())
-        .into();
-    vm.free_identifiers = ConsList::from_ref(free_ids_list);
+    let free_name = free_id.get_name(&vm.heap);
+    let original_name_ref = vm.heap.string(free_name);
+    let original_name = DataPair::new(&mut vm.heap, original_name_ref.into(), 0.into());
+    let free_binding =
+        FreeFormalBindingRef::new(&mut vm.heap, free_id, original_name, Type::Undefined.into());
+    vm.free_identifiers = ConsList::new(&mut vm.heap, free_binding);
 
     vm.exported_identifiers = NIL;
     vm.export_paths = NIL;
@@ -1646,6 +1654,35 @@ fn fixexports_internalize_undef_writes_fallback_application_payload() {
     assert_eq!(vm.heap[fallback_ref].tag, Tag::Ap);
     let fallback_head_ref = vm.heap[fallback_ref].head;
     assert_eq!(vm.heap[fallback_head_ref].tag, Tag::DataPair);
+}
+
+#[test]
+fn unload_unsets_identifiers_reached_through_free_formal_bindings() {
+    let mut vm = VM::new_for_tests();
+
+    let free_id = vm.heap.make_empty_identifier("free_param");
+    free_id.set_type(&mut vm.heap, Type::Type.into());
+    let free_name = free_id.get_name(&vm.heap);
+    let original_name_ref = vm.heap.string(free_name);
+    let original_name = DataPair::new(&mut vm.heap, original_name_ref.into(), 0.into());
+    let free_binding =
+        FreeFormalBindingRef::new(&mut vm.heap, free_id, original_name, Type::Type.into());
+    vm.free_identifiers = ConsList::new(&mut vm.heap, free_binding);
+
+    vm.unload();
+
+    assert!(vm.free_identifiers.is_empty());
+    assert_eq!(
+        RawValue::from(free_id.get_type(&vm.heap)),
+        Type::Undefined.into()
+    );
+    assert_eq!(
+        free_id
+            .get_value(&vm.heap)
+            .expect("expected unset identifier value field")
+            .get_ref(),
+        Combinator::Undef.into()
+    );
 }
 
 #[test]
@@ -1733,18 +1770,22 @@ fn bindparams_records_missing_and_extra_bindings_and_writes_matches() {
     let y_original =
         IdentifierDefinitionRef::alias_metadata_from_source_identifier(&mut vm.heap, y);
 
-    let x_formal_payload = vm
-        .heap
-        .cons_ref(x_original.get_ref().into(), Type::Undefined.into());
-    let y_formal_payload = vm
-        .heap
-        .cons_ref(y_original.get_ref().into(), Type::Undefined.into());
-    let x_formal_binding: RawValue = vm.heap.cons_ref(x.into(), x_formal_payload).into();
-    let y_formal_binding: RawValue = vm.heap.cons_ref(y.into(), y_formal_payload).into();
+    let x_formal_binding = FreeFormalBindingRef::new(
+        &mut vm.heap,
+        x,
+        DataPair::from_ref(x_original.get_ref()),
+        Type::Undefined.into(),
+    );
+    let y_formal_binding = FreeFormalBindingRef::new(
+        &mut vm.heap,
+        y,
+        DataPair::from_ref(y_original.get_ref()),
+        Type::Undefined.into(),
+    );
 
-    let mut formal_list: ConsList = ConsList::EMPTY;
-    formal_list.append(&mut vm.heap, x_formal_binding);
-    formal_list.append(&mut vm.heap, y_formal_binding);
+    let mut formal_list: ConsList<FreeFormalBindingRef> = ConsList::EMPTY;
+    formal_list.push(&mut vm.heap, y_formal_binding);
+    formal_list.push(&mut vm.heap, x_formal_binding);
 
     let x_payload: Value = IntegerRef::from_i64(&mut vm.heap, 42).into();
     let z_payload: Value = IntegerRef::from_i64(&mut vm.heap, 7).into();
@@ -1797,11 +1838,13 @@ fn bindparams_records_wrong_arity_in_detritus_and_still_writes_formal_value() {
         },
     );
 
-    let formal_payload = vm
-        .heap
-        .cons_ref(t_original.get_ref().into(), Type::Type.into());
-    let formal_binding: RawValue = vm.heap.cons_ref(t.into(), formal_payload).into();
-    let formal_list: ConsList = ConsList::new(&mut vm.heap, formal_binding);
+    let formal_binding = FreeFormalBindingRef::new(
+        &mut vm.heap,
+        t,
+        DataPair::from_ref(t_original.get_ref()),
+        Type::Type.into(),
+    );
+    let formal_list: ConsList<FreeFormalBindingRef> = ConsList::new(&mut vm.heap, formal_binding);
 
     let actual_value_type =
         IdentifierValueTypeRef::new(&mut vm.heap, IdentifierValueTypeData::Free);

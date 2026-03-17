@@ -13,7 +13,13 @@ impl VM {
         self.unset_ids(self.new_type_names);
         self.new_type_names = ConsList::EMPTY;
 
-        self.unset_ids(self.free_identifiers);
+        let mut free_identifiers = self.free_identifiers;
+        while !free_identifiers.is_empty() {
+            let formal_binding = free_identifiers.pop(&self.heap).unwrap();
+            formal_binding
+                .identifier(&self.heap)
+                .unset_id(&mut self.heap);
+        }
         self.free_identifiers = ConsList::EMPTY;
         self.detritus_parameter_bindings = ConsList::EMPTY;
         self.missing_parameter_bindings = ConsList::EMPTY;
