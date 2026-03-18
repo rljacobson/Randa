@@ -92,10 +92,6 @@ fn load_file_missing_script_is_allowed_outside_initialization() {
     let source_path_str = source_path.to_string_lossy().to_string();
 
     let result = vm.load_file(&source_path_str);
-    eprintln!(
-        "result={result:?} diagnostics={:?} last_expression={:?}",
-        vm.parser_diagnostics, vm.last_expression
-    );
 
     assert!(result.is_ok());
     assert!(!vm.loading);
@@ -275,6 +271,21 @@ fn classify_load_script_form_distinguishes_supported_top_level_forms() {
         LoadScriptForm::TopLevelScript
     );
     assert_eq!(
+        vm.classify_load_script_form("slice.m", "id x = x")
+            .expect("top-level function definition should classify"),
+        LoadScriptForm::TopLevelScript
+    );
+    assert_eq!(
+        vm.classify_load_script_form("slice.m", "head (x:xs) = x")
+            .expect("top-level cons-pattern definition should classify"),
+        LoadScriptForm::TopLevelScript
+    );
+    assert_eq!(
+        vm.classify_load_script_form("slice.m", "fromJust (Just x) = x")
+            .expect("top-level constructor-pattern definition should classify"),
+        LoadScriptForm::TopLevelScript
+    );
+    assert_eq!(
         vm.classify_load_script_form("slice.m", "entry :: type")
             .expect("top-level specification should classify"),
         LoadScriptForm::TopLevelScript
@@ -294,6 +305,102 @@ fn classify_load_script_form_distinguishes_supported_top_level_forms() {
             .expect("%free should classify"),
         LoadScriptForm::TopLevelScript
     );
+}
+
+#[test]
+fn load_file_commits_top_level_function_form_as_lambda() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("function_form_substrate.m");
+    std::fs::write(&source_path, "id x y = x\n").expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(result.is_ok());
+    let id = vm
+        .heap
+        .get_identifier("id")
+        .expect("expected id identifier to exist");
+    let id_value = id
+        .get_value(&vm.heap)
+        .expect("expected id definition value to exist");
+    let IdentifierValueData::Arbitrary(Value::Reference(outer_lambda_ref)) =
+        id_value.get_data(&vm.heap)
+    else {
+        panic!("expected top-level function form to lower into a lambda body");
+    };
+    let outer_lambda_raw: RawValue = Value::Reference(outer_lambda_ref).into();
+    assert_eq!(vm.heap[outer_lambda_raw].tag, Tag::Lambda);
+    let inner_lambda_raw = vm.heap[outer_lambda_raw].tail;
+    assert_eq!(vm.heap[inner_lambda_raw].tag, Tag::Lambda);
+    let body_identifier = IdentifierRecordRef::from_ref(vm.heap[inner_lambda_raw].tail);
+    assert_eq!(vm.identifier_name(body_identifier), "x");
+    assert!(vm.undefined_names.is_empty());
+}
+
+#[test]
+fn load_file_commits_top_level_cons_pattern_form_and_treats_names_as_bound() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("cons_pattern_form_substrate.m");
+    std::fs::write(&source_path, "head (x:xs) = x\n").expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(result.is_ok());
+    let head = vm
+        .heap
+        .get_identifier("head")
+        .expect("expected head identifier to exist");
+    let head_value = head
+        .get_value(&vm.heap)
+        .expect("expected head definition value to exist");
+    let IdentifierValueData::Arbitrary(Value::Reference(lambda_ref)) =
+        head_value.get_data(&vm.heap)
+    else {
+        panic!("expected top-level cons pattern form to lower into a lambda body");
+    };
+    let lambda_raw: RawValue = Value::Reference(lambda_ref).into();
+    assert_eq!(vm.heap[lambda_raw].tag, Tag::Lambda);
+    let pattern_raw = vm.heap[lambda_raw].head;
+    assert_eq!(vm.heap[pattern_raw].tag, Tag::Cons);
+    let body_identifier = IdentifierRecordRef::from_ref(vm.heap[lambda_raw].tail);
+    assert_eq!(vm.identifier_name(body_identifier), "x");
+    assert!(vm.undefined_names.is_empty());
+}
+
+#[test]
+fn load_file_accepts_nullary_constructor_pattern_form() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("nullary_constructor_pattern_form_substrate.m");
+    std::fs::write(
+        &source_path,
+        "maybe ::= Just | Nothing\nisJust Just = True\nisJust Nothing = False\n",
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(result.is_ok());
+    let is_just = vm
+        .heap
+        .get_identifier("isJust")
+        .expect("expected isJust identifier to exist");
+    let is_just_value = is_just
+        .get_value(&vm.heap)
+        .expect("expected isJust definition value to exist");
+    assert!(matches!(
+        is_just_value.get_data(&vm.heap),
+        IdentifierValueData::Arbitrary(Value::Reference(_))
+    ));
+    assert!(vm.undefined_names.is_empty());
 }
 
 #[test]

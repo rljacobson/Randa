@@ -49,6 +49,22 @@ pub enum BytecodeError {
     ExportFileAmbiguous { path: String },
     #[error("Typecheck phase found undefined names ({count})")]
     TypecheckUndefinedNames { count: usize },
+    #[error("Typecheck phase found invalid %free bindings ({count})")]
+    TypecheckInvalidFreeBindings { count: usize },
+    #[error("Typecheck phase found missing %free bindings ({count})")]
+    TypecheckMissingFreeBindings { count: usize },
+    #[error("Typecheck phase found undefined typenames ({count})")]
+    TypecheckUndefinedTypeNames { count: usize },
+    #[error("Typecheck phase found non-typename references in type expressions ({count})")]
+    TypecheckNonTypeIdentifiersInTypeExpr { count: usize },
+    #[error("Typecheck phase found typename arity mismatches ({count})")]
+    TypecheckTypeArityMismatch { count: usize },
+    #[error("Typecheck phase found abstract typenames without bindings ({count})")]
+    TypecheckUnboundAbstractTypeNames { count: usize },
+    #[error("Typecheck phase found specified but not defined names ({count})")]
+    TypecheckSpecifiedButNotDefined { count: usize },
+    #[error("Typecheck phase found typenames used as identifiers ({count})")]
+    TypecheckTypeNamesUsedAsIdentifiers { count: usize },
     #[error("Export closure blocked by undefined names")]
     ExportClosureBlockedByUndefinedNames,
     #[error("Codegen phase requires at least one loaded file")]

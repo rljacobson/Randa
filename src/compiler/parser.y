@@ -252,8 +252,11 @@ exp:
     ;
 
 /* The active top-level script slice currently accepts `%include`, `%export`,
-   and top-level value/function definitions. Other top-level forms are still
-   classified before parser entry and follow the deferred integration path. */
+   top-level value definitions, and a narrow top-level function/pattern slice.
+   The currently active parameter subset includes simple name parameters plus a
+   small parser-owned pattern subset used only at top level. Other top-level
+   forms are still classified before parser entry and follow the deferred
+   integration path. */
 top_level_script:
     top_level_item { $$ = NIL; }
     | top_level_script top_level_item { $$ = NIL; }
@@ -332,6 +335,53 @@ top_level_definition_item:
         self.last_identifier = identifier.into();
         $$ = NIL;
       }
+    | Name top_level_definition_parameters top_level_definition_anchor Equal exp directive_terminators {
+        let identifier = $1;
+        let anchor = $3;
+        let mut body = $5;
+        let mut parameters: RawValue = $2.into();
+        while parameters != NIL_RAW {
+          body = self.heap.lambda_ref(self.heap[parameters].head.into(), body);
+          parameters = self.heap[parameters].tail;
+        }
+        self.definition_payloads.push(ParserDefinitionPayload {
+          identifier: identifier.into(),
+          body: body.into(),
+          anchor: anchor.into(),
+        });
+        self.last_identifier = identifier.into();
+        $$ = NIL;
+      }
+    ;
+
+top_level_definition_parameters:
+    top_level_definition_parameter { $$ = self.heap.cons_ref($1, NIL); }
+    | top_level_definition_parameters top_level_definition_parameter { $$ = self.heap.cons_ref($2, $1); }
+    ;
+
+top_level_definition_parameter:
+    Name { $$ = $1; }
+    | ConstructorName { $$ = $1; }
+    | OpenBracket CloseBracket { $$ = self.heap.nill; }
+    | OpenParenthesis top_level_pattern CloseParenthesis { $$ = $2; }
+    ;
+
+top_level_pattern:
+    top_level_pattern_atom Colon top_level_pattern { $$ = self.heap.cons_ref($1, $3); }
+    | top_level_pattern_application { $$ = $1; }
+    | top_level_pattern_atom { $$ = $1; }
+    ;
+
+top_level_pattern_application:
+    ConstructorName top_level_pattern_atom { $$ = self.heap.apply_ref($1, $2); }
+    | top_level_pattern_application top_level_pattern_atom { $$ = self.heap.apply_ref($1, $2); }
+    ;
+
+top_level_pattern_atom:
+    Name { $$ = $1; }
+    | ConstructorName { $$ = $1; }
+    | OpenBracket CloseBracket { $$ = self.heap.nill; }
+    | OpenParenthesis top_level_pattern CloseParenthesis { $$ = $2; }
     ;
 
 top_level_specification_item:
@@ -367,8 +417,13 @@ top_level_algebraic_type_item:
     Name top_level_definition_anchor Colon2Equal top_level_constructor_list directive_terminators {
         let type_identifier = $1;
         let anchor = $2;
-        let constructor_list = $4;
-        let mut constructors: RawValue = constructor_list.into();
+        let mut constructor_list: RawValue = $4.into();
+        let mut source_order_constructor_list = NIL_RAW;
+        while constructor_list != NIL_RAW {
+          source_order_constructor_list = self.heap.cons_ref(self.heap[constructor_list].head.into(), source_order_constructor_list.into()).into();
+          constructor_list = self.heap[constructor_list].tail;
+        }
+        let mut constructors: RawValue = source_order_constructor_list;
         while constructors!=NIL_RAW {
           self.constructor_payloads.push(ParserConstructorPayload {
             constructor: self.heap[constructors].head,
@@ -380,7 +435,7 @@ top_level_algebraic_type_item:
         self.type_declaration_payloads.push(ParserTypeDeclarationPayload {
           type_identifier: type_identifier.into(),
           kind: IdentifierValueTypeKind::Algebraic,
-          info: constructor_list,
+          info: source_order_constructor_list.into(),
           anchor: anchor.into(),
         });
         $$ = NIL;

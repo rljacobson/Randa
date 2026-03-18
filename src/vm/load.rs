@@ -1279,11 +1279,53 @@ impl VM {
         constructor_payload: &ParserConstructorPayload,
     ) {
         let constructor = IdentifierRecordRef::from_ref(constructor_payload.constructor);
+        let parent_type = IdentifierRecordRef::from_ref(constructor_payload.parent_type);
         let definition_metadata = self.definition_metadata_from_anchor(constructor_payload.anchor);
         constructor.set_definition(&mut self.heap, definition_metadata);
         constructor.set_type(&mut self.heap, constructor_payload.parent_type.into());
+        let constructor_index = self.constructor_ordinal_in_parent_type(parent_type, constructor);
+        let constructor_value =
+            ConstructorRef::new(&mut self.heap, constructor_index, constructor.into());
+        constructor.set_value_from_data(
+            &mut self.heap,
+            IdentifierValueData::Arbitrary(constructor_value.into()),
+        );
 
         self.push_definiendum_once(current_file, constructor_payload.constructor);
+    }
+
+    /// Returns the committed ordinal of a constructor within its parent algebraic type declaration.
+    /// This exists so constructor runtime values use the same constructor ordering already committed on the parent type.
+    /// The invariant is that the parent type has already been committed with an algebraic constructor list before constructors are materialized.
+    fn constructor_ordinal_in_parent_type(
+        &self,
+        parent_type: IdentifierRecordRef,
+        constructor: IdentifierRecordRef,
+    ) -> i16 {
+        let Some(parent_value) = parent_type.get_value(&self.heap) else {
+            return 0;
+        };
+        let IdentifierValueData::Typed { value_type, .. } = parent_value.get_data(&self.heap)
+        else {
+            return 0;
+        };
+        if value_type.get_identifier_value_type_kind(&self.heap)
+            != IdentifierValueTypeKind::Algebraic
+        {
+            return 0;
+        }
+
+        let mut constructors: ConsList<IdentifierRecordRef> =
+            ConsList::from_ref(self.heap[value_type.get_ref()].tail);
+        let mut ordinal: i16 = 0;
+        while let Some(next_constructor) = constructors.pop(&self.heap) {
+            if next_constructor == constructor {
+                return ordinal;
+            }
+            ordinal += 1;
+        }
+
+        0
     }
 
     fn commit_top_level_free_bindings_payload(
@@ -1402,6 +1444,9 @@ impl VM {
     /// Classifies a source file by the top-level form at its start.
     ///
     /// `%include` and `%export` are accepted as top-level directives here.
+    /// The active top-level definition slice includes simple name-parameter function forms,
+    /// so classification scans the first physical line for a later `=` instead of only matching
+    /// a bare `Name = ...` prefix.
     /// Other top-level forms are left to the existing deferred integration path.
     pub(super) fn classify_load_script_form(
         &mut self,
@@ -1411,7 +1456,7 @@ impl VM {
         let mut lexer = Lexer::new(source_path, source_text);
         let mut tokens: Vec<Token> = Vec::new();
 
-        while tokens.len() < 3 {
+        loop {
             let lookahead: ParserLookahead =
                 lexer
                     .yylex()
@@ -1423,28 +1468,35 @@ impl VM {
                         ),
                     })?;
             match lookahead.token {
-                Token::Newline => continue,
+                Token::Newline => break,
                 Token::EOF => break,
                 token => tokens.push(token),
+            }
+
+            if tokens.len() >= 12 {
+                break;
             }
         }
 
         let first = tokens.first().copied();
         let second = tokens.get(1).copied();
+        let name_led = matches!(
+            first,
+            Some(Token::Identifier | Token::Name | Token::ConstructorName)
+        );
+        let has_equal = tokens.iter().skip(1).any(|token| *token == Token::Equal);
 
         Ok(match (first, second) {
             (Some(Token::Include), _)
             | (Some(Token::Export), _)
-            | (Some(Token::Identifier), Some(Token::Equal))
             | (Some(Token::Identifier), Some(Token::ColonColon))
             | (Some(Token::Identifier), Some(Token::EqualEqual))
             | (Some(Token::Identifier), Some(Token::Colon2Equal))
-            | (Some(Token::Name), Some(Token::Equal))
             | (Some(Token::Name), Some(Token::ColonColon))
             | (Some(Token::Name), Some(Token::EqualEqual))
             | (Some(Token::Name), Some(Token::Colon2Equal))
-            | (Some(Token::ConstructorName), Some(Token::Equal))
             | (Some(Token::Free), _) => LoadScriptForm::TopLevelScript,
+            _ if name_led && has_equal => LoadScriptForm::TopLevelScript,
             (Some(Token::Lex), _)
             | (Some(Token::BNF), _)
             | (Some(Token::Type), _)

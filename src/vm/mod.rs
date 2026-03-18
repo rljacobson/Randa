@@ -7,10 +7,12 @@ manipulation, environment initialization, and compilation from generic heap func
  */
 mod aliases;
 mod bytecode;
+mod codegen;
 mod diagnostics;
 mod init;
 mod load;
 mod state_reset;
+mod typecheck;
 mod ui;
 
 use std::{
