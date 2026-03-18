@@ -381,7 +381,7 @@ impl VM {
         aliases: ConsList, // List of cons(new_id, old_id)
         parameters: Value,
         is_main_script: bool,
-    ) -> Result<ConsList<FileRecord>, BytecodeError> {
+    ) -> Result<ConsList<FileRecord>, LoadScriptError> {
         /*
         extern word nextpn,ND,errline,algshfns,internals,freeids,includees,SGC;
         extern char *dicp, *dicq;
@@ -403,9 +403,9 @@ impl VM {
             let mut f_reader = BufReader::new(in_file);
             let bytes_read = f_reader
                 .read_to_end(&mut file_bytes)
-                .map_err(BytecodeError::unexpected_eof_with_source)?;
+                .map_err(BytecodeDecodeError::unexpected_eof_with_source)?;
             if bytes_read < 16 {
-                return Err(BytecodeError::unexpected_eof());
+                return Err(BytecodeDecodeError::unexpected_eof().into());
             }
         }
         // An iterator over the bytes of the file.
@@ -414,13 +414,13 @@ impl VM {
         // Parse the machine word size
         // First byte: `__WORDSIZE` (64 bits in my case, so `__WORDSIZE == 64 == 0x40`.)
         if *byte_iter.next().unwrap() as usize != WORD_SIZE {
-            return Err(BytecodeError::ArchitectureMismatch);
+            return Err(BytecodeDecodeError::ArchitectureMismatch.into());
         }
 
         // Parse the bytecode version
         // Second byte: `XVERSION`, the bytecode version. (Latest Miranda` == 83 == 0x53`)
         if *byte_iter.next().unwrap() as i32 != XVERSION {
-            return Err(BytecodeError::WrongBytecodeVersion);
+            return Err(BytecodeDecodeError::WrongBytecodeVersion.into());
         }
 
         // Todo: Re-evaluate placement of alias installation relative to bytecode parsing.
@@ -495,7 +495,7 @@ impl VM {
                     if !aliases.is_empty() {
                         self.unalias(aliases);
                     }
-                    return Err(BytecodeError::WrongSourceFile);
+                    return Err(BytecodeDecodeError::WrongSourceFile.into());
                 }
             }
 
@@ -547,7 +547,7 @@ impl VM {
                         if !aliases.is_empty() {
                             self.unalias(aliases);
                         }
-                        return Err(BytecodeError::WrongSourceFile);
+                        return Err(BytecodeDecodeError::WrongSourceFile.into());
                     }
                 }
 
@@ -642,7 +642,7 @@ impl VM {
     pub(super) fn load_defs(
         &mut self,
         byte_iter: &mut dyn Iterator<Item = u8>,
-    ) -> Result<Value, BytecodeError> {
+    ) -> Result<Value, BytecodeDecodeError> {
         // Holds a list of definitions in cases where multiple definitions are read.
         let mut defs: ConsList = ConsList::EMPTY;
         // Holds the components of an item that have been read so far. When all of the components have been read, the
@@ -788,7 +788,7 @@ impl VM {
                     } else if id_type == Type::Alias.into() {
                         // Follow alias diversion (`id_val(id)`).
                         match id.get_value(&self.heap) {
-                            None => return Err(BytecodeError::MalformedDef),
+                            None => return Err(BytecodeDecodeError::MalformedDefinition),
                             Some(id_value) => item_stack.push(id_value.get_ref()),
                         }
                     } else {
@@ -1022,7 +1022,7 @@ impl VM {
                             // Todo: Preserve Miranda's fallback return behavior for this case.
                             //       Blocker: Rust currently treats it as malformed and errors out.
                             //       Migration target: explicit parity decision + typed return handling.
-                            return Err(BytecodeError::MalformedDef);
+                            return Err(BytecodeDecodeError::MalformedDefinition);
                         }
                     } // end math on item_stack.len()
                 } // end Bytecode::Definitions match branch
@@ -1053,7 +1053,7 @@ impl VM {
         }
 
         // Miranda returns `defs`, too.
-        Err(BytecodeError::MalformedDef) // Miranda: "should unsetids"
+        Err(BytecodeDecodeError::MalformedDefinition) // Miranda: "should unsetids"
     }
 }
 
@@ -1062,11 +1062,11 @@ fn prefix(heap: &Heap, prefix_stack: ConsList) -> Result<String, ()> {
     heap.resolve_string(str_ref)
 }
 
-/// Convenience function that returns the next byte or `BytecodeError::UnexpectedEOF`.
-fn next(byte_iter: &mut dyn Iterator<Item = u8>) -> Result<u8, BytecodeError> {
+/// Convenience function that returns the next byte or `BytecodeDecodeError::UnexpectedEof`.
+fn next(byte_iter: &mut dyn Iterator<Item = u8>) -> Result<u8, BytecodeDecodeError> {
     match byte_iter.next() {
         Some(ch) => Ok(ch),
 
-        None => Err(BytecodeError::unexpected_eof()),
+        None => Err(BytecodeDecodeError::unexpected_eof()),
     }
 }

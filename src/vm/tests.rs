@@ -110,7 +110,7 @@ fn load_file_missing_script_errors_during_initialization() {
 
     assert!(matches!(
         result,
-        Err(BytecodeError::MissingSourceFile { path }) if path == source_path_str
+        Err(LoadFileError::SourceInput(SourceInputError::MissingFile { path })) if path == source_path_str
     ));
     assert!(!vm.loading);
 }
@@ -213,7 +213,7 @@ fn load_file_missing_script_errors_during_make_mode() {
 
     assert!(matches!(
         result,
-        Err(BytecodeError::MissingSourceFile { path }) if path == source_path_str
+        Err(LoadFileError::SourceInput(SourceInputError::MissingFile { path })) if path == source_path_str
     ));
     assert_eq!(
         vm.last_load_phase_trace,
@@ -416,7 +416,9 @@ fn load_file_rejects_undeclared_constructor_atom_in_formal() {
 
     assert!(matches!(
         result,
-        Err(BytecodeError::TypecheckUndeclaredConstructorsInFormals { count: 1 })
+        Err(LoadFileError::Typecheck(
+            TypecheckError::UndeclaredConstructorsInFormals { count: 1 }
+        ))
     ));
 }
 
@@ -434,7 +436,9 @@ fn load_file_rejects_undeclared_constructor_application_in_formal() {
 
     assert!(matches!(
         result,
-        Err(BytecodeError::TypecheckUndeclaredConstructorsInFormals { count: 1 })
+        Err(LoadFileError::Typecheck(
+            TypecheckError::UndeclaredConstructorsInFormals { count: 1 }
+        ))
     ));
 }
 
@@ -455,7 +459,9 @@ fn load_file_rejects_declared_constructor_application_for_wrong_arity_in_formal(
 
     assert!(matches!(
         result,
-        Err(BytecodeError::TypecheckConstructorArityMismatchInFormals { count: 1 })
+        Err(LoadFileError::Typecheck(
+            TypecheckError::ConstructorArityMismatchInFormals { count: 1 }
+        ))
     ));
 }
 
@@ -691,7 +697,7 @@ fn load_file_exportfile_validation_failure_leaves_no_authoritative_commit() {
 
     assert!(matches!(
         result,
-        Err(BytecodeError::ExportFileNotIncludedInScript { path }) if path == missing_include_path_str
+        Err(LoadFileError::ExportValidation(ExportValidationError::PathNotIncludedInScript { path })) if path == missing_include_path_str
     ));
     assert_eq!(
         vm.last_load_phase_trace,
@@ -722,7 +728,7 @@ fn load_file_include_materialization_failure_leaves_no_authoritative_commit() {
 
     assert!(matches!(
         result,
-        Err(BytecodeError::MissingSourceFile { path }) if path == missing_include_path_str
+        Err(LoadFileError::SourceInput(SourceInputError::MissingFile { path })) if path == missing_include_path_str
     ));
     assert_eq!(
         vm.last_load_phase_trace,
@@ -860,7 +866,7 @@ fn load_file_reports_syntax_error_during_initialization() {
 
     assert!(matches!(
         result,
-        Err(BytecodeError::SyntaxErrorInSource { path }) if path == source_path_str
+        Err(LoadFileError::Parse(SourceParseError::SyntaxErrorsPresent { path })) if path == source_path_str
     ));
     assert_eq!(
         vm.last_load_phase_trace,
@@ -1100,7 +1106,7 @@ fn exportfile_phase_errors_when_path_is_not_in_includees() {
 
     assert!(matches!(
         result,
-        Err(BytecodeError::ExportFileNotIncludedInScript { path: p }) if p == path
+        Err(ExportValidationError::PathNotIncludedInScript { path: p }) if p == path
     ));
 }
 
@@ -1132,7 +1138,7 @@ fn exportfile_phase_errors_when_path_binding_is_ambiguous() {
 
     assert!(matches!(
         result,
-        Err(BytecodeError::ExportFileAmbiguous { path: p }) if p == path
+        Err(ExportValidationError::AmbiguousPathRequest { path: p }) if p == path
     ));
 }
 
@@ -1245,7 +1251,7 @@ fn typecheck_phase_fails_when_undefined_names_present() {
 
     assert!(matches!(
         result,
-        Err(BytecodeError::TypecheckUndefinedNames { count: 1 })
+        Err(TypecheckError::UndefinedNames { count: 1 })
     ));
 }
 
@@ -1280,7 +1286,7 @@ fn export_closure_phase_clears_exports_when_undefined_names_present() {
 
     assert!(matches!(
         result,
-        Err(BytecodeError::ExportClosureBlockedByUndefinedNames)
+        Err(ExportValidationError::BlockedByUndefinedNames)
     ));
     assert_eq!(vm.exported_identifiers, NIL);
 }
@@ -1353,10 +1359,7 @@ fn codegen_phase_fails_without_loaded_files() {
 
     let result = vm.run_codegen_phase();
 
-    assert!(matches!(
-        result,
-        Err(BytecodeError::CodegenWithoutLoadedFiles)
-    ));
+    assert!(matches!(result, Err(CodegenError::NoLoadedFiles)));
 }
 
 #[test]
@@ -1380,7 +1383,7 @@ fn codegen_phase_fails_during_initialization_with_unresolved_names() {
 
     assert!(matches!(
         result,
-        Err(BytecodeError::InitializationLoadContainsErrors)
+        Err(CodegenError::InitializationBlockedByUnresolvedNames)
     ));
 }
 
@@ -1546,7 +1549,7 @@ fn load_script_consumes_dump_shape_written_by_dump_visibility_phase() {
 
     let decode_compatible = match load_result {
         Ok(files) => !files.is_empty(),
-        Err(BytecodeError::WrongSourceFile) => true,
+        Err(LoadScriptError::Decode(BytecodeDecodeError::WrongSourceFile)) => true,
         _ => false,
     };
     assert!(decode_compatible, "{:?}", load_result);

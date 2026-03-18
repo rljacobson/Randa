@@ -10,17 +10,17 @@ mod errors;
 mod options;
 mod vm;
 
-use crate::errors::{emit_error, BytecodeError};
+use crate::errors::{emit_error, StartupLoadError};
 use crate::vm::VM;
 use std::process::ExitCode;
 
-fn run_startup(vm: &mut VM) -> Result<(), BytecodeError> {
+fn run_startup(vm: &mut VM) -> Result<(), StartupLoadError> {
     vm.announce();
     println!("\n{}", vm.options);
     vm.run_startup()
 }
 
-fn startup_exit_code(result: Result<(), BytecodeError>) -> ExitCode {
+fn startup_exit_code(result: Result<(), StartupLoadError>) -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
@@ -38,15 +38,17 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::startup_exit_code;
-    use crate::errors::BytecodeError;
+    use crate::errors::{LoadFileError, SourceInputError, StartupLoadError};
     use std::process::ExitCode;
 
     #[test]
     fn startup_exit_code_reports_error_as_failure() {
         println!("The following error message is expected for a passing test.");
-        let code = startup_exit_code(Err(BytecodeError::MissingSourceFile {
-            path: "missing.m".to_string(),
-        }));
+        let code = startup_exit_code(Err(StartupLoadError::LoadFile(LoadFileError::SourceInput(
+            SourceInputError::MissingFile {
+                path: "missing.m".to_string(),
+            },
+        ))));
 
         assert_eq!(code, ExitCode::from(1));
     }

@@ -25,7 +25,7 @@ impl TypecheckBoundaryInputs {
 pub(super) struct TypecheckBoundaryResult {
     pub(super) undefined_names: ConsList<IdentifierRecordRef>,
     pub(super) checked_definition_count: usize,
-    pub(super) failure: Option<BytecodeError>,
+    pub(super) failure: Option<TypecheckError>,
 }
 
 /// Executes the current load-time partial typecheck boundary over committed source substrate.
@@ -147,47 +147,47 @@ pub(super) fn run_partial_typecheck(
     }
     let undefined_count = undefined_names.len(heap);
     let failure = if detritus_count > 0 {
-        Some(BytecodeError::TypecheckInvalidFreeBindings {
+        Some(TypecheckError::InvalidFreeBindings {
             count: detritus_count,
         })
     } else if missing_count > 0 {
-        Some(BytecodeError::TypecheckMissingFreeBindings {
+        Some(TypecheckError::MissingFreeBindings {
             count: missing_count,
         })
     } else if undefined_type_name_count > 0 {
-        Some(BytecodeError::TypecheckUndefinedTypeNames {
+        Some(TypecheckError::UndefinedTypeNames {
             count: undefined_type_name_count,
         })
     } else if type_names_used_as_identifiers_count > 0 {
-        Some(BytecodeError::TypecheckTypeNamesUsedAsIdentifiers {
+        Some(TypecheckError::TypeNamesUsedAsIdentifiers {
             count: type_names_used_as_identifiers_count,
         })
     } else if non_type_identifier_count > 0 {
-        Some(BytecodeError::TypecheckNonTypeIdentifiersInTypeExpr {
+        Some(TypecheckError::NonTypeIdentifiersInTypeExpr {
             count: non_type_identifier_count,
         })
     } else if arity_mismatch_count > 0 {
-        Some(BytecodeError::TypecheckTypeArityMismatch {
+        Some(TypecheckError::TypeArityMismatch {
             count: arity_mismatch_count,
         })
     } else if unbound_abstract_count > 0 {
-        Some(BytecodeError::TypecheckUnboundAbstractTypeNames {
+        Some(TypecheckError::UnboundAbstractTypeNames {
             count: unbound_abstract_count,
         })
     } else if specified_but_not_defined_count > 0 {
-        Some(BytecodeError::TypecheckSpecifiedButNotDefined {
+        Some(TypecheckError::SpecifiedButNotDefined {
             count: specified_but_not_defined_count,
         })
     } else if undeclared_constructor_formal_count > 0 {
-        Some(BytecodeError::TypecheckUndeclaredConstructorsInFormals {
+        Some(TypecheckError::UndeclaredConstructorsInFormals {
             count: undeclared_constructor_formal_count,
         })
     } else if constructor_formal_arity_mismatch_count > 0 {
-        Some(BytecodeError::TypecheckConstructorArityMismatchInFormals {
+        Some(TypecheckError::ConstructorArityMismatchInFormals {
             count: constructor_formal_arity_mismatch_count,
         })
     } else if undefined_count > 0 {
-        Some(BytecodeError::TypecheckUndefinedNames {
+        Some(TypecheckError::UndefinedNames {
             count: undefined_count,
         })
     } else {

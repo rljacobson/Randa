@@ -9,10 +9,10 @@ impl VM {
     /// 1) For each alias entry `cons(new, old)`, save `old` core payload into hold,
     ///    then mutate `old` to alias type with value `new`.
     /// 2) Detect destination-name clashes.
-    ///    If clashes exist, rollback immediately (`unalias`) and return `NameClash`.
+    ///    If clashes exist, rollback immediately (`unalias`) and return `DestinationNameClash`.
     /// 3) Apply Miranda FIX1 (`new_t` marking) so the later missing-aliasee pass
     ///    in `unalias` preserves the intended diagnostics in clash+missing edge cases.
-    pub(super) fn obey_aliases(&mut self, aliases: ConsList) -> Result<(), BytecodeError> {
+    pub(super) fn obey_aliases(&mut self, aliases: ConsList) -> Result<(), AliasInstallError> {
         if !aliases.is_empty() {
             // For each `old' install diversion to `new', i.e. make the `old` identifier an alias for the `new` identifier.
             // If alias is of form `-old`, `new' is a `pname` (private name).
@@ -70,7 +70,7 @@ impl VM {
                 // We unalias to restore all `old` identifiers and keep subsequent
                 // reporting/state transitions coherent.
                 self.unalias(aliases);
-                return Err(BytecodeError::NameClash); // BAD_DUMP = -2;
+                return Err(AliasInstallError::DestinationNameClash); // BAD_DUMP = -2;
             }
 
             // The following block was inserted to deal with the pathological case that the destination of an alias (not

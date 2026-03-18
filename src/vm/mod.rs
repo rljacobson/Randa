@@ -44,7 +44,11 @@ use crate::{
         path::*,
         Combinator, Heap, RawValue, Tag, Type, Value,
     },
-    errors::{fatal_error, BytecodeError},
+    errors::{
+        fatal_error, AliasInstallError, BytecodeDecodeError, CodegenError, DumpWriteError,
+        ExportValidationError, LoadFileError, LoadScriptError, SourceInputError, SourceParseError,
+        StartupLoadError, TypecheckError,
+    },
     options::{make_version_string, setup_argument_parser, Options},
 };
 
@@ -388,7 +392,7 @@ impl VM {
         Self::build(Options::default())
     }
 
-    pub(crate) fn run_startup(&mut self) -> Result<(), BytecodeError> {
+    pub(crate) fn run_startup(&mut self) -> Result<(), StartupLoadError> {
         self.initializing = false;
         let script = self.options.script.clone();
         self.undump(&script)

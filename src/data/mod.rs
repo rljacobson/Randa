@@ -66,14 +66,12 @@ pub mod tag;
 pub mod types;
 pub mod values;
 
-pub use crate::{
-    data::{
-        combinator::Combinator,
-        heap::{Heap, HeapCell},
-        tag::Tag,
-        types::Type,
-        values::{RawValue, Value},
-    },
+pub use crate::data::{
+    combinator::Combinator,
+    heap::{Heap, HeapCell},
+    tag::Tag,
+    types::Type,
+    values::{RawValue, Value},
 };
 
 /// The type used to represent tokens, combinators, pointers, Randa types...

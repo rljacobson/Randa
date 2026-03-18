@@ -6,7 +6,7 @@ Methods for parsing serialized bytecode binaries, which Miranda calls "dump" fil
 */
 
 use crate::data::RawValue;
-use crate::errors::BytecodeError;
+use crate::errors::BytecodeDecodeError;
 use std::{
     iter::Peekable,
     slice::Iter,
@@ -14,14 +14,14 @@ use std::{
 };
 
 // Convenience alias, saves some typing
-type PResult<T> = Result<T, BytecodeError>;
+type PResult<T> = Result<T, BytecodeDecodeError>;
 
-/// Convenience function that returns the next byte or `BytecodeError::UnexpectedEOF`.
+/// Convenience function that returns the next byte or `BytecodeDecodeError::UnexpectedEof`.
 fn next(byte_iter: &mut dyn Iterator<Item = u8>) -> PResult<u8> {
     match byte_iter.next() {
         Some(ch) => Ok(ch),
 
-        None => Err(BytecodeError::unexpected_eof()),
+        None => Err(BytecodeDecodeError::unexpected_eof()),
     }
 }
 

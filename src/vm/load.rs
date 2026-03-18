@@ -39,12 +39,12 @@ impl Default for CommittedDirectiveState {
 impl VM {
     /// Loads the object file for `source_path` if it exists and is modified after `source_path`. Otherwise calls
     /// `load_file` for `source_path`.
-    pub(super) fn undump(&mut self, source_path: &str) -> Result<(), BytecodeError> {
+    pub(super) fn undump(&mut self, source_path: &str) -> Result<(), StartupLoadError> {
         // This does not guarantee that the path ends in ".m" after the if block.
         if !source_path.ends_with(".m") && !self.initializing {
             // Except for prelude, only .m files have dumps.
             // Todo: Then should not there not be a not on initializing?
-            return self.load_file(source_path);
+            return self.load_file(source_path).map_err(Into::into);
         }
 
         // Change "source.m" into "source.x".
@@ -76,21 +76,21 @@ impl VM {
 
                 if binary_modified_time < source_modified_time {
                     // Can't use the binary.
-                    return self.load_file(source_path);
+                    return self.load_file(source_path).map_err(Into::into);
                 }
             }
         } else {
             // Source file does not exist. Delete binary if it exists.
             std::fs::remove_file(binary_path).ok();
             // Can't use the binary.
-            return self.load_file(source_path);
+            return self.load_file(source_path).map_err(Into::into);
         }
 
         // Lastly, if we cannot open the binary, we have to do the full `load_file`.
         let in_file: File = match File::open(&binary_path) {
             Ok(f) => f,
             Err(..) => {
-                return self.load_file(source_path);
+                return self.load_file(source_path).map_err(Into::into);
             }
         };
 
@@ -145,22 +145,22 @@ impl VM {
 
       Ok(files) => { self.files = files; false }
 
-      Err(BytecodeError::ArchitectureMismatch)
-      | Err(BytecodeError::WrongBytecodeVersion)
+      Err(LoadScriptError::Decode(BytecodeDecodeError::ArchitectureMismatch))
+      | Err(LoadScriptError::Decode(BytecodeDecodeError::WrongBytecodeVersion))
         => {
         std::fs::remove_file(&binary_path).ok();
         self.unload();
         true
       }
 
-      Err(BytecodeError::NameClash) => {
+      Err(LoadScriptError::AliasInstall(AliasInstallError::DestinationNameClash)) => {
         if self.include_depth == 0 {
           let sorted = alfasort(&mut self.heap, self.clashes);
           println!("Cannot load {} due to name clashes: {}", binary_path, printlist(&self.heap, sorted));
         }
         self.unload();
         self.loading = false;
-        return load_result.map(|_| ());
+        return Err(LoadScriptError::AliasInstall(AliasInstallError::DestinationNameClash).into());
       }
 
       Err(_bytecode_error) => {
@@ -213,7 +213,7 @@ impl VM {
         Ok(())
     }
 
-    pub(super) fn load_file(&mut self, source_path: &str) -> Result<(), BytecodeError> {
+    pub(super) fn load_file(&mut self, source_path: &str) -> Result<(), LoadFileError> {
         #[cfg(test)]
         self.last_load_phase_trace.clear();
         self.record_load_phase("begin");
@@ -233,9 +233,10 @@ impl VM {
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
                     if self.initializing || self.making {
                         self.record_load_phase("missing-source-error");
-                        return Err(BytecodeError::MissingSourceFile {
+                        return Err(SourceInputError::MissingFile {
                             path: source_path.clone(),
-                        });
+                        }
+                        .into());
                     }
 
                     self.record_load_phase("missing-source-allowed");
@@ -245,15 +246,16 @@ impl VM {
                 }
                 Err(err) => {
                     self.record_load_phase("source-metadata-error");
-                    return Err(BytecodeError::UnreadableSourceFile {
+                    return Err(SourceInputError::UnreadableFile {
                         path: source_path.clone(),
                         source: err,
-                    });
+                    }
+                    .into());
                 }
             };
 
             let source_file =
-                File::open(&source_path).map_err(|source| BytecodeError::UnreadableSourceFile {
+                File::open(&source_path).map_err(|source| SourceInputError::UnreadableFile {
                     path: source_path.clone(),
                     source,
                 })?;
@@ -353,11 +355,12 @@ impl VM {
     pub(super) fn apply_syntax_error_fallback(
         &mut self,
         source_path: &str,
-    ) -> Result<(), BytecodeError> {
+    ) -> Result<(), LoadFileError> {
         if self.initializing {
-            return Err(BytecodeError::SyntaxErrorInSource {
+            return Err(SourceParseError::SyntaxErrorsPresent {
                 path: source_path.to_string(),
-            });
+            }
+            .into());
         }
 
         self.old_files = self.files;
@@ -405,7 +408,7 @@ impl VM {
     pub(super) fn validate_exportfile_bindings_partial(
         &mut self,
         directive_payload: Option<&ParserTopLevelDirectivePayload>,
-    ) -> Result<(), BytecodeError> {
+    ) -> Result<(), ExportValidationError> {
         let Some(directive_payload) = directive_payload else {
             if self.export_paths == NIL {
                 return Ok(());
@@ -420,7 +423,7 @@ impl VM {
                 let path = self
                     .heap
                     .resolve_string(entry)
-                    .map_err(|_| BytecodeError::MalformedExportFileList)?;
+                    .map_err(|_| ExportValidationError::MalformedPathList)?;
                 let mut includee_matches = 0usize;
                 let mut included_files = self.included_files;
                 while let Some(includee) = included_files.pop(&self.heap) {
@@ -430,11 +433,11 @@ impl VM {
                 }
 
                 if includee_matches == 0 {
-                    return Err(BytecodeError::ExportFileNotIncludedInScript { path });
+                    return Err(ExportValidationError::PathNotIncludedInScript { path });
                 }
 
                 if includee_matches > 1 {
-                    return Err(BytecodeError::ExportFileAmbiguous { path });
+                    return Err(ExportValidationError::AmbiguousPathRequest { path });
                 }
             }
 
@@ -458,24 +461,24 @@ impl VM {
             let path = self
                 .heap
                 .resolve_string(entry)
-                .map_err(|_| BytecodeError::MalformedExportFileList)?;
+                .map_err(|_| ExportValidationError::MalformedPathList)?;
             let mut includee_matches = 0usize;
             for include_request in &directive_payload.include_requests {
                 let include_path = self
                     .heap
                     .resolve_string(include_request.target_path.into())
-                    .map_err(|_| BytecodeError::MalformedExportFileList)?;
+                    .map_err(|_| ExportValidationError::MalformedPathList)?;
                 if include_path == path {
                     includee_matches += 1;
                 }
             }
 
             if includee_matches == 0 {
-                return Err(BytecodeError::ExportFileNotIncludedInScript { path });
+                return Err(ExportValidationError::PathNotIncludedInScript { path });
             }
 
             if includee_matches > 1 {
-                return Err(BytecodeError::ExportFileAmbiguous { path });
+                return Err(ExportValidationError::AmbiguousPathRequest { path });
             }
         }
 
@@ -495,7 +498,7 @@ impl VM {
     pub(super) fn run_mkincludes_phase(
         &mut self,
         directive_payload: Option<&ParserTopLevelDirectivePayload>,
-    ) -> Result<ConsList<FileRecord>, BytecodeError> {
+    ) -> Result<ConsList<FileRecord>, SourceInputError> {
         let Some(directive_payload) = directive_payload else {
             if self.included_files.is_empty() {
                 self.include_rollback_files = ConsList::EMPTY;
@@ -523,7 +526,7 @@ impl VM {
             let path = self
                 .heap
                 .resolve_string(include_request.target_path.into())
-                .map_err(|_| BytecodeError::UnreadableSourceFile {
+                .map_err(|_| SourceInputError::UnreadableFile {
                     path: "<invalid include path>".to_string(),
                     source: std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
@@ -532,9 +535,9 @@ impl VM {
                 })?;
             let metadata = std::fs::metadata(&path).map_err(|source| {
                 if source.kind() == std::io::ErrorKind::NotFound {
-                    BytecodeError::MissingSourceFile { path: path.clone() }
+                    SourceInputError::MissingFile { path: path.clone() }
                 } else {
-                    BytecodeError::UnreadableSourceFile {
+                    SourceInputError::UnreadableFile {
                         path: path.clone(),
                         source,
                     }
@@ -562,10 +565,10 @@ impl VM {
     /// - delegate to the subsystem-owned partial typecheck boundary,
     /// - commit subsystem-produced unresolved-name state,
     /// - propagate typed subsystem failure when present.
-    pub(super) fn run_checktypes_phase(&mut self) -> Result<(), BytecodeError> {
+    pub(super) fn run_checktypes_phase(&mut self) -> Result<(), TypecheckError> {
         let preexisting_undefined_count = self.undefined_names.len(&self.heap);
         if preexisting_undefined_count > 0 {
-            return Err(BytecodeError::TypecheckUndefinedNames {
+            return Err(TypecheckError::UndefinedNames {
                 count: preexisting_undefined_count,
             });
         }
@@ -595,7 +598,7 @@ impl VM {
         &mut self,
         directive_payload: Option<&ParserTopLevelDirectivePayload>,
         materialized_includees: ConsList<FileRecord>,
-    ) -> Result<CommittedDirectiveState, BytecodeError> {
+    ) -> Result<CommittedDirectiveState, ExportValidationError> {
         let Some(directive_payload) = directive_payload else {
             if self.exported_identifiers == NIL {
                 return Ok(CommittedDirectiveState::default());
@@ -603,7 +606,7 @@ impl VM {
 
             if !self.undefined_names.is_empty() {
                 self.exported_identifiers = NIL;
-                return Err(BytecodeError::ExportClosureBlockedByUndefinedNames);
+                return Err(ExportValidationError::BlockedByUndefinedNames);
             }
 
             return Ok(CommittedDirectiveState {
@@ -618,7 +621,7 @@ impl VM {
         };
 
         if !self.undefined_names.is_empty() {
-            return Err(BytecodeError::ExportClosureBlockedByUndefinedNames);
+            return Err(ExportValidationError::BlockedByUndefinedNames);
         }
 
         let mut committed_exports = export.exported_ids.into();
@@ -631,7 +634,7 @@ impl VM {
             let path = self
                 .heap
                 .resolve_string(entry)
-                .map_err(|_| BytecodeError::MalformedExportFileList)?;
+                .map_err(|_| ExportValidationError::MalformedPathList)?;
             let mut included_files = materialized_includees;
             while let Some(includee) = included_files.pop(&self.heap) {
                 if includee.get_file_name(&self.heap) != path {
@@ -712,7 +715,7 @@ impl VM {
     /// - delegate to the subsystem-owned partial codegen boundary,
     /// - preserve subsystem-owned typed post-iteration failure,
     /// - otherwise succeed.
-    pub(super) fn run_codegen_phase(&mut self) -> Result<(), BytecodeError> {
+    pub(super) fn run_codegen_phase(&mut self) -> Result<(), CodegenError> {
         let inputs = super::codegen::CodegenBoundaryInputs::from_vm(self);
         let result = super::codegen::run_partial_codegen(&self.heap, inputs);
         if let Some(failure) = result.failure {
@@ -735,7 +738,7 @@ impl VM {
     pub(super) fn run_dump_visibility_phase(
         &mut self,
         source_path: &str,
-    ) -> Result<(), BytecodeError> {
+    ) -> Result<(), DumpWriteError> {
         // Initialization always writes a dump; otherwise only "normal" scripts
         // (ending in `.m`) run through fixexports/makedump/unfixexports.
         let should_run_dump_visibility = self.initializing || source_path.ends_with(".m");
@@ -966,7 +969,10 @@ impl VM {
     /// - intentionally preserves `source_path` in the boundary contract for
     ///   future serializer output/diagnostic context,
     /// - defers actual dump serialization to later integration.
-    pub(super) fn run_makedump_boundary(&mut self, source_path: &str) -> Result<(), BytecodeError> {
+    pub(super) fn run_makedump_boundary(
+        &mut self,
+        source_path: &str,
+    ) -> Result<(), DumpWriteError> {
         let dump_path = PathBuf::from(format!(
             "{}{}",
             source_path.strip_suffix(".m").unwrap_or(source_path),
@@ -990,7 +996,7 @@ impl VM {
     pub(super) fn maybe_write_syntax_dump(
         &mut self,
         source_path: &str,
-    ) -> Result<(), BytecodeError> {
+    ) -> Result<(), DumpWriteError> {
         if !source_path.ends_with(".m") {
             return Ok(());
         }
@@ -1103,31 +1109,31 @@ impl VM {
         &self,
         path: &Path,
         dump_bytes: &[u8],
-    ) -> Result<(), BytecodeError> {
+    ) -> Result<(), DumpWriteError> {
         let mut temp_path = path.as_os_str().to_os_string();
         temp_path.push(".tmp");
         let temp_path = PathBuf::from(temp_path);
 
         let mut temp_file =
-            std::fs::File::create(&temp_path).map_err(|source| BytecodeError::DumpWriteFailed {
+            std::fs::File::create(&temp_path).map_err(|source| DumpWriteError::WriteFailed {
                 path: path.display().to_string(),
                 source,
             })?;
 
         temp_file
             .write_all(dump_bytes)
-            .map_err(|source| BytecodeError::DumpWriteFailed {
+            .map_err(|source| DumpWriteError::WriteFailed {
                 path: path.display().to_string(),
                 source,
             })?;
         temp_file
             .sync_all()
-            .map_err(|source| BytecodeError::DumpWriteFailed {
+            .map_err(|source| DumpWriteError::WriteFailed {
                 path: path.display().to_string(),
                 source,
             })?;
 
-        std::fs::rename(&temp_path, path).map_err(|source| BytecodeError::DumpWriteFailed {
+        std::fs::rename(&temp_path, path).map_err(|source| DumpWriteError::WriteFailed {
             path: path.display().to_string(),
             source,
         })
@@ -1145,11 +1151,11 @@ impl VM {
         source_path: &str,
         modified_time: SystemTime,
         _is_main_script: bool,
-    ) -> Result<ParsePhaseOutcome, BytecodeError> {
+    ) -> Result<ParsePhaseOutcome, LoadFileError> {
         let mut source_text = String::new();
         let mut reader = BufReader::new(source_file);
         reader.read_to_string(&mut source_text).map_err(|source| {
-            BytecodeError::UnreadableSourceFile {
+            SourceInputError::UnreadableFile {
                 path: source_path.to_string(),
                 source,
             }
@@ -1158,9 +1164,10 @@ impl VM {
         match self.classify_load_script_form(source_path, &source_text)? {
             LoadScriptForm::Expression | LoadScriptForm::TopLevelScript => {}
             LoadScriptForm::OtherTopLevelForm => {
-                return Err(BytecodeError::ParserIntegrationDeferred {
+                return Err(SourceParseError::UnsupportedTopLevelForm {
                     path: source_path.to_string(),
-                });
+                }
+                .into());
             }
         }
 
@@ -1459,7 +1466,7 @@ impl VM {
         &mut self,
         source_path: &str,
         source_text: &str,
-    ) -> Result<LoadScriptForm, BytecodeError> {
+    ) -> Result<LoadScriptForm, LoadFileError> {
         let mut lexer = Lexer::new(source_path, source_text);
         let mut tokens: Vec<Token> = Vec::new();
 
@@ -1467,7 +1474,7 @@ impl VM {
             let lookahead: ParserLookahead =
                 lexer
                     .yylex()
-                    .map_err(|source| BytecodeError::UnreadableSourceFile {
+                    .map_err(|source| SourceInputError::UnreadableFile {
                         path: source_path.to_string(),
                         source: std::io::Error::new(
                             std::io::ErrorKind::InvalidData,

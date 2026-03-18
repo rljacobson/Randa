@@ -1,5 +1,5 @@
-use std::mem::size_of;
 use crate::data::RawValue;
+use std::mem::size_of;
 
 /// The bytecode version. Incremented for every non-backwards compatible release. The last release of Miranda v.2.066
 /// has `XVERSION` 83. Because Randa's bytecode is probably incompatible, we increment to 84. If Miranda has another

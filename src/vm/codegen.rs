@@ -24,7 +24,7 @@ impl CodegenBoundaryInputs {
 
 pub(super) struct CodegenBoundaryResult {
     pub(super) processed_binding_count: usize,
-    pub(super) failure: Option<BytecodeError>,
+    pub(super) failure: Option<CodegenError>,
 }
 
 /// Executes the current load-time partial codegen boundary over committed source substrate.
@@ -35,7 +35,7 @@ pub(super) fn run_partial_codegen(
     if inputs.files.is_empty() {
         return CodegenBoundaryResult {
             processed_binding_count: 0,
-            failure: Some(BytecodeError::CodegenWithoutLoadedFiles),
+            failure: Some(CodegenError::NoLoadedFiles),
         };
     }
 
@@ -54,7 +54,7 @@ pub(super) fn run_partial_codegen(
     }
 
     let failure = if inputs.initializing && !inputs.undefined_names.is_empty() {
-        Some(BytecodeError::InitializationLoadContainsErrors)
+        Some(CodegenError::InitializationBlockedByUnresolvedNames)
     } else {
         None
     };
