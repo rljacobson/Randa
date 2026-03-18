@@ -404,6 +404,62 @@ fn load_file_accepts_nullary_constructor_pattern_form() {
 }
 
 #[test]
+fn load_file_rejects_undeclared_constructor_atom_in_formal() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("undeclared_constructor_atom_formal.m");
+    std::fs::write(&source_path, "isNope Nope = True\n").expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(BytecodeError::TypecheckUndeclaredConstructorsInFormals { count: 1 })
+    ));
+}
+
+#[test]
+fn load_file_rejects_undeclared_constructor_application_in_formal() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("undeclared_constructor_application_formal.m");
+    std::fs::write(&source_path, "fromNope (Nope x) = x\n")
+        .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(BytecodeError::TypecheckUndeclaredConstructorsInFormals { count: 1 })
+    ));
+}
+
+#[test]
+fn load_file_rejects_declared_constructor_application_for_wrong_arity_in_formal() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("constructor_application_wrong_arity_formal.m");
+    std::fs::write(
+        &source_path,
+        "maybe ::= Just | Nothing\nfromJust (Just x) = x\n",
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(BytecodeError::TypecheckConstructorArityMismatchInFormals { count: 1 })
+    ));
+}
+
+#[test]
 fn load_file_commits_narrow_spec_and_type_substrate_into_current_file() {
     let mut vm = VM::new_for_tests();
     vm.initializing = false;

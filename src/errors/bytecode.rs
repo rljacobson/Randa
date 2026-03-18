@@ -65,6 +65,10 @@ pub enum BytecodeError {
     TypecheckSpecifiedButNotDefined { count: usize },
     #[error("Typecheck phase found typenames used as identifiers ({count})")]
     TypecheckTypeNamesUsedAsIdentifiers { count: usize },
+    #[error("Typecheck phase found undeclared constructors in formals ({count})")]
+    TypecheckUndeclaredConstructorsInFormals { count: usize },
+    #[error("Typecheck phase found constructor arity mismatches in formals ({count})")]
+    TypecheckConstructorArityMismatchInFormals { count: usize },
     #[error("Export closure blocked by undefined names")]
     ExportClosureBlockedByUndefinedNames,
     #[error("Codegen phase requires at least one loaded file")]

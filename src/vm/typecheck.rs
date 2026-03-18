@@ -1,5 +1,6 @@
 use super::*;
 use crate::data::api::{IdentifierRecordRef, IdentifierValueTypeKind, IdentifierValueTypeRef};
+use crate::data::heap::is_capitalized;
 use crate::data::{Heap, RawValue, Tag, Type, Value, ATOM_LIMIT};
 
 pub(super) struct TypecheckBoundaryInputs {
@@ -39,6 +40,8 @@ pub(super) fn run_partial_typecheck(
     let mut arity_mismatch_type_names = ConsList::EMPTY;
     let mut unbound_abstract_type_names = ConsList::EMPTY;
     let mut specified_but_not_defined = ConsList::EMPTY;
+    let mut undeclared_constructors_in_formals = ConsList::EMPTY;
+    let mut constructor_arity_mismatch_in_formals = ConsList::EMPTY;
     let mut checked_definition_count = 0usize;
 
     if let Some(current_file) = inputs.current_file {
@@ -68,6 +71,12 @@ pub(super) fn run_partial_typecheck(
             match value.get_data(heap) {
                 IdentifierValueData::Arbitrary(body) => {
                     checked_definition_count += 1;
+                    collect_formal_pattern_issues(
+                        heap,
+                        body,
+                        &mut undeclared_constructors_in_formals,
+                        &mut constructor_arity_mismatch_in_formals,
+                    );
                     let mut bound_identifiers = Vec::new();
                     collect_unresolved_identifier_references(
                         heap,
@@ -110,6 +119,8 @@ pub(super) fn run_partial_typecheck(
     let arity_mismatch_count = arity_mismatch_type_names.len(heap);
     let unbound_abstract_count = unbound_abstract_type_names.len(heap);
     let specified_but_not_defined_count = specified_but_not_defined.len(heap);
+    let undeclared_constructor_formal_count = undeclared_constructors_in_formals.len(heap);
+    let constructor_formal_arity_mismatch_count = constructor_arity_mismatch_in_formals.len(heap);
     while let Some(identifier) = undefined_type_names.pop(heap) {
         undefined_names.insert_ordered(heap, identifier);
     }
@@ -126,6 +137,12 @@ pub(super) fn run_partial_typecheck(
         undefined_names.insert_ordered(heap, identifier);
     }
     while let Some(identifier) = specified_but_not_defined.pop(heap) {
+        undefined_names.insert_ordered(heap, identifier);
+    }
+    while let Some(identifier) = undeclared_constructors_in_formals.pop(heap) {
+        undefined_names.insert_ordered(heap, identifier);
+    }
+    while let Some(identifier) = constructor_arity_mismatch_in_formals.pop(heap) {
         undefined_names.insert_ordered(heap, identifier);
     }
     let undefined_count = undefined_names.len(heap);
@@ -161,6 +178,14 @@ pub(super) fn run_partial_typecheck(
         Some(BytecodeError::TypecheckSpecifiedButNotDefined {
             count: specified_but_not_defined_count,
         })
+    } else if undeclared_constructor_formal_count > 0 {
+        Some(BytecodeError::TypecheckUndeclaredConstructorsInFormals {
+            count: undeclared_constructor_formal_count,
+        })
+    } else if constructor_formal_arity_mismatch_count > 0 {
+        Some(BytecodeError::TypecheckConstructorArityMismatchInFormals {
+            count: constructor_formal_arity_mismatch_count,
+        })
     } else if undefined_count > 0 {
         Some(BytecodeError::TypecheckUndefinedNames {
             count: undefined_count,
@@ -173,6 +198,127 @@ pub(super) fn run_partial_typecheck(
         undefined_names,
         checked_definition_count,
         failure,
+    }
+}
+
+/// Walks committed lambda-head patterns and records constructor-formal misuse in the active subset.
+/// This exists so the typecheck boundary owns formal-pattern diagnostics over the already lowered top-level forms.
+/// The invariant is that only constructor-intent heads are diagnosed; lowercase binders remain value binders.
+fn collect_formal_pattern_issues(
+    heap: &mut Heap,
+    expression: Value,
+    undeclared_constructors_in_formals: &mut ConsList<IdentifierRecordRef>,
+    constructor_arity_mismatch_in_formals: &mut ConsList<IdentifierRecordRef>,
+) {
+    let raw_reference: RawValue = expression.into();
+    if raw_reference < ATOM_LIMIT {
+        return;
+    }
+
+    match heap[raw_reference].tag {
+        Tag::Lambda => {
+            let pattern = heap[raw_reference].head.into();
+            collect_formal_pattern_issues_in_pattern(
+                heap,
+                pattern,
+                undeclared_constructors_in_formals,
+                constructor_arity_mismatch_in_formals,
+            );
+            let body = heap[raw_reference].tail.into();
+            collect_formal_pattern_issues(
+                heap,
+                body,
+                undeclared_constructors_in_formals,
+                constructor_arity_mismatch_in_formals,
+            );
+        }
+        Tag::Label | Tag::Show => {
+            collect_formal_pattern_issues(
+                heap,
+                heap[raw_reference].tail.into(),
+                undeclared_constructors_in_formals,
+                constructor_arity_mismatch_in_formals,
+            );
+        }
+        Tag::Share => {
+            collect_formal_pattern_issues(
+                heap,
+                heap[raw_reference].head.into(),
+                undeclared_constructors_in_formals,
+                constructor_arity_mismatch_in_formals,
+            );
+        }
+        _ => {}
+    }
+}
+
+fn collect_formal_pattern_issues_in_pattern(
+    heap: &mut Heap,
+    pattern: Value,
+    undeclared_constructors_in_formals: &mut ConsList<IdentifierRecordRef>,
+    constructor_arity_mismatch_in_formals: &mut ConsList<IdentifierRecordRef>,
+) {
+    let raw_reference: RawValue = pattern.into();
+    if raw_reference < ATOM_LIMIT {
+        return;
+    }
+
+    match heap[raw_reference].tag {
+        Tag::Id => {
+            let identifier = IdentifierRecordRef::from_ref(raw_reference);
+            if identifier_has_constructor_intent(heap, identifier)
+                && !is_constructor_identifier(heap, identifier)
+            {
+                undeclared_constructors_in_formals.insert_ordered(heap, identifier);
+            }
+        }
+        Tag::Ap => {
+            if let Some((head, arguments)) = pattern_application_spine(heap, pattern) {
+                if is_constructor_identifier(heap, head) {
+                    constructor_arity_mismatch_in_formals.insert_ordered(heap, head);
+                } else {
+                    undeclared_constructors_in_formals.insert_ordered(heap, head);
+                }
+
+                for argument in arguments {
+                    collect_formal_pattern_issues_in_pattern(
+                        heap,
+                        argument,
+                        undeclared_constructors_in_formals,
+                        constructor_arity_mismatch_in_formals,
+                    );
+                }
+                return;
+            }
+
+            collect_formal_pattern_issues_in_pattern(
+                heap,
+                heap[raw_reference].head.into(),
+                undeclared_constructors_in_formals,
+                constructor_arity_mismatch_in_formals,
+            );
+            collect_formal_pattern_issues_in_pattern(
+                heap,
+                heap[raw_reference].tail.into(),
+                undeclared_constructors_in_formals,
+                constructor_arity_mismatch_in_formals,
+            );
+        }
+        Tag::Cons | Tag::Pair | Tag::TCons => {
+            collect_formal_pattern_issues_in_pattern(
+                heap,
+                heap[raw_reference].head.into(),
+                undeclared_constructors_in_formals,
+                constructor_arity_mismatch_in_formals,
+            );
+            collect_formal_pattern_issues_in_pattern(
+                heap,
+                heap[raw_reference].tail.into(),
+                undeclared_constructors_in_formals,
+                constructor_arity_mismatch_in_formals,
+            );
+        }
+        _ => {}
     }
 }
 
@@ -359,7 +505,7 @@ fn collect_pattern_bound_identifiers(
     match heap[raw_reference].tag {
         Tag::Id => {
             let identifier = IdentifierRecordRef::from_ref(raw_reference);
-            if !is_constructor_identifier(heap, identifier)
+            if !identifier_has_constructor_intent(heap, identifier)
                 && !bound_identifiers.contains(&identifier)
             {
                 bound_identifiers.push(identifier);
@@ -378,32 +524,63 @@ fn collect_pattern_bound_identifiers(
             );
         }
         Tag::Ap => {
-            collect_pattern_bound_identifiers(
-                heap,
-                heap[raw_reference].head.into(),
-                bound_identifiers,
-            );
-            collect_pattern_bound_identifiers(
-                heap,
-                heap[raw_reference].tail.into(),
-                bound_identifiers,
-            );
+            if let Some((_head, arguments)) = pattern_application_spine(heap, pattern) {
+                for argument in arguments {
+                    collect_pattern_bound_identifiers(heap, argument, bound_identifiers);
+                }
+            } else {
+                collect_pattern_bound_identifiers(
+                    heap,
+                    heap[raw_reference].head.into(),
+                    bound_identifiers,
+                );
+                collect_pattern_bound_identifiers(
+                    heap,
+                    heap[raw_reference].tail.into(),
+                    bound_identifiers,
+                );
+            }
         }
         _ => {}
     }
+}
+
+fn identifier_has_constructor_intent(heap: &Heap, identifier: IdentifierRecordRef) -> bool {
+    is_capitalized(identifier.get_name(heap).as_str())
+}
+
+fn pattern_application_spine(
+    heap: &Heap,
+    pattern: Value,
+) -> Option<(IdentifierRecordRef, Vec<Value>)> {
+    let mut raw_reference: RawValue = pattern.into();
+    if raw_reference < ATOM_LIMIT {
+        return None;
+    }
+
+    let mut arguments = Vec::new();
+    while heap[raw_reference].tag == Tag::Ap {
+        arguments.push(heap[raw_reference].tail.into());
+        raw_reference = heap[raw_reference].head;
+        if raw_reference < ATOM_LIMIT {
+            return None;
+        }
+    }
+
+    if heap[raw_reference].tag != Tag::Id {
+        return None;
+    }
+
+    arguments.reverse();
+    Some((IdentifierRecordRef::from_ref(raw_reference), arguments))
 }
 
 /// Returns whether an identifier currently denotes a constructor-valued binding.
 /// This exists so constructor names are not misclassified as unresolved variable references during typecheck scanning.
 /// The invariant is that only identifiers whose value payload points at a `Tag::Constructor` cell are treated as constructors here.
 fn is_constructor_identifier(heap: &Heap, identifier: IdentifierRecordRef) -> bool {
-    identifier.get_value(heap).is_some_and(|value| {
-        let IdentifierValueData::Arbitrary(value) = value.get_data(heap) else {
-            return false;
-        };
-        let raw_reference: RawValue = value.into();
-        raw_reference >= ATOM_LIMIT && heap[raw_reference].tag == Tag::Constructor
-    })
+    let raw_value: RawValue = identifier.get_value_field(heap).into();
+    raw_value >= ATOM_LIMIT && heap[raw_value].tag == Tag::Constructor
 }
 
 /// Projects the committed synonym RHS type-expression payload from a typed type-identifier value.

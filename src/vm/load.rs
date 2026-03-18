@@ -559,14 +559,23 @@ impl VM {
     ///
     /// C parity target: `if(!SYNERR) ... checktypes();`
     /// Current concrete behavior:
-    /// - if undefined names are already present, fail the phase with a typed error,
-    /// - otherwise succeed without invoking the real typechecker subsystem.
+    /// - delegate to the subsystem-owned partial typecheck boundary,
+    /// - commit subsystem-produced unresolved-name state,
+    /// - propagate typed subsystem failure when present.
     pub(super) fn run_checktypes_phase(&mut self) -> Result<(), BytecodeError> {
-        let undefined_count = self.undefined_names.len(&self.heap);
-        if undefined_count > 0 {
+        let preexisting_undefined_count = self.undefined_names.len(&self.heap);
+        if preexisting_undefined_count > 0 {
             return Err(BytecodeError::TypecheckUndefinedNames {
-                count: undefined_count,
+                count: preexisting_undefined_count,
             });
+        }
+
+        let inputs = super::typecheck::TypecheckBoundaryInputs::from_vm(self);
+        let result = super::typecheck::run_partial_typecheck(&mut self.heap, inputs);
+        self.undefined_names = result.undefined_names;
+
+        if let Some(failure) = result.failure {
+            return Err(failure);
         }
 
         Ok(())
@@ -700,16 +709,14 @@ impl VM {
     ///
     /// C parity target: codegen loop and `initialising && ND!=NIL` panic branch.
     /// Current concrete behavior:
-    /// - fail if no files are available for code generation,
-    /// - fail during initialization if unresolved names remain,
-    /// - otherwise succeed without invoking the real codegen subsystem.
+    /// - delegate to the subsystem-owned partial codegen boundary,
+    /// - preserve subsystem-owned typed post-iteration failure,
+    /// - otherwise succeed.
     pub(super) fn run_codegen_phase(&mut self) -> Result<(), BytecodeError> {
-        if self.files.is_empty() {
-            return Err(BytecodeError::CodegenWithoutLoadedFiles);
-        }
-
-        if self.initializing && !self.undefined_names.is_empty() {
-            return Err(BytecodeError::InitializationLoadContainsErrors);
+        let inputs = super::codegen::CodegenBoundaryInputs::from_vm(self);
+        let result = super::codegen::run_partial_codegen(&self.heap, inputs);
+        if let Some(failure) = result.failure {
+            return Err(failure);
         }
 
         Ok(())

@@ -529,12 +529,6 @@ The basic action of the Miranda system is to evaluate expressions in the environ
         definitions (called a \"script\"). If no argument is given a default name \"script.m\" is assumed. The names of files containing miranda scripts must end in \".m\" and mira will add this if missing. The specified file need not yet exist - in this case you will be starting a Miranda session with an empty current script.");
 
     ap.parse_args_or_exit();
-
-    // Help is provided automagically by the `argparse` library.
-    // if print_help {
-    //   ap.print_help();
-    //   exit_immediately = true;
-    // }
   }
 
   // region Print and exit if a relevant argument was given.
