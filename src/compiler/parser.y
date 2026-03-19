@@ -362,7 +362,24 @@ top_level_definition_parameters:
 top_level_definition_parameter:
     Name { $$ = $1; }
     | ConstructorName { $$ = $1; }
+    | Constant {
+        let constant = $1;
+        if self.heap[constant].tag == Tag::Double {
+          self.syntax("use of floating point literal in pattern\n");
+        }
+        $$ = constant;
+      }
     | OpenBracket CloseBracket { $$ = self.heap.nill; }
+    | OpenBracket top_level_pattern_list CloseBracket {
+        let mut x: RawValue = $2.into();
+        let mut y = self.heap.nill;
+        while x != NIL_RAW {
+          y = self.heap.cons_ref(self.heap[x].head.into(), y);
+          x = self.heap[x].tail;
+        }
+        $$ = y;
+      }
+    | OpenParenthesis CloseParenthesis { $$ = self.vm.void_tuple(); }
     | OpenParenthesis top_level_pattern Comma top_level_pattern CloseParenthesis {
         $$ = self.heap.pair_ref($2, $4);
       }
@@ -387,6 +404,13 @@ top_level_pattern_tuple_tail:
       }
     ;
 
+top_level_pattern_list:
+    top_level_pattern { $$ = self.heap.cons_ref($1, NIL); }
+    | top_level_pattern_list Comma top_level_pattern {
+        $$ = self.heap.cons_ref($3, $1);
+      }
+    ;
+
 top_level_pattern_application:
     ConstructorName top_level_pattern_atom { $$ = self.heap.apply_ref($1, $2); }
     | top_level_pattern_application top_level_pattern_atom { $$ = self.heap.apply_ref($1, $2); }
@@ -395,7 +419,24 @@ top_level_pattern_application:
 top_level_pattern_atom:
     Name { $$ = $1; }
     | ConstructorName { $$ = $1; }
+    | Constant {
+        let constant = $1;
+        if self.heap[constant].tag == Tag::Double {
+          self.syntax("use of floating point literal in pattern\n");
+        }
+        $$ = constant;
+      }
     | OpenBracket CloseBracket { $$ = self.heap.nill; }
+    | OpenBracket top_level_pattern_list CloseBracket {
+        let mut x: RawValue = $2.into();
+        let mut y = self.heap.nill;
+        while x != NIL_RAW {
+          y = self.heap.cons_ref(self.heap[x].head.into(), y);
+          x = self.heap[x].tail;
+        }
+        $$ = y;
+      }
+    | OpenParenthesis CloseParenthesis { $$ = self.vm.void_tuple(); }
     | OpenParenthesis top_level_pattern CloseParenthesis { $$ = $2; }
     ;
 

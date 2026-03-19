@@ -426,6 +426,26 @@ fn load_file_rejects_undeclared_constructor_inside_tuple_formal() {
 }
 
 #[test]
+fn load_file_rejects_undeclared_constructor_inside_list_formal() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("undeclared_constructor_list_formal.m");
+    std::fs::write(&source_path, "isList [Nope] = True\n")
+        .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::UndeclaredConstructorsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
 fn load_file_rejects_declared_constructor_application_inside_tuple_formal_for_wrong_arity() {
     let mut vm = VM::new_for_tests();
     vm.initializing = false;
