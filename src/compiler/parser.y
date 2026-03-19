@@ -363,6 +363,12 @@ top_level_definition_parameter:
     Name { $$ = $1; }
     | ConstructorName { $$ = $1; }
     | OpenBracket CloseBracket { $$ = self.heap.nill; }
+    | OpenParenthesis top_level_pattern Comma top_level_pattern CloseParenthesis {
+        $$ = self.heap.pair_ref($2, $4);
+      }
+    | OpenParenthesis top_level_pattern Comma top_level_pattern_tuple_tail CloseParenthesis {
+        $$ = self.heap.cons_ref($2, $4);
+      }
     | OpenParenthesis top_level_pattern CloseParenthesis { $$ = $2; }
     ;
 
@@ -370,6 +376,15 @@ top_level_pattern:
     top_level_pattern_atom Colon top_level_pattern { $$ = self.heap.cons_ref($1, $3); }
     | top_level_pattern_application { $$ = $1; }
     | top_level_pattern_atom { $$ = $1; }
+    ;
+
+top_level_pattern_tuple_tail:
+    top_level_pattern Comma top_level_pattern {
+        $$ = self.heap.pair_ref($1, $3);
+      }
+    | top_level_pattern Comma top_level_pattern_tuple_tail {
+        $$ = self.heap.cons_ref($1, $3);
+      }
     ;
 
 top_level_pattern_application:

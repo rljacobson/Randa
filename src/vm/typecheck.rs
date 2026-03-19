@@ -42,6 +42,7 @@ pub(super) fn run_partial_typecheck(
     let mut specified_but_not_defined = ConsList::EMPTY;
     let mut undeclared_constructors_in_formals = ConsList::EMPTY;
     let mut constructor_arity_mismatch_in_formals = ConsList::EMPTY;
+    let mut non_constructor_heads_in_formals = 0usize;
     let mut checked_definition_count = 0usize;
 
     if let Some(current_file) = inputs.current_file {
@@ -76,6 +77,7 @@ pub(super) fn run_partial_typecheck(
                         body,
                         &mut undeclared_constructors_in_formals,
                         &mut constructor_arity_mismatch_in_formals,
+                        &mut non_constructor_heads_in_formals,
                     );
                     let mut bound_identifiers = Vec::new();
                     collect_unresolved_identifier_references(
@@ -186,6 +188,10 @@ pub(super) fn run_partial_typecheck(
         Some(TypecheckError::ConstructorArityMismatchInFormals {
             count: constructor_formal_arity_mismatch_count,
         })
+    } else if non_constructor_heads_in_formals > 0 {
+        Some(TypecheckError::NonConstructorHeadsInFormals {
+            count: non_constructor_heads_in_formals,
+        })
     } else if undefined_count > 0 {
         Some(TypecheckError::UndefinedNames {
             count: undefined_count,
@@ -209,6 +215,7 @@ fn collect_formal_pattern_issues(
     expression: Value,
     undeclared_constructors_in_formals: &mut ConsList<IdentifierRecordRef>,
     constructor_arity_mismatch_in_formals: &mut ConsList<IdentifierRecordRef>,
+    non_constructor_heads_in_formals: &mut usize,
 ) {
     let raw_reference: RawValue = expression.into();
     if raw_reference < ATOM_LIMIT {
@@ -223,6 +230,7 @@ fn collect_formal_pattern_issues(
                 pattern,
                 undeclared_constructors_in_formals,
                 constructor_arity_mismatch_in_formals,
+                non_constructor_heads_in_formals,
             );
             let body = heap[raw_reference].tail.into();
             collect_formal_pattern_issues(
@@ -230,6 +238,7 @@ fn collect_formal_pattern_issues(
                 body,
                 undeclared_constructors_in_formals,
                 constructor_arity_mismatch_in_formals,
+                non_constructor_heads_in_formals,
             );
         }
         Tag::Label | Tag::Show => {
@@ -238,6 +247,7 @@ fn collect_formal_pattern_issues(
                 heap[raw_reference].tail.into(),
                 undeclared_constructors_in_formals,
                 constructor_arity_mismatch_in_formals,
+                non_constructor_heads_in_formals,
             );
         }
         Tag::Share => {
@@ -246,6 +256,7 @@ fn collect_formal_pattern_issues(
                 heap[raw_reference].head.into(),
                 undeclared_constructors_in_formals,
                 constructor_arity_mismatch_in_formals,
+                non_constructor_heads_in_formals,
             );
         }
         _ => {}
@@ -257,6 +268,7 @@ fn collect_formal_pattern_issues_in_pattern(
     pattern: Value,
     undeclared_constructors_in_formals: &mut ConsList<IdentifierRecordRef>,
     constructor_arity_mismatch_in_formals: &mut ConsList<IdentifierRecordRef>,
+    non_constructor_heads_in_formals: &mut usize,
 ) {
     let raw_reference: RawValue = pattern.into();
     if raw_reference < ATOM_LIMIT {
@@ -276,8 +288,10 @@ fn collect_formal_pattern_issues_in_pattern(
             if let Some((head, arguments)) = pattern_application_spine(heap, pattern) {
                 if is_constructor_identifier(heap, head) {
                     constructor_arity_mismatch_in_formals.insert_ordered(heap, head);
-                } else {
+                } else if identifier_has_constructor_intent(heap, head) {
                     undeclared_constructors_in_formals.insert_ordered(heap, head);
+                } else {
+                    *non_constructor_heads_in_formals += 1;
                 }
 
                 for argument in arguments {
@@ -286,22 +300,27 @@ fn collect_formal_pattern_issues_in_pattern(
                         argument,
                         undeclared_constructors_in_formals,
                         constructor_arity_mismatch_in_formals,
+                        non_constructor_heads_in_formals,
                     );
                 }
                 return;
             }
+
+            *non_constructor_heads_in_formals += 1;
 
             collect_formal_pattern_issues_in_pattern(
                 heap,
                 heap[raw_reference].head.into(),
                 undeclared_constructors_in_formals,
                 constructor_arity_mismatch_in_formals,
+                non_constructor_heads_in_formals,
             );
             collect_formal_pattern_issues_in_pattern(
                 heap,
                 heap[raw_reference].tail.into(),
                 undeclared_constructors_in_formals,
                 constructor_arity_mismatch_in_formals,
+                non_constructor_heads_in_formals,
             );
         }
         Tag::Cons | Tag::Pair | Tag::TCons => {
@@ -310,12 +329,14 @@ fn collect_formal_pattern_issues_in_pattern(
                 heap[raw_reference].head.into(),
                 undeclared_constructors_in_formals,
                 constructor_arity_mismatch_in_formals,
+                non_constructor_heads_in_formals,
             );
             collect_formal_pattern_issues_in_pattern(
                 heap,
                 heap[raw_reference].tail.into(),
                 undeclared_constructors_in_formals,
                 constructor_arity_mismatch_in_formals,
+                non_constructor_heads_in_formals,
             );
         }
         _ => {}

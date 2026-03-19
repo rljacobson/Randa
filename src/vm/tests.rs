@@ -374,6 +374,70 @@ fn load_file_commits_top_level_cons_pattern_form_and_treats_names_as_bound() {
 }
 
 #[test]
+fn load_file_keeps_cons_pattern_tail_name_bound_after_constructor_formal_checks() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("cons_pattern_tail_binding.m");
+    std::fs::write(&source_path, "tail (x:xs) = xs\n").expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(result.is_ok());
+    assert!(vm.undefined_names.is_empty());
+
+    let tail = vm
+        .heap
+        .get_identifier("tail")
+        .expect("expected tail identifier to exist");
+    let tail_value = tail
+        .get_value(&vm.heap)
+        .expect("expected tail definition value to exist");
+    let IdentifierValueData::Arbitrary(Value::Reference(lambda_ref)) =
+        tail_value.get_data(&vm.heap)
+    else {
+        panic!("expected top-level cons pattern form to lower into a lambda body");
+    };
+    let lambda_raw: RawValue = Value::Reference(lambda_ref).into();
+    let body_identifier = IdentifierRecordRef::from_ref(vm.heap[lambda_raw].tail);
+    assert_eq!(vm.identifier_name(body_identifier), "xs");
+}
+
+#[test]
+fn load_file_commits_top_level_tuple_pattern_form_and_treats_names_as_bound() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("tuple_pattern_form_substrate.m");
+    std::fs::write(&source_path, "second (x,y) = y\n").expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(result.is_ok());
+    let second = vm
+        .heap
+        .get_identifier("second")
+        .expect("expected second identifier to exist");
+    let second_value = second
+        .get_value(&vm.heap)
+        .expect("expected second definition value to exist");
+    let IdentifierValueData::Arbitrary(Value::Reference(lambda_ref)) =
+        second_value.get_data(&vm.heap)
+    else {
+        panic!("expected top-level tuple pattern form to lower into a lambda body");
+    };
+    let lambda_raw: RawValue = Value::Reference(lambda_ref).into();
+    assert_eq!(vm.heap[lambda_raw].tag, Tag::Lambda);
+    let pattern_raw = vm.heap[lambda_raw].head;
+    assert_eq!(vm.heap[pattern_raw].tag, Tag::Pair);
+    let body_identifier = IdentifierRecordRef::from_ref(vm.heap[lambda_raw].tail);
+    assert_eq!(vm.identifier_name(body_identifier), "y");
+    assert!(vm.undefined_names.is_empty());
+}
+
+#[test]
 fn load_file_accepts_nullary_constructor_pattern_form() {
     let mut vm = VM::new_for_tests();
     vm.initializing = false;
@@ -451,6 +515,112 @@ fn load_file_rejects_declared_constructor_application_for_wrong_arity_in_formal(
     std::fs::write(
         &source_path,
         "maybe ::= Just | Nothing\nfromJust (Just x) = x\n",
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::ConstructorArityMismatchInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
+fn load_file_rejects_undeclared_constructor_inside_tuple_formal() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("undeclared_constructor_tuple_formal.m");
+    std::fs::write(&source_path, "isPair (Nope,x) = x\n")
+        .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::UndeclaredConstructorsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
+fn load_file_rejects_declared_constructor_application_inside_tuple_formal_for_wrong_arity() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("constructor_application_tuple_formal_wrong_arity.m");
+    std::fs::write(
+        &source_path,
+        "maybe ::= Just | Nothing\nfromTuple (Just x,y) = x\n",
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::ConstructorArityMismatchInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
+fn load_file_reports_tuple_contained_constructor_formal_before_generic_undefined_name() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("tuple_constructor_precedes_undefined_name.m");
+    std::fs::write(&source_path, "isPair (Nope,x) = missing\n")
+        .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::UndeclaredConstructorsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
+fn load_file_reports_undeclared_constructor_formal_before_generic_undefined_name() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("undeclared_constructor_precedes_undefined_name.m");
+    std::fs::write(&source_path, "isNope Nope = missing\n")
+        .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::UndeclaredConstructorsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
+fn load_file_reports_constructor_formal_arity_before_generic_undefined_name() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("constructor_arity_precedes_undefined_name.m");
+    std::fs::write(
+        &source_path,
+        "maybe ::= Just | Nothing\nfromJust (Just x) = missing\n",
     )
     .expect("failed to write source test file");
     let source_path_str = source_path.to_string_lossy().to_string();
@@ -1253,6 +1423,41 @@ fn typecheck_phase_fails_when_undefined_names_present() {
         result,
         Err(TypecheckError::UndefinedNames { count: 1 })
     ));
+}
+
+#[test]
+fn typecheck_phase_rejects_non_constructor_application_head_in_formal() {
+    let mut vm = VM::new_for_tests();
+
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("non_constructor_formal_head.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        ConsList::EMPTY,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+
+    let f = vm.heap.make_empty_identifier("f");
+    let g = vm.heap.make_empty_identifier("g");
+    let x = vm.heap.make_empty_identifier("x");
+    let malformed_pattern = vm.heap.apply_ref(g.into(), x.into());
+    let lambda_body = vm.heap.lambda_ref(malformed_pattern.into(), x.into());
+    f.set_value_from_data(
+        &mut vm.heap,
+        IdentifierValueData::Arbitrary(lambda_body.into()),
+    );
+    current_file.push_item_onto_definienda(&mut vm.heap, f);
+
+    let result = vm.run_checktypes_phase();
+
+    assert!(matches!(
+        result,
+        Err(TypecheckError::NonConstructorHeadsInFormals { count: 1 })
+    ));
+    assert!(vm.undefined_names.is_empty());
 }
 
 #[test]
