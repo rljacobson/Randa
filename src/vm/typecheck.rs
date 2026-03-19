@@ -1,4 +1,5 @@
 use super::*;
+use crate::compiler::Token;
 use crate::data::api::{IdentifierRecordRef, IdentifierValueTypeKind, IdentifierValueTypeRef};
 use crate::data::heap::is_capitalized;
 use crate::data::{Heap, RawValue, Tag, Type, Value, ATOM_LIMIT};
@@ -270,76 +271,67 @@ fn collect_formal_pattern_issues_in_pattern(
     constructor_arity_mismatch_in_formals: &mut ConsList<IdentifierRecordRef>,
     non_constructor_heads_in_formals: &mut usize,
 ) {
-    let raw_reference: RawValue = pattern.into();
-    if raw_reference < ATOM_LIMIT {
-        return;
-    }
-
-    match heap[raw_reference].tag {
-        Tag::Id => {
-            let identifier = IdentifierRecordRef::from_ref(raw_reference);
-            if identifier_has_constructor_intent(heap, identifier)
-                && !is_constructor_identifier(heap, identifier)
-            {
+    match classify_committed_formal_pattern(heap, pattern) {
+        CommittedFormalPattern::Binder(_) => {}
+        CommittedFormalPattern::ConstructorIntentIdentifier(identifier) => {
+            if !is_constructor_identifier(heap, identifier) {
                 undeclared_constructors_in_formals.insert_ordered(heap, identifier);
             }
         }
-        Tag::Ap => {
-            if let Some((head, arguments)) = pattern_application_spine(heap, pattern) {
-                if is_constructor_identifier(heap, head) {
-                    constructor_arity_mismatch_in_formals.insert_ordered(heap, head);
-                } else if identifier_has_constructor_intent(heap, head) {
-                    undeclared_constructors_in_formals.insert_ordered(heap, head);
-                } else {
-                    *non_constructor_heads_in_formals += 1;
-                }
-
-                for argument in arguments {
-                    collect_formal_pattern_issues_in_pattern(
-                        heap,
-                        argument,
-                        undeclared_constructors_in_formals,
-                        constructor_arity_mismatch_in_formals,
-                        non_constructor_heads_in_formals,
-                    );
-                }
-                return;
+        CommittedFormalPattern::ConstructorApplication { head, arguments } => {
+            if is_constructor_identifier(heap, head) {
+                constructor_arity_mismatch_in_formals.insert_ordered(heap, head);
+            } else {
+                undeclared_constructors_in_formals.insert_ordered(heap, head);
             }
 
+            for argument in arguments {
+                collect_formal_pattern_issues_in_pattern(
+                    heap,
+                    argument,
+                    undeclared_constructors_in_formals,
+                    constructor_arity_mismatch_in_formals,
+                    non_constructor_heads_in_formals,
+                );
+            }
+        }
+        CommittedFormalPattern::NonConstructorApplication { head, tail } => {
             *non_constructor_heads_in_formals += 1;
-
             collect_formal_pattern_issues_in_pattern(
                 heap,
-                heap[raw_reference].head.into(),
+                head,
                 undeclared_constructors_in_formals,
                 constructor_arity_mismatch_in_formals,
                 non_constructor_heads_in_formals,
             );
             collect_formal_pattern_issues_in_pattern(
                 heap,
-                heap[raw_reference].tail.into(),
-                undeclared_constructors_in_formals,
-                constructor_arity_mismatch_in_formals,
-                non_constructor_heads_in_formals,
-            );
-        }
-        Tag::Cons | Tag::Pair | Tag::TCons => {
-            collect_formal_pattern_issues_in_pattern(
-                heap,
-                heap[raw_reference].head.into(),
-                undeclared_constructors_in_formals,
-                constructor_arity_mismatch_in_formals,
-                non_constructor_heads_in_formals,
-            );
-            collect_formal_pattern_issues_in_pattern(
-                heap,
-                heap[raw_reference].tail.into(),
+                tail,
                 undeclared_constructors_in_formals,
                 constructor_arity_mismatch_in_formals,
                 non_constructor_heads_in_formals,
             );
         }
-        _ => {}
+        CommittedFormalPattern::StructuralCons { head, tail }
+        | CommittedFormalPattern::StructuralTuple { head, tail } => {
+            collect_formal_pattern_issues_in_pattern(
+                heap,
+                head,
+                undeclared_constructors_in_formals,
+                constructor_arity_mismatch_in_formals,
+                non_constructor_heads_in_formals,
+            );
+            collect_formal_pattern_issues_in_pattern(
+                heap,
+                tail,
+                undeclared_constructors_in_formals,
+                constructor_arity_mismatch_in_formals,
+                non_constructor_heads_in_formals,
+            );
+        }
+        CommittedFormalPattern::WrappedConstantLeaf(_)
+        | CommittedFormalPattern::RepeatedNameLeaf(_)
+        | CommittedFormalPattern::LiteralOrVoidLeaf => {}
     }
 }
 
@@ -518,51 +510,114 @@ fn collect_pattern_bound_identifiers(
     pattern: Value,
     bound_identifiers: &mut Vec<IdentifierRecordRef>,
 ) {
+    match classify_committed_formal_pattern(heap, pattern) {
+        CommittedFormalPattern::Binder(identifier) => {
+            if !bound_identifiers.contains(&identifier) {
+                bound_identifiers.push(identifier);
+            }
+        }
+        CommittedFormalPattern::ConstructorIntentIdentifier(_)
+        | CommittedFormalPattern::WrappedConstantLeaf(_)
+        | CommittedFormalPattern::RepeatedNameLeaf(_)
+        | CommittedFormalPattern::LiteralOrVoidLeaf => {}
+        CommittedFormalPattern::ConstructorApplication { arguments, .. } => {
+            for argument in arguments {
+                collect_pattern_bound_identifiers(heap, argument, bound_identifiers);
+            }
+        }
+        CommittedFormalPattern::NonConstructorApplication { head, tail }
+        | CommittedFormalPattern::StructuralCons { head, tail }
+        | CommittedFormalPattern::StructuralTuple { head, tail } => {
+            collect_pattern_bound_identifiers(heap, head, bound_identifiers);
+            collect_pattern_bound_identifiers(heap, tail, bound_identifiers);
+        }
+    }
+}
+
+#[derive(Debug)]
+enum CommittedFormalPattern {
+    Binder(IdentifierRecordRef),
+    ConstructorIntentIdentifier(IdentifierRecordRef),
+    ConstructorApplication {
+        head: IdentifierRecordRef,
+        arguments: Vec<Value>,
+    },
+    NonConstructorApplication {
+        head: Value,
+        tail: Value,
+    },
+    StructuralCons {
+        head: Value,
+        tail: Value,
+    },
+    StructuralTuple {
+        head: Value,
+        tail: Value,
+    },
+    WrappedConstantLeaf(Value),
+    RepeatedNameLeaf(IdentifierRecordRef),
+    LiteralOrVoidLeaf,
+}
+
+/// Classifies one committed formal-pattern node into the shared semantic taxonomy used by typecheck.
+/// This exists so bound-name collection and formal diagnostics interpret the same committed shapes consistently.
+/// The invariant is that wrapped constant cells are distinguished from structural cons/list cells before either walk recurses or records bindings.
+fn classify_committed_formal_pattern(heap: &Heap, pattern: Value) -> CommittedFormalPattern {
     let raw_reference: RawValue = pattern.into();
     if raw_reference < ATOM_LIMIT {
-        return;
+        return CommittedFormalPattern::LiteralOrVoidLeaf;
     }
 
     match heap[raw_reference].tag {
         Tag::Id => {
             let identifier = IdentifierRecordRef::from_ref(raw_reference);
-            if !identifier_has_constructor_intent(heap, identifier)
-                && !bound_identifiers.contains(&identifier)
-            {
-                bound_identifiers.push(identifier);
+            if identifier_has_constructor_intent(heap, identifier) {
+                CommittedFormalPattern::ConstructorIntentIdentifier(identifier)
+            } else {
+                CommittedFormalPattern::Binder(identifier)
             }
-        }
-        Tag::Cons | Tag::Pair | Tag::TCons => {
-            collect_pattern_bound_identifiers(
-                heap,
-                heap[raw_reference].head.into(),
-                bound_identifiers,
-            );
-            collect_pattern_bound_identifiers(
-                heap,
-                heap[raw_reference].tail.into(),
-                bound_identifiers,
-            );
         }
         Tag::Ap => {
-            if let Some((_head, arguments)) = pattern_application_spine(heap, pattern) {
-                for argument in arguments {
-                    collect_pattern_bound_identifiers(heap, argument, bound_identifiers);
+            if let Some((head, arguments)) = pattern_application_spine(heap, pattern) {
+                if identifier_has_constructor_intent(heap, head) {
+                    CommittedFormalPattern::ConstructorApplication { head, arguments }
+                } else {
+                    CommittedFormalPattern::NonConstructorApplication {
+                        head: heap[raw_reference].head.into(),
+                        tail: heap[raw_reference].tail.into(),
+                    }
                 }
             } else {
-                collect_pattern_bound_identifiers(
-                    heap,
-                    heap[raw_reference].head.into(),
-                    bound_identifiers,
-                );
-                collect_pattern_bound_identifiers(
-                    heap,
-                    heap[raw_reference].tail.into(),
-                    bound_identifiers,
-                );
+                CommittedFormalPattern::NonConstructorApplication {
+                    head: heap[raw_reference].head.into(),
+                    tail: heap[raw_reference].tail.into(),
+                }
             }
         }
-        _ => {}
+        Tag::Cons => {
+            let constant_tag = RawValue::from(Value::Token(Token::Constant));
+            if heap[raw_reference].head == constant_tag {
+                let wrapped: Value = heap[raw_reference].tail.into();
+                let wrapped_raw: RawValue = wrapped.into();
+                if wrapped_raw >= ATOM_LIMIT && heap[wrapped_raw].tag == Tag::Id {
+                    CommittedFormalPattern::RepeatedNameLeaf(IdentifierRecordRef::from_ref(
+                        wrapped_raw,
+                    ))
+                } else {
+                    CommittedFormalPattern::WrappedConstantLeaf(wrapped)
+                }
+            } else {
+                CommittedFormalPattern::StructuralCons {
+                    head: heap[raw_reference].head.into(),
+                    tail: heap[raw_reference].tail.into(),
+                }
+            }
+        }
+        Tag::Pair | Tag::TCons => CommittedFormalPattern::StructuralTuple {
+            head: heap[raw_reference].head.into(),
+            tail: heap[raw_reference].tail.into(),
+        },
+        _ => CommittedFormalPattern::LiteralOrVoidLeaf,
     }
 }
 

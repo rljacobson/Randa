@@ -2,7 +2,7 @@ use super::*;
 use crate::big_num::IntegerRef;
 use crate::compiler::{
     HereInfo, ParserExportDirectivePayload, ParserIncludeDirectivePayload, ParserSupportError,
-    ParserTopLevelDirectivePayload,
+    ParserTopLevelDirectivePayload, Token,
 };
 use crate::data::api::{
     DataPair, FreeFormalBindingRef, HeapObjectProxy, IdentifierValueTypeData,
@@ -1222,6 +1222,77 @@ fn typecheck_phase_fails_when_undefined_names_present() {
     let mut vm = VM::new_for_tests();
     let missing_id = vm.heap.make_empty_identifier("missing_name");
     vm.undefined_names = ConsList::new(&mut vm.heap, missing_id);
+
+    let result = vm.run_checktypes_phase();
+
+    assert!(matches!(
+        result,
+        Err(TypecheckError::UndefinedNames { count: 1 })
+    ));
+}
+
+#[test]
+fn typecheck_phase_does_not_bind_repeated_name_leaf_in_formal() {
+    let mut vm = VM::new_for_tests();
+
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("repeated_name_leaf_formal.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        ConsList::EMPTY,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+
+    let f = vm.heap.make_empty_identifier("f");
+    let x = vm.heap.make_empty_identifier("x");
+    let repeated_name_pattern = vm.heap.cons_ref(Token::Constant.into(), x.into());
+    let missing = vm.heap.make_empty_identifier("missing");
+    let lambda_body = vm
+        .heap
+        .lambda_ref(repeated_name_pattern.into(), missing.into());
+    f.set_value_from_data(
+        &mut vm.heap,
+        IdentifierValueData::Arbitrary(lambda_body.into()),
+    );
+    current_file.push_item_onto_definienda(&mut vm.heap, f);
+
+    let result = vm.run_checktypes_phase();
+
+    assert!(matches!(
+        result,
+        Err(TypecheckError::UndefinedNames { count: 1 })
+    ));
+}
+
+#[test]
+fn typecheck_phase_does_not_bind_wrapped_constant_leaf_in_formal() {
+    let mut vm = VM::new_for_tests();
+
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("wrapped_constant_leaf_formal.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        ConsList::EMPTY,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+
+    let f = vm.heap.make_empty_identifier("f");
+    let wrapped_constant_pattern = vm.heap.cons_ref(Token::Constant.into(), Value::Data(0));
+    let missing = vm.heap.make_empty_identifier("missing");
+    let lambda_body = vm
+        .heap
+        .lambda_ref(wrapped_constant_pattern.into(), missing.into());
+    f.set_value_from_data(
+        &mut vm.heap,
+        IdentifierValueData::Arbitrary(lambda_body.into()),
+    );
+    current_file.push_item_onto_definienda(&mut vm.heap, f);
 
     let result = vm.run_checktypes_phase();
 

@@ -2,7 +2,7 @@ use super::*;
 
 use crate::data::{
     api::{ConsList, FileInfoRef, HeapObjectProxy, IdentifierRecordRef},
-    Combinator, Heap, Tag, Value,
+    Combinator, Heap, RawValue, Tag, Value,
 };
 
 const TEST_VOID_TUPLE: Value = Value::Data(777);
@@ -94,7 +94,29 @@ fn parser_parses_top_level_constant_pattern_form() {
     let lambda_raw = payload.definitions[0].body;
     assert_eq!(heap[lambda_raw].tag, Tag::Lambda);
     let pattern_raw = heap[lambda_raw].head;
-    assert_eq!(heap[pattern_raw].tag, Tag::Int);
+    assert_eq!(heap[pattern_raw].tag, Tag::Cons);
+    assert_eq!(heap[RawValue::from(heap[pattern_raw].tail)].tag, Tag::Int);
+}
+
+#[test]
+fn parser_lowers_repeated_names_in_top_level_formals_as_wrapped_constants() {
+    let (heap, result) = run_parser(
+        "repeated_name_pattern_form_substrate.m",
+        "eqpair (x,x) = x\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success");
+    };
+    assert_eq!(payload.definitions.len(), 1);
+    let lambda_raw = payload.definitions[0].body;
+    assert_eq!(heap[lambda_raw].tag, Tag::Lambda);
+    let pattern_raw = heap[lambda_raw].head;
+    assert_eq!(heap[pattern_raw].tag, Tag::Pair);
+    let repeated_raw: RawValue = heap[pattern_raw].tail;
+    assert_eq!(heap[repeated_raw].tag, Tag::Cons);
+    let body_identifier = IdentifierRecordRef::from_ref(heap[lambda_raw].tail);
+    assert_eq!(body_identifier.get_name(&heap), "x");
 }
 
 #[test]

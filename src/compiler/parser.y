@@ -355,19 +355,36 @@ top_level_definition_item:
     ;
 
 top_level_definition_parameters:
-    top_level_definition_parameter { $$ = self.heap.cons_ref($1, NIL); }
+    top_level_definition_parameters_start top_level_definition_parameter {
+        $$ = self.heap.cons_ref($2, NIL);
+      }
     | top_level_definition_parameters top_level_definition_parameter { $$ = self.heap.cons_ref($2, $1); }
     ;
 
+top_level_definition_parameters_start:
+    /* empty */ {
+        self.used_identifiers = NIL_RAW;
+        $$ = NIL;
+      }
+    ;
+
 top_level_definition_parameter:
-    Name { $$ = $1; }
+    Name {
+        let identifier = $1;
+        if ConsList::<Value>::from_ref(self.used_identifiers).contains(self.heap, identifier) {
+          $$ = self.heap.cons_ref(Token::Constant.into(), identifier);
+        } else {
+          self.used_identifiers = self.heap.cons_ref(identifier, self.used_identifiers.into()).into();
+          $$ = identifier;
+        }
+      }
     | ConstructorName { $$ = $1; }
     | Constant {
         let constant = $1;
         if self.heap[constant].tag == Tag::Double {
           self.syntax("use of floating point literal in pattern\n");
         }
-        $$ = constant;
+        $$ = self.heap.cons_ref(Token::Constant.into(), constant);
       }
     | OpenBracket CloseBracket { $$ = self.heap.nill; }
     | OpenBracket top_level_pattern_list CloseBracket {
@@ -417,14 +434,22 @@ top_level_pattern_application:
     ;
 
 top_level_pattern_atom:
-    Name { $$ = $1; }
+    Name {
+        let identifier = $1;
+        if ConsList::<Value>::from_ref(self.used_identifiers).contains(self.heap, identifier) {
+          $$ = self.heap.cons_ref(Token::Constant.into(), identifier);
+        } else {
+          self.used_identifiers = self.heap.cons_ref(identifier, self.used_identifiers.into()).into();
+          $$ = identifier;
+        }
+      }
     | ConstructorName { $$ = $1; }
     | Constant {
         let constant = $1;
         if self.heap[constant].tag == Tag::Double {
           self.syntax("use of floating point literal in pattern\n");
         }
-        $$ = constant;
+        $$ = self.heap.cons_ref(Token::Constant.into(), constant);
       }
     | OpenBracket CloseBracket { $$ = self.heap.nill; }
     | OpenBracket top_level_pattern_list CloseBracket {
