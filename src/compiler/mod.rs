@@ -85,19 +85,4 @@ pub struct ParserDiagnostic {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn here_info_from_source_location_counts_lines_and_handles_missing_location() {
-        let source_text = "alpha\nbeta\ngamma\n";
-
-        let here_info =
-            HereInfo::from_source_location("demo.m", source_text, Some(Loc::new(6, 10)));
-        assert_eq!(here_info.script_file, "demo.m");
-        assert_eq!(here_info.line_number, 2);
-
-        let missing = HereInfo::from_source_location("demo.m", source_text, None);
-        assert_eq!(missing.line_number, 0);
-    }
-}
+mod tests;

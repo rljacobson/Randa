@@ -1139,28 +1139,21 @@ impl VM {
         })
     }
 
-    /// Parses a source file for the load pipeline.
+    /// Parses already-materialized source text for the load pipeline.
     ///
-    /// This recognizes expression input and the currently supported top-level
-    /// source-script forms. It returns provisional parser payload; later load
-    /// phases validate directives and use the committed file graph as the
-    /// authoritative source-compilation substrate.
-    pub(super) fn parse_source_script(
+    /// This exists so parser-boundary callers can drive classification,
+    /// parser execution, and parse-result adaptation without first writing the
+    /// source to disk.
+    /// The invariant is that identical `source_path`, `source_text`, and
+    /// `modified_time` inputs produce the same `ParsePhaseOutcome` and parser
+    /// diagnostics as the former inlined path in `parse_source_script`.
+    pub(super) fn parse_source_text(
         &mut self,
-        source_file: &File,
         source_path: &str,
+        source_text: &str,
         modified_time: SystemTime,
         _is_main_script: bool,
     ) -> Result<ParsePhaseOutcome, LoadFileError> {
-        let mut source_text = String::new();
-        let mut reader = BufReader::new(source_file);
-        reader.read_to_string(&mut source_text).map_err(|source| {
-            SourceInputError::UnreadableFile {
-                path: source_path.to_string(),
-                source,
-            }
-        })?;
-
         match self.classify_load_script_form(source_path, &source_text)? {
             LoadScriptForm::Expression | LoadScriptForm::TopLevelScript => {}
             LoadScriptForm::OtherTopLevelForm => {
@@ -1204,6 +1197,31 @@ impl VM {
                 })
             }
         }
+    }
+
+    /// Parses a source file for the load pipeline.
+    ///
+    /// This recognizes expression input and the currently supported top-level
+    /// source-script forms. It returns provisional parser payload; later load
+    /// phases validate directives and use the committed file graph as the
+    /// authoritative source-compilation substrate.
+    pub(super) fn parse_source_script(
+        &mut self,
+        source_file: &File,
+        source_path: &str,
+        modified_time: SystemTime,
+        _is_main_script: bool,
+    ) -> Result<ParsePhaseOutcome, LoadFileError> {
+        let mut source_text = String::new();
+        let mut reader = BufReader::new(source_file);
+        reader.read_to_string(&mut source_text).map_err(|source| {
+            SourceInputError::UnreadableFile {
+                path: source_path.to_string(),
+                source,
+            }
+        })?;
+
+        self.parse_source_text(source_path, &source_text, modified_time, _is_main_script)
     }
 
     fn commit_parsed_top_level_script(

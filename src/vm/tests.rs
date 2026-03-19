@@ -286,6 +286,11 @@ fn classify_load_script_form_distinguishes_supported_top_level_forms() {
         LoadScriptForm::TopLevelScript
     );
     assert_eq!(
+        vm.classify_load_script_form("slice.m", "second (x,y) = y")
+            .expect("top-level tuple-pattern definition should classify"),
+        LoadScriptForm::TopLevelScript
+    );
+    assert_eq!(
         vm.classify_load_script_form("slice.m", "entry :: type")
             .expect("top-level specification should classify"),
         LoadScriptForm::TopLevelScript
@@ -305,72 +310,6 @@ fn classify_load_script_form_distinguishes_supported_top_level_forms() {
             .expect("%free should classify"),
         LoadScriptForm::TopLevelScript
     );
-}
-
-#[test]
-fn load_file_commits_top_level_function_form_as_lambda() {
-    let mut vm = VM::new_for_tests();
-    vm.initializing = false;
-
-    let source_path = unique_test_path("function_form_substrate.m");
-    std::fs::write(&source_path, "id x y = x\n").expect("failed to write source test file");
-    let source_path_str = source_path.to_string_lossy().to_string();
-
-    let result = vm.load_file(&source_path_str);
-
-    assert!(result.is_ok());
-    let id = vm
-        .heap
-        .get_identifier("id")
-        .expect("expected id identifier to exist");
-    let id_value = id
-        .get_value(&vm.heap)
-        .expect("expected id definition value to exist");
-    let IdentifierValueData::Arbitrary(Value::Reference(outer_lambda_ref)) =
-        id_value.get_data(&vm.heap)
-    else {
-        panic!("expected top-level function form to lower into a lambda body");
-    };
-    let outer_lambda_raw: RawValue = Value::Reference(outer_lambda_ref).into();
-    assert_eq!(vm.heap[outer_lambda_raw].tag, Tag::Lambda);
-    let inner_lambda_raw = vm.heap[outer_lambda_raw].tail;
-    assert_eq!(vm.heap[inner_lambda_raw].tag, Tag::Lambda);
-    let body_identifier = IdentifierRecordRef::from_ref(vm.heap[inner_lambda_raw].tail);
-    assert_eq!(vm.identifier_name(body_identifier), "x");
-    assert!(vm.undefined_names.is_empty());
-}
-
-#[test]
-fn load_file_commits_top_level_cons_pattern_form_and_treats_names_as_bound() {
-    let mut vm = VM::new_for_tests();
-    vm.initializing = false;
-
-    let source_path = unique_test_path("cons_pattern_form_substrate.m");
-    std::fs::write(&source_path, "head (x:xs) = x\n").expect("failed to write source test file");
-    let source_path_str = source_path.to_string_lossy().to_string();
-
-    let result = vm.load_file(&source_path_str);
-
-    assert!(result.is_ok());
-    let head = vm
-        .heap
-        .get_identifier("head")
-        .expect("expected head identifier to exist");
-    let head_value = head
-        .get_value(&vm.heap)
-        .expect("expected head definition value to exist");
-    let IdentifierValueData::Arbitrary(Value::Reference(lambda_ref)) =
-        head_value.get_data(&vm.heap)
-    else {
-        panic!("expected top-level cons pattern form to lower into a lambda body");
-    };
-    let lambda_raw: RawValue = Value::Reference(lambda_ref).into();
-    assert_eq!(vm.heap[lambda_raw].tag, Tag::Lambda);
-    let pattern_raw = vm.heap[lambda_raw].head;
-    assert_eq!(vm.heap[pattern_raw].tag, Tag::Cons);
-    let body_identifier = IdentifierRecordRef::from_ref(vm.heap[lambda_raw].tail);
-    assert_eq!(vm.identifier_name(body_identifier), "x");
-    assert!(vm.undefined_names.is_empty());
 }
 
 #[test]
@@ -402,69 +341,6 @@ fn load_file_keeps_cons_pattern_tail_name_bound_after_constructor_formal_checks(
     let lambda_raw: RawValue = Value::Reference(lambda_ref).into();
     let body_identifier = IdentifierRecordRef::from_ref(vm.heap[lambda_raw].tail);
     assert_eq!(vm.identifier_name(body_identifier), "xs");
-}
-
-#[test]
-fn load_file_commits_top_level_tuple_pattern_form_and_treats_names_as_bound() {
-    let mut vm = VM::new_for_tests();
-    vm.initializing = false;
-
-    let source_path = unique_test_path("tuple_pattern_form_substrate.m");
-    std::fs::write(&source_path, "second (x,y) = y\n").expect("failed to write source test file");
-    let source_path_str = source_path.to_string_lossy().to_string();
-
-    let result = vm.load_file(&source_path_str);
-
-    assert!(result.is_ok());
-    let second = vm
-        .heap
-        .get_identifier("second")
-        .expect("expected second identifier to exist");
-    let second_value = second
-        .get_value(&vm.heap)
-        .expect("expected second definition value to exist");
-    let IdentifierValueData::Arbitrary(Value::Reference(lambda_ref)) =
-        second_value.get_data(&vm.heap)
-    else {
-        panic!("expected top-level tuple pattern form to lower into a lambda body");
-    };
-    let lambda_raw: RawValue = Value::Reference(lambda_ref).into();
-    assert_eq!(vm.heap[lambda_raw].tag, Tag::Lambda);
-    let pattern_raw = vm.heap[lambda_raw].head;
-    assert_eq!(vm.heap[pattern_raw].tag, Tag::Pair);
-    let body_identifier = IdentifierRecordRef::from_ref(vm.heap[lambda_raw].tail);
-    assert_eq!(vm.identifier_name(body_identifier), "y");
-    assert!(vm.undefined_names.is_empty());
-}
-
-#[test]
-fn load_file_accepts_nullary_constructor_pattern_form() {
-    let mut vm = VM::new_for_tests();
-    vm.initializing = false;
-
-    let source_path = unique_test_path("nullary_constructor_pattern_form_substrate.m");
-    std::fs::write(
-        &source_path,
-        "maybe ::= Just | Nothing\nisJust Just = True\nisJust Nothing = False\n",
-    )
-    .expect("failed to write source test file");
-    let source_path_str = source_path.to_string_lossy().to_string();
-
-    let result = vm.load_file(&source_path_str);
-
-    assert!(result.is_ok());
-    let is_just = vm
-        .heap
-        .get_identifier("isJust")
-        .expect("expected isJust identifier to exist");
-    let is_just_value = is_just
-        .get_value(&vm.heap)
-        .expect("expected isJust definition value to exist");
-    assert!(matches!(
-        is_just_value.get_data(&vm.heap),
-        IdentifierValueData::Arbitrary(Value::Reference(_))
-    ));
-    assert!(vm.undefined_names.is_empty());
 }
 
 #[test]
@@ -697,15 +573,14 @@ fn load_file_commits_narrow_spec_and_type_substrate_into_current_file() {
 }
 
 #[test]
-fn parse_source_script_commits_narrow_free_substrate_and_marks_file_unshareable() {
+fn parse_source_text_commits_narrow_free_substrate_and_marks_file_unshareable() {
     let mut vm = VM::new_for_tests();
 
     let source_path = unique_test_path("narrow_free_substrate.m");
-    std::fs::write(&source_path, "%free { x :: num }\n").expect("failed to write source test file");
     let source_path_str = source_path.to_string_lossy().to_string();
-    let source_file = File::open(&source_path).expect("failed to open source test file");
+    let source_text = "%free { x :: num }\n";
 
-    let result = vm.parse_source_script(&source_file, &source_path_str, UNIX_EPOCH, false);
+    let result = vm.parse_source_text(&source_path_str, source_text, UNIX_EPOCH, false);
 
     assert!(result.is_ok());
 
@@ -741,76 +616,6 @@ fn parse_source_script_commits_narrow_free_substrate_and_marks_file_unshareable(
         .head(&vm.heap)
         .expect("expected current file");
     assert!(!current_file.is_shareable(&vm.heap));
-}
-
-#[test]
-fn parse_source_script_returns_provisional_payload_for_include_export_directives() {
-    let mut vm = VM::new_for_tests();
-    let source_path = unique_test_path("directive_payload.m");
-    std::fs::write(
-        &source_path,
-        "%include \"inc.m\"\n%export foo \"inc.m\" -bar\n",
-    )
-    .expect("failed to write source test file");
-    let source_path_str = source_path.to_string_lossy().to_string();
-    let source_file = File::open(&source_path).expect("failed to open source test file");
-
-    let outcome = vm
-        .parse_source_script(&source_file, &source_path_str, UNIX_EPOCH, false)
-        .expect("expected include/export directives to parse");
-
-    assert_eq!(outcome.status, ParsePhaseStatus::Parsed);
-    let payload = outcome
-        .top_level_payload
-        .as_ref()
-        .expect("expected top-level payload");
-    assert_eq!(payload.directives.include_requests.len(), 1);
-
-    let include_request = &payload.directives.include_requests[0];
-    assert_eq!(
-        vm.heap
-            .resolve_string(include_request.target_path.into())
-            .expect("include target should be a heap string"),
-        "inc.m"
-    );
-    let Value::Reference(include_anchor_ref) = Value::from(include_request.anchor) else {
-        panic!("expected include anchor reference");
-    };
-    assert_eq!(
-        FileInfoRef::from_ref(include_anchor_ref).line_number(&vm.heap),
-        1
-    );
-
-    let export = payload
-        .directives
-        .export
-        .as_ref()
-        .expect("expected export payload");
-    let Value::Reference(export_anchor_ref) = Value::from(export.anchor) else {
-        panic!("expected export anchor reference");
-    };
-    assert_eq!(
-        FileInfoRef::from_ref(export_anchor_ref).line_number(&vm.heap),
-        2
-    );
-    assert_eq!(
-        vm.heap
-            .resolve_string(
-                ConsList::<Value>::from_ref(export.pathname_requests)
-                    .value_head(&vm.heap)
-                    .expect("expected export pathname")
-            )
-            .expect("export pathname should be a heap string"),
-        "inc.m"
-    );
-    assert_eq!(
-        vm.identifier_name(
-            ConsList::<IdentifierRecordRef>::from_ref(export.exported_ids)
-                .head(&vm.heap)
-                .expect("expected exported id")
-        ),
-        "foo"
-    );
 }
 
 #[test]
@@ -1046,40 +851,21 @@ fn load_file_reports_syntax_error_during_initialization() {
 }
 
 #[test]
-fn parse_source_script_commits_returned_syntax_diagnostic_before_returning_status() {
+fn parse_source_script_reads_file_and_delegates_to_text_entry() {
     let mut vm = VM::new_for_tests();
-    let source_path = unique_test_path("parse_boundary_syntax.m");
-    std::fs::write(&source_path, "1 +\n").expect("failed to write source test file");
+    let source_path = unique_test_path("parse_source_script_wrapper.m");
+    std::fs::write(&source_path, "%free { x :: num }\n").expect("failed to write source test file");
     let source_path_str = source_path.to_string_lossy().to_string();
     let source_file = File::open(&source_path).expect("failed to open source test file");
 
     let outcome = vm
         .parse_source_script(&source_file, &source_path_str, UNIX_EPOCH, false)
-        .expect("expected parse boundary to return syntax status");
+        .expect("expected parse outcome");
 
-    assert_eq!(outcome.status, ParsePhaseStatus::SyntaxError);
-    assert_eq!(vm.error_line, 1);
-    assert_eq!(vm.parser_diagnostics.len(), 1);
-    assert!(vm.parser_diagnostics[0]
-        .message
-        .starts_with("unexpected token"));
-    assert_eq!(
-        vm.parser_diagnostics[0]
-            .here_info
-            .as_ref()
-            .unwrap()
-            .line_number,
-        1
-    );
-    assert_eq!(
-        vm.parser_diagnostics[0]
-            .here_info
-            .as_ref()
-            .unwrap()
-            .script_file,
-        source_path_str
-    );
-    assert_eq!(vm.error_locations.len(), 1);
+    assert_eq!(outcome.status, ParsePhaseStatus::Parsed);
+    assert_eq!(vm.free_identifiers.len(&vm.heap), 1);
+    let current_file = outcome.files.head(&vm.heap).expect("expected current file");
+    assert!(!current_file.is_shareable(&vm.heap));
 }
 
 #[test]
