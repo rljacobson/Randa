@@ -465,39 +465,67 @@ top_level_pattern_atom:
     ;
 
 top_level_specification_item:
-    Name top_level_definition_anchor ColonColon top_level_type_expr directive_terminators {
-        let identifier = $1;
+    namelist top_level_definition_anchor ColonColon top_level_type_expr directive_terminators {
+        let mut names: RawValue = $1.into();
         let anchor = $2;
         let type_expr = $4;
-        self.specification_payloads.push(ParserSpecificationPayload {
-          identifier: identifier.into(),
-          type_expr,
-          anchor: anchor.into(),
-        });
+        while names != NIL_RAW {
+          self.specification_payloads.push(ParserSpecificationPayload {
+            identifier: self.heap[names].head,
+            type_expr,
+            anchor: anchor.into(),
+          });
+          names = self.heap[names].tail;
+        }
         $$ = NIL;
       }
     ;
 
+top_level_type_lhs_typevars:
+    /* empty */ { $$ = NIL; }
+    | typevar top_level_type_lhs_typevars {
+        if self.typevar_list_contains($2, $1) {
+          self.syntax("repeated type variable on lhs of type def\n");
+        }
+        let tail = match $2 {
+          Value::Reference(_) | Value::Combinator(Combinator::Nil) => $2,
+          _ => NIL,
+        };
+        let head = match $1 {
+          Value::Reference(_) | Value::Combinator(_) | Value::Char(_) | Value::Data(_) | Value::Token(_) => $1,
+          _ => NIL,
+        };
+        $$ = self.heap.cons_ref(head, tail);
+      }
+    ;
+
 top_level_synonym_type_item:
-    Name top_level_definition_anchor EqualEqual top_level_type_expr directive_terminators {
+    Name top_level_type_lhs_typevars top_level_definition_anchor EqualEqual top_level_type_expr directive_terminators {
         let type_identifier = $1;
-        let anchor = $2;
-        let info = $4;
+        let arity = self.typevar_list_arity($2);
+        let anchor = $3;
+        let info = $5;
         self.type_declaration_payloads.push(ParserTypeDeclarationPayload {
           type_identifier: type_identifier.into(),
+          arity,
           kind: IdentifierValueTypeKind::Synonym,
           info,
           anchor: anchor.into(),
         });
         $$ = NIL;
       }
+    | ConstructorName top_level_type_lhs_typevars top_level_definition_anchor EqualEqual top_level_type_expr directive_terminators {
+        self.syntax("upper case identifier out of context\n");
+        $$ = NIL;
+      }
     ;
 
 top_level_algebraic_type_item:
-    Name top_level_definition_anchor Colon2Equal top_level_constructor_list directive_terminators {
+    Name top_level_type_lhs_typevars top_level_definition_anchor Colon2Equal top_level_constructor_list directive_terminators {
         let type_identifier = $1;
-        let anchor = $2;
-        let mut constructor_list: RawValue = $4.into();
+        let arity = self.typevar_list_arity($2);
+        let anchor = $3;
+        let mut constructor_list: RawValue = $5.into();
         let mut source_order_constructor_list = NIL_RAW;
         while constructor_list != NIL_RAW {
           source_order_constructor_list = self.heap.cons_ref(self.heap[constructor_list].head.into(), source_order_constructor_list.into()).into();
@@ -508,16 +536,22 @@ top_level_algebraic_type_item:
           self.constructor_payloads.push(ParserConstructorPayload {
             constructor: self.heap[constructors].head,
             parent_type: type_identifier.into(),
+            parent_type_arity: arity,
             anchor: anchor.into(),
           });
           constructors = self.heap[constructors].tail;
         }
         self.type_declaration_payloads.push(ParserTypeDeclarationPayload {
           type_identifier: type_identifier.into(),
+          arity,
           kind: IdentifierValueTypeKind::Algebraic,
           info: source_order_constructor_list.into(),
           anchor: anchor.into(),
         });
+        $$ = NIL;
+      }
+    | ConstructorName top_level_type_lhs_typevars top_level_definition_anchor Colon2Equal top_level_constructor_list directive_terminators {
+        self.syntax("upper case identifier out of context\n");
         $$ = NIL;
       }
     ;
@@ -1982,25 +2016,34 @@ typeforms:
     ;
 
 typeform:
-    ConstructorName typevars { syntax("upper case identifier out of context\n"); }
+    ConstructorName typevars {
+        self.syntax("upper case identifier out of context\n");
+        $$ = $1;
+      }
     | Name typevars   /* warning if typevar is repeated */ {
         $$ = $1;
-        self.used_identifiers = $2.into();
-        let mut typevars = $2;
-        while(typevars!=NIL) {
+        self.used_identifiers = match $2 {
+          Value::Reference(_) => RawValue::from($2),
+          Value::Combinator(Combinator::Nil) => NIL_RAW,
+          _ => NIL_RAW,
+        };
+        let mut typevars = self.used_identifiers;
+        while typevars != NIL_RAW {
           $$ = self.heap.apply_ref($$, self.heap[typevars].head.into());
           typevars = self.heap[typevars].tail;
         }
       }
     | typevar InfixName typevar {
-        if(eqtvar($1, $3)){
-          syntax("repeated type variable in typeform\n");
+        if self.same_type_variable($1, $3) {
+          self.syntax("repeated type variable in typeform\n");
         }
-        self.used_identifiers = self.heap.cons_ref($1, self.heap.cons_ref($3, NIL)).into();
+        let tail = self.heap.cons_ref($3, NIL);
+        self.used_identifiers = self.heap.cons_ref($1, tail.into()).into();
         $$ = self.heap.apply2($2, $1, $3);
       }
     | typevar InfixCName typevar {
-        syntax("upper case identifier cannot be used as typename\n");
+        self.syntax("upper case identifier cannot be used as typename\n");
+        $$ = $2;
       }
     ;
 
@@ -2017,10 +2060,18 @@ typevar:
 typevars:
     /* empty */ { $$ = NIL; }
     | typevar typevars {
-        if(memb($2, $1)) {
-              syntax("repeated type variable on lhs of type def\n");
+        if self.typevar_list_contains($2, $1) {
+          self.syntax("repeated type variable on lhs of type def\n");
         }
-        $$ = self.heap.cons_ref($1, $2);
+        let tail = match $2 {
+          Value::Reference(_) | Value::Combinator(Combinator::Nil) => $2,
+          _ => NIL,
+        };
+        let head = match $1 {
+          Value::Reference(_) | Value::Combinator(_) | Value::Char(_) | Value::Data(_) | Value::Token(_) => $1,
+          _ => NIL,
+        };
+        $$ = self.heap.cons_ref(head, tail);
       }
     ;
 
@@ -2451,7 +2502,55 @@ impl<'ctx /* 'fix quotes */> Parser<'ctx /* 'fix quotes */> {
       });
       self.syntax_error_found = true;
     }
-    
+
+    fn same_type_variable(&self, left: Value, right: Value) -> bool {
+      if left == right {
+        return true;
+      }
+
+      let (Value::Reference(_), Value::Reference(_)) = (left, right) else {
+        return false;
+      };
+      let left_ref = RawValue::from(left);
+      let right_ref = RawValue::from(right);
+      if self.heap[left_ref].tag != Tag::TypeVar || self.heap[right_ref].tag != Tag::TypeVar {
+        return false;
+      }
+
+      self.heap[left_ref].tail == self.heap[right_ref].tail
+    }
+
+    fn typevar_list_contains(&self, list: Value, needle: Value) -> bool {
+      let mut cursor = match list {
+        Value::Reference(_) => RawValue::from(list),
+        Value::Combinator(Combinator::Nil) => return false,
+        _ => return false,
+      };
+      while cursor != NIL_RAW {
+        if self.same_type_variable(self.heap[cursor].head.into(), needle) {
+          return true;
+        }
+        cursor = self.heap[cursor].tail;
+      }
+
+      false
+    }
+
+    fn typevar_list_arity(&self, list: Value) -> isize {
+      let mut cursor = match list {
+        Value::Reference(_) => RawValue::from(list),
+        Value::Combinator(Combinator::Nil) => return 0,
+        _ => return 0,
+      };
+      let mut arity = 0;
+      while cursor != NIL_RAW {
+        arity += 1;
+        cursor = self.heap[cursor].tail;
+      }
+
+      arity
+    }
+     
 
     fn report_syntax_error(&mut self, _yystack: &YYStack, yytoken: &SymbolKind, yylloc: YYLoc) {
         let token_name = SymbolKind::yynames_[i32_to_usize(yytoken.code())];

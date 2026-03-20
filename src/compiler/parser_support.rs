@@ -59,6 +59,7 @@ pub struct ParserSpecificationPayload {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParserTypeDeclarationPayload {
     pub type_identifier: RawValue,
+    pub arity: isize,
     pub kind: IdentifierValueTypeKind,
     pub info: Value,
     pub anchor: RawValue,
@@ -68,6 +69,7 @@ pub struct ParserTypeDeclarationPayload {
 pub struct ParserConstructorPayload {
     pub constructor: RawValue,
     pub parent_type: RawValue,
+    pub parent_type_arity: isize,
     pub anchor: RawValue,
 }
 

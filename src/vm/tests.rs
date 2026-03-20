@@ -93,7 +93,6 @@ fn load_file_missing_script_is_allowed_outside_initialization() {
 
     let result = vm.load_file(&source_path_str);
 
-    dbg!(&result);
     assert!(result.is_ok());
     assert!(!vm.loading);
     assert!(!vm.files.is_empty());
@@ -170,8 +169,11 @@ fn load_file_parser_deferred_keeps_attempted_source_in_old_files() {
     let source_path_str = source_path.to_string_lossy().to_string();
 
     let result = vm.load_file(&source_path_str);
-
-    assert!(result.is_ok());
+    assert!(
+        result.is_ok(),
+        "result={result:?} diagnostics={:?}",
+        vm.parser_diagnostics
+    );
     assert_eq!(
         vm.last_load_phase_trace,
         vec![
@@ -324,7 +326,11 @@ fn load_file_keeps_cons_pattern_tail_name_bound_after_constructor_formal_checks(
 
     let result = vm.load_file(&source_path_str);
 
-    assert!(result.is_ok());
+    assert!(
+        result.is_ok(),
+        "result={result:?} diagnostics={:?}",
+        vm.parser_diagnostics
+    );
     assert!(vm.undefined_names.is_empty());
 
     let tail = vm
@@ -591,6 +597,115 @@ fn load_file_commits_narrow_spec_and_type_substrate_into_current_file() {
 
     let current_file = vm.files.head(&vm.heap).expect("expected current file");
     assert_eq!(current_file.get_definienda(&vm.heap).len(&vm.heap), 5);
+}
+
+#[test]
+fn load_file_commits_multi_name_specification_payloads() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("multi_name_spec.m");
+    std::fs::write(&source_path, "f, g :: [num] -> num\nf = 1\ng = 2\n")
+        .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(result.is_ok());
+
+    let f = vm.heap.get_identifier("f").expect("expected f identifier");
+    let g = vm.heap.get_identifier("g").expect("expected g identifier");
+    assert!(vm.heap.is_arrow_type(f.get_type(&vm.heap)));
+    assert!(vm.heap.is_arrow_type(g.get_type(&vm.heap)));
+
+    let current_file = vm.files.head(&vm.heap).expect("expected current file");
+    assert_eq!(current_file.get_definienda(&vm.heap).len(&vm.heap), 2);
+}
+
+#[test]
+fn load_file_commits_synonym_type_lhs_arity() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("synonym_type_lhs_arity.m");
+    std::fs::write(&source_path, "pair * == (*, [*])\n").expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(result.is_ok());
+
+    let pair = vm
+        .heap
+        .get_identifier("pair")
+        .expect("expected pair type identifier");
+    let pair_value = pair
+        .get_value(&vm.heap)
+        .expect("expected typed synonym value");
+    let IdentifierValueData::Typed {
+        arity, value_type, ..
+    } = pair_value.get_data(&vm.heap)
+    else {
+        panic!("expected typed identifier value")
+    };
+    assert_eq!(arity, 1);
+    assert_eq!(
+        value_type.get_identifier_value_type_kind(&vm.heap),
+        IdentifierValueTypeKind::Synonym
+    );
+}
+
+#[test]
+fn load_file_commits_algebraic_type_lhs_arity_with_nullary_constructors() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("algebraic_type_lhs_arity.m");
+    std::fs::write(&source_path, "option * ::= None | NilOpt\n")
+        .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(result.is_ok());
+
+    let option = vm
+        .heap
+        .get_identifier("option")
+        .expect("expected option type identifier");
+    let none = vm
+        .heap
+        .get_identifier("None")
+        .expect("expected None constructor");
+    let nil_opt = vm
+        .heap
+        .get_identifier("NilOpt")
+        .expect("expected NilOpt constructor");
+
+    let option_value = option
+        .get_value(&vm.heap)
+        .expect("expected typed algebraic value");
+    let IdentifierValueData::Typed {
+        arity, value_type, ..
+    } = option_value.get_data(&vm.heap)
+    else {
+        panic!("expected typed identifier value")
+    };
+    assert_eq!(arity, 1);
+    assert_eq!(
+        value_type.get_identifier_value_type_kind(&vm.heap),
+        IdentifierValueTypeKind::Algebraic
+    );
+
+    let none_type = none.get_type(&vm.heap);
+    let nil_opt_type = nil_opt.get_type(&vm.heap);
+    for constructor_type in [none_type, nil_opt_type] {
+        let applied = ApNodeRef::from_ref(constructor_type.into());
+        assert_eq!(Value::from(applied.function_raw(&vm.heap)), option.into());
+        assert!(vm
+            .heap
+            .is_type_variable(Value::from(applied.argument_raw(&vm.heap))));
+    }
 }
 
 #[test]
@@ -1046,6 +1161,21 @@ fn load_file_reports_syntax_error_during_initialization() {
         vec!["begin", "parse", "syntax-fallback"]
     );
     assert!(!vm.loading);
+}
+
+#[test]
+fn parse_source_text_rejects_uppercase_type_lhs_in_synonym() {
+    let mut vm = VM::new_for_tests();
+
+    let source_path = unique_test_path("uppercase_type_lhs_synonym.m");
+    let source_path_str = source_path.to_string_lossy().to_string();
+    let result = vm.parse_source_text(&source_path_str, "Maybe * == *\n", UNIX_EPOCH, false);
+
+    let outcome = result.expect("expected parse outcome");
+    assert_eq!(outcome.status, ParsePhaseStatus::SyntaxError);
+    assert!(vm.parser_diagnostics.iter().any(|diagnostic| diagnostic
+        .message
+        .contains("upper case identifier out of context")));
 }
 
 #[test]

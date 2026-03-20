@@ -1294,7 +1294,7 @@ impl VM {
         let value = IdentifierValueRef::from_type_identifier_parts(
             &mut self.heap,
             TypeIdentifierValueParts {
-                arity: 0,
+                arity: type_declaration.arity,
                 show_function: None,
                 kind: type_declaration.kind,
                 info: type_declaration.info,
@@ -1314,7 +1314,14 @@ impl VM {
         let parent_type = IdentifierRecordRef::from_ref(constructor_payload.parent_type);
         let definition_metadata = self.definition_metadata_from_anchor(constructor_payload.anchor);
         constructor.set_definition(&mut self.heap, definition_metadata);
-        constructor.set_type(&mut self.heap, constructor_payload.parent_type.into());
+        let mut constructor_type: Value = constructor_payload.parent_type.into();
+        for typevar_index in 1..=constructor_payload.parent_type_arity {
+            let typevar = self
+                .heap
+                .type_var_ref(Value::None, Value::Data(typevar_index as RawValue));
+            constructor_type = self.heap.apply_ref(constructor_type, typevar);
+        }
+        constructor.set_type(&mut self.heap, constructor_type);
         let constructor_index = self.constructor_ordinal_in_parent_type(parent_type, constructor);
         let constructor_value =
             ConstructorRef::new(&mut self.heap, constructor_index, constructor.into());
@@ -1517,6 +1524,12 @@ impl VM {
             Some(Token::Identifier | Token::Name | Token::ConstructorName)
         );
         let has_equal = tokens.iter().skip(1).any(|token| *token == Token::Equal);
+        let has_declaration_marker = tokens.iter().skip(1).any(|token| {
+            matches!(
+                token,
+                Token::ColonColon | Token::EqualEqual | Token::Colon2Equal
+            )
+        });
 
         Ok(match (first, second) {
             (Some(Token::Include), _)
@@ -1528,6 +1541,7 @@ impl VM {
             | (Some(Token::Name), Some(Token::EqualEqual))
             | (Some(Token::Name), Some(Token::Colon2Equal))
             | (Some(Token::Free), _) => LoadScriptForm::TopLevelScript,
+            _ if name_led && has_declaration_marker => LoadScriptForm::TopLevelScript,
             _ if name_led && has_equal => LoadScriptForm::TopLevelScript,
             (Some(Token::Lex), _)
             | (Some(Token::BNF), _)
