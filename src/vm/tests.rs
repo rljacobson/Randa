@@ -1303,7 +1303,7 @@ fn typecheck_phase_does_not_bind_wrapped_constant_leaf_in_formal() {
 }
 
 #[test]
-fn typecheck_phase_rejects_non_constructor_application_head_in_formal() {
+fn typecheck_phase_rejects_value_head_application_in_formal() {
     let mut vm = VM::new_for_tests();
 
     let current_file = FileRecord::new(
@@ -1332,9 +1332,87 @@ fn typecheck_phase_rejects_non_constructor_application_head_in_formal() {
 
     assert!(matches!(
         result,
-        Err(TypecheckError::NonConstructorHeadsInFormals { count: 1 })
+        Err(TypecheckError::ValueHeadApplicationsInFormals { count: 1 })
     ));
     assert!(vm.undefined_names.is_empty());
+}
+
+#[test]
+fn typecheck_phase_rejects_non_identifier_application_head_in_formal() {
+    let mut vm = VM::new_for_tests();
+
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("non_identifier_formal_head.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        ConsList::EMPTY,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+
+    let f = vm.heap.make_empty_identifier("f");
+    let x = vm.heap.make_empty_identifier("x");
+    let xs = vm.heap.make_empty_identifier("xs");
+    let y = vm.heap.make_empty_identifier("y");
+    let malformed_head = vm.heap.cons_ref(x.into(), xs.into());
+    let malformed_pattern = vm.heap.apply_ref(malformed_head.into(), y.into());
+    let lambda_body = vm.heap.lambda_ref(malformed_pattern.into(), y.into());
+    f.set_value_from_data(
+        &mut vm.heap,
+        IdentifierValueData::Arbitrary(lambda_body.into()),
+    );
+    current_file.push_item_onto_definienda(&mut vm.heap, f);
+
+    let result = vm.run_checktypes_phase();
+
+    assert!(matches!(
+        result,
+        Err(TypecheckError::NonIdentifierApplicationHeadsInFormals { count: 1 })
+    ));
+    assert!(vm.undefined_names.is_empty());
+}
+
+#[test]
+fn typecheck_phase_invalid_application_formal_does_not_bind_interior_names() {
+    let mut vm = VM::new_for_tests();
+
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("invalid_application_nonbinding.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        ConsList::EMPTY,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+
+    let f = vm.heap.make_empty_identifier("f");
+    let g = vm.heap.make_empty_identifier("g");
+    let x = vm.heap.make_empty_identifier("x");
+    let malformed_pattern = vm.heap.apply_ref(g.into(), x.into());
+    let lambda_body = vm.heap.lambda_ref(malformed_pattern.into(), x.into());
+    f.set_value_from_data(
+        &mut vm.heap,
+        IdentifierValueData::Arbitrary(lambda_body.into()),
+    );
+    current_file.push_item_onto_definienda(&mut vm.heap, f);
+
+    let inputs = typecheck::TypecheckBoundaryInputs::from_vm(&vm);
+    let result = typecheck::run_partial_typecheck(&mut vm.heap, inputs);
+
+    assert!(matches!(
+        &result.failure,
+        Some(TypecheckError::ValueHeadApplicationsInFormals { count: 1 })
+    ));
+    let mut undefined_names = result.undefined_names;
+    assert_eq!(undefined_names.len(&vm.heap), 1);
+    let identifier = undefined_names
+        .pop(&mut vm.heap)
+        .expect("expected one undefined name from invalid formal interior");
+    assert_eq!(vm.identifier_name(identifier), "x");
 }
 
 #[test]

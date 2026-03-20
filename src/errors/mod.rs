@@ -102,8 +102,10 @@ pub enum TypecheckError {
     UndeclaredConstructorsInFormals { count: usize },
     #[error("Typecheck phase found constructor arity mismatches in formals ({count})")]
     ConstructorArityMismatchInFormals { count: usize },
-    #[error("Typecheck phase found non-constructor formal heads ({count})")]
-    NonConstructorHeadsInFormals { count: usize },
+    #[error("Typecheck phase found value-headed applications in formals ({count})")]
+    ValueHeadApplicationsInFormals { count: usize },
+    #[error("Typecheck phase found non-identifier application heads in formals ({count})")]
+    NonIdentifierApplicationHeadsInFormals { count: usize },
 }
 
 /// Reports codegen precondition failures from the codegen boundary in `src/vm/codegen.rs`.

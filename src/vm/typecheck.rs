@@ -43,7 +43,8 @@ pub(super) fn run_partial_typecheck(
     let mut specified_but_not_defined = ConsList::EMPTY;
     let mut undeclared_constructors_in_formals = ConsList::EMPTY;
     let mut constructor_arity_mismatch_in_formals = ConsList::EMPTY;
-    let mut non_constructor_heads_in_formals = 0usize;
+    let mut value_head_applications_in_formals = 0usize;
+    let mut non_identifier_application_heads_in_formals = 0usize;
     let mut checked_definition_count = 0usize;
 
     if let Some(current_file) = inputs.current_file {
@@ -78,7 +79,8 @@ pub(super) fn run_partial_typecheck(
                         body,
                         &mut undeclared_constructors_in_formals,
                         &mut constructor_arity_mismatch_in_formals,
-                        &mut non_constructor_heads_in_formals,
+                        &mut value_head_applications_in_formals,
+                        &mut non_identifier_application_heads_in_formals,
                     );
                     let mut bound_identifiers = Vec::new();
                     collect_unresolved_identifier_references(
@@ -189,9 +191,13 @@ pub(super) fn run_partial_typecheck(
         Some(TypecheckError::ConstructorArityMismatchInFormals {
             count: constructor_formal_arity_mismatch_count,
         })
-    } else if non_constructor_heads_in_formals > 0 {
-        Some(TypecheckError::NonConstructorHeadsInFormals {
-            count: non_constructor_heads_in_formals,
+    } else if value_head_applications_in_formals > 0 {
+        Some(TypecheckError::ValueHeadApplicationsInFormals {
+            count: value_head_applications_in_formals,
+        })
+    } else if non_identifier_application_heads_in_formals > 0 {
+        Some(TypecheckError::NonIdentifierApplicationHeadsInFormals {
+            count: non_identifier_application_heads_in_formals,
         })
     } else if undefined_count > 0 {
         Some(TypecheckError::UndefinedNames {
@@ -208,15 +214,16 @@ pub(super) fn run_partial_typecheck(
     }
 }
 
-/// Walks committed lambda-head patterns and records constructor-formal misuse in the active subset.
+/// Walks committed lambda-head patterns and records formal-pattern misuse in the active subset.
 /// This exists so the typecheck boundary owns formal-pattern diagnostics over the already lowered top-level forms.
-/// The invariant is that only constructor-intent heads are diagnosed; lowercase binders remain value binders.
+/// The invariant is that constructor misuse and invalid application shapes are diagnosed before generic undefined-name reporting.
 fn collect_formal_pattern_issues(
     heap: &mut Heap,
     expression: Value,
     undeclared_constructors_in_formals: &mut ConsList<IdentifierRecordRef>,
     constructor_arity_mismatch_in_formals: &mut ConsList<IdentifierRecordRef>,
-    non_constructor_heads_in_formals: &mut usize,
+    value_head_applications_in_formals: &mut usize,
+    non_identifier_application_heads_in_formals: &mut usize,
 ) {
     let raw_reference: RawValue = expression.into();
     if raw_reference < ATOM_LIMIT {
@@ -231,7 +238,8 @@ fn collect_formal_pattern_issues(
                 pattern,
                 undeclared_constructors_in_formals,
                 constructor_arity_mismatch_in_formals,
-                non_constructor_heads_in_formals,
+                value_head_applications_in_formals,
+                non_identifier_application_heads_in_formals,
             );
             let body = heap[raw_reference].tail.into();
             collect_formal_pattern_issues(
@@ -239,7 +247,8 @@ fn collect_formal_pattern_issues(
                 body,
                 undeclared_constructors_in_formals,
                 constructor_arity_mismatch_in_formals,
-                non_constructor_heads_in_formals,
+                value_head_applications_in_formals,
+                non_identifier_application_heads_in_formals,
             );
         }
         Tag::Label | Tag::Show => {
@@ -248,7 +257,8 @@ fn collect_formal_pattern_issues(
                 heap[raw_reference].tail.into(),
                 undeclared_constructors_in_formals,
                 constructor_arity_mismatch_in_formals,
-                non_constructor_heads_in_formals,
+                value_head_applications_in_formals,
+                non_identifier_application_heads_in_formals,
             );
         }
         Tag::Share => {
@@ -257,7 +267,8 @@ fn collect_formal_pattern_issues(
                 heap[raw_reference].head.into(),
                 undeclared_constructors_in_formals,
                 constructor_arity_mismatch_in_formals,
-                non_constructor_heads_in_formals,
+                value_head_applications_in_formals,
+                non_identifier_application_heads_in_formals,
             );
         }
         _ => {}
@@ -269,7 +280,8 @@ fn collect_formal_pattern_issues_in_pattern(
     pattern: Value,
     undeclared_constructors_in_formals: &mut ConsList<IdentifierRecordRef>,
     constructor_arity_mismatch_in_formals: &mut ConsList<IdentifierRecordRef>,
-    non_constructor_heads_in_formals: &mut usize,
+    value_head_applications_in_formals: &mut usize,
+    non_identifier_application_heads_in_formals: &mut usize,
 ) {
     match classify_committed_formal_pattern(heap, pattern) {
         CommittedFormalPattern::Binder(_) => {}
@@ -291,26 +303,16 @@ fn collect_formal_pattern_issues_in_pattern(
                     argument,
                     undeclared_constructors_in_formals,
                     constructor_arity_mismatch_in_formals,
-                    non_constructor_heads_in_formals,
+                    value_head_applications_in_formals,
+                    non_identifier_application_heads_in_formals,
                 );
             }
         }
-        CommittedFormalPattern::NonConstructorApplication { head, tail } => {
-            *non_constructor_heads_in_formals += 1;
-            collect_formal_pattern_issues_in_pattern(
-                heap,
-                head,
-                undeclared_constructors_in_formals,
-                constructor_arity_mismatch_in_formals,
-                non_constructor_heads_in_formals,
-            );
-            collect_formal_pattern_issues_in_pattern(
-                heap,
-                tail,
-                undeclared_constructors_in_formals,
-                constructor_arity_mismatch_in_formals,
-                non_constructor_heads_in_formals,
-            );
+        CommittedFormalPattern::ValueHeadApplication { .. } => {
+            *value_head_applications_in_formals += 1;
+        }
+        CommittedFormalPattern::NonIdentifierHeadApplication { .. } => {
+            *non_identifier_application_heads_in_formals += 1;
         }
         CommittedFormalPattern::StructuralCons { head, tail }
         | CommittedFormalPattern::StructuralTuple { head, tail } => {
@@ -319,14 +321,16 @@ fn collect_formal_pattern_issues_in_pattern(
                 head,
                 undeclared_constructors_in_formals,
                 constructor_arity_mismatch_in_formals,
-                non_constructor_heads_in_formals,
+                value_head_applications_in_formals,
+                non_identifier_application_heads_in_formals,
             );
             collect_formal_pattern_issues_in_pattern(
                 heap,
                 tail,
                 undeclared_constructors_in_formals,
                 constructor_arity_mismatch_in_formals,
-                non_constructor_heads_in_formals,
+                value_head_applications_in_formals,
+                non_identifier_application_heads_in_formals,
             );
         }
         CommittedFormalPattern::WrappedConstantLeaf(_)
@@ -504,7 +508,7 @@ fn collect_type_expression_issues(
 
 /// Collects identifiers bound by a pattern node into the active local-binding scope.
 /// This exists so lambda-bound names are excluded from undefined-name diagnostics in the body they bind.
-/// The invariant is that constructor heads and literal forms do not add local bindings.
+/// The invariant is that constructor heads, literal forms, and invalid application shapes do not add local bindings.
 fn collect_pattern_bound_identifiers(
     heap: &Heap,
     pattern: Value,
@@ -525,8 +529,9 @@ fn collect_pattern_bound_identifiers(
                 collect_pattern_bound_identifiers(heap, argument, bound_identifiers);
             }
         }
-        CommittedFormalPattern::NonConstructorApplication { head, tail }
-        | CommittedFormalPattern::StructuralCons { head, tail }
+        CommittedFormalPattern::ValueHeadApplication { .. }
+        | CommittedFormalPattern::NonIdentifierHeadApplication { .. } => {}
+        CommittedFormalPattern::StructuralCons { head, tail }
         | CommittedFormalPattern::StructuralTuple { head, tail } => {
             collect_pattern_bound_identifiers(heap, head, bound_identifiers);
             collect_pattern_bound_identifiers(heap, tail, bound_identifiers);
@@ -542,7 +547,11 @@ enum CommittedFormalPattern {
         head: IdentifierRecordRef,
         arguments: Vec<Value>,
     },
-    NonConstructorApplication {
+    ValueHeadApplication {
+        head: IdentifierRecordRef,
+        arguments: Vec<Value>,
+    },
+    NonIdentifierHeadApplication {
         head: Value,
         tail: Value,
     },
@@ -561,7 +570,7 @@ enum CommittedFormalPattern {
 
 /// Classifies one committed formal-pattern node into the shared semantic taxonomy used by typecheck.
 /// This exists so bound-name collection and formal diagnostics interpret the same committed shapes consistently.
-/// The invariant is that wrapped constant cells are distinguished from structural cons/list cells before either walk recurses or records bindings.
+/// The invariant is that wrapped constant cells and invalid application families are distinguished before either walk recurses or records bindings.
 fn classify_committed_formal_pattern(heap: &Heap, pattern: Value) -> CommittedFormalPattern {
     let raw_reference: RawValue = pattern.into();
     if raw_reference < ATOM_LIMIT {
@@ -582,13 +591,10 @@ fn classify_committed_formal_pattern(heap: &Heap, pattern: Value) -> CommittedFo
                 if identifier_has_constructor_intent(heap, head) {
                     CommittedFormalPattern::ConstructorApplication { head, arguments }
                 } else {
-                    CommittedFormalPattern::NonConstructorApplication {
-                        head: heap[raw_reference].head.into(),
-                        tail: heap[raw_reference].tail.into(),
-                    }
+                    CommittedFormalPattern::ValueHeadApplication { head, arguments }
                 }
             } else {
-                CommittedFormalPattern::NonConstructorApplication {
+                CommittedFormalPattern::NonIdentifierHeadApplication {
                     head: heap[raw_reference].head.into(),
                     tail: heap[raw_reference].tail.into(),
                 }
