@@ -2,7 +2,13 @@ use crate::data::{Heap, RawValue, Tag, Value};
 
 use super::HeapObjectProxy;
 
-/// A proxy for `Tag::DataPair` heap cells.
+/// Reference-semantics view of one Miranda `datapair` cell.
+///
+/// Heap shape mapped by this proxy:
+/// a `Tag::DataPair` cell with `head = left` and `tail = right`.
+///
+/// This proxy is used for small two-slot metadata payloads such as alias source-name data and
+/// `%free` original-name metadata.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub struct DataPair {
     reference: RawValue,

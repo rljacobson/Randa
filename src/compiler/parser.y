@@ -20,6 +20,7 @@ use super::{
   HereInfo,
   Loc,
   ParserActivation,
+  ParserConstructorFieldPayload,
   ParserDiagnostic,
   ParserConstructorPayload,
   ParserDefinitionPayload,
@@ -48,6 +49,7 @@ use crate::{
         combinator::Combinator,
         Heap,
         Type,
+        ATOM_LIMIT,
     }
 };
 
@@ -296,8 +298,7 @@ top_level_free_type_expr:
     ;
 
 top_level_constructor_list:
-    ConstructorName { $$ = self.heap.cons_ref($1, NIL); }
-    | top_level_constructor_list Pipe ConstructorName { $$ = self.heap.cons_ref($3, $1); }
+    construction { $$ = $1; }
     ;
 
 top_level_free_item:
@@ -526,26 +527,33 @@ top_level_algebraic_type_item:
         let arity = self.typevar_list_arity($2);
         let anchor = $3;
         let mut constructor_list: RawValue = $5.into();
-        let mut source_order_constructor_list = NIL_RAW;
+        let mut source_order_constructors = NIL_RAW;
         while constructor_list != NIL_RAW {
-          source_order_constructor_list = self.heap.cons_ref(self.heap[constructor_list].head.into(), source_order_constructor_list.into()).into();
+          source_order_constructors = self.heap.cons_ref(self.heap[constructor_list].head.into(), source_order_constructors.into()).into();
           constructor_list = self.heap[constructor_list].tail;
         }
-        let mut constructors: RawValue = source_order_constructor_list;
-        while constructors!=NIL_RAW {
-          self.constructor_payloads.push(ParserConstructorPayload {
-            constructor: self.heap[constructors].head,
-            parent_type: type_identifier.into(),
-            parent_type_arity: arity,
-            anchor: anchor.into(),
-          });
+        let mut constructor_identifiers = Vec::new();
+        let mut constructors: RawValue = source_order_constructors;
+        while constructors != NIL_RAW {
+          if let Some(payload) = self.constructor_payload_from_declaration(
+            self.heap[constructors].head.into(),
+            type_identifier.into(),
+            arity,
+            anchor.into(),
+          ) {
+            constructor_identifiers.push(payload.constructor);
+            self.constructor_payloads.push(payload);
+          }
           constructors = self.heap[constructors].tail;
         }
+        let source_order_constructor_list = constructor_identifiers.iter().rev().fold(NIL, |list, constructor| {
+          self.heap.cons_ref((*constructor).into(), list)
+        });
         self.type_declaration_payloads.push(ParserTypeDeclarationPayload {
           type_identifier: type_identifier.into(),
           arity,
           kind: IdentifierValueTypeKind::Algebraic,
-          info: source_order_constructor_list.into(),
+          info: source_order_constructor_list,
           anchor: anchor.into(),
         });
         $$ = NIL;
@@ -1667,10 +1675,18 @@ negmod:
 
 here:
     /* empty */ {
-        // extern word line_no;
-        self.last_diagnostic_location = fileinfo(get_fil(current_file), line_no).into();
-        $$ = self.last_diagnostic_location.into();
-        /* (script, line_no) for diagnostics */
+        let here_info = HereInfo::from_source_location(
+          self.yylexer.source_name(),
+          self.yylexer.source_text(),
+          Some(self.yylexer.current_loc())
+        );
+        let anchor = FileInfoRef::from_script_file(
+          self.heap,
+          here_info.script_file,
+          here_info.line_number,
+        );
+        self.last_diagnostic_location = anchor.get_ref();
+        $$ = Value::Reference(anchor.get_ref());
       }
     ;
 
@@ -2076,12 +2092,8 @@ typevars:
     ;
 
 construction:
-    constructs { /* keeps track of sui-generis constructors */
-        // extern word SGC;
-        if ( self.heap[$1].tail==NIL && tag[hd[$1]]!=Tag::Id ) {
-                        /* 2nd conjunct excludes singularity types */
-          SGC = self.heap.cons_ref(head(self.heap[$1].head), SGC);
-        }
+    constructs {
+        $$ = $1;
       }
     ;
 
@@ -2093,9 +2105,8 @@ constructs:
 construct:
     field here InfixCName field {
         $$ = self.heap.apply2($3, $1, $4);
-        id_who($3) = $2;
       }
-    | construct1
+    | construct1 { $$ = $1; }
     ;
 
 construct1:
@@ -2103,18 +2114,17 @@ construct1:
     | construct1 field1 { $$ = self.heap.apply_ref($1, $2); }
     | here ConstructorName {
         $$ = $2;
-        id_who($2) = $1;
       }
     ;
 
 field:
-    type
+    type { $$ = $1; }
     | argtype Bang { $$ = self.heap.apply_ref(Type::Strict.into(), $1); }
     ;
 
 field1:
     argtype Bang { $$ = self.heap.apply_ref(Type::Strict.into(), $1); }
-    | argtype
+    | argtype { $$ = $1; }
     ;
 
 names:          /* used twice - for bnf list, and for inherited attr list */
@@ -2447,6 +2457,12 @@ impl<'ctx /* 'fix quotes */> Parser<'ctx /* 'fix quotes */> {
                 .unwrap_or_else(|| self.heap.make_empty_identifier(source_slice));
               lookahead.value = identifier.into();
             }
+            Token::TypeVar => {
+              lookahead.value = self.heap.type_var_ref(
+                Value::None,
+                Value::Data(source_slice.len() as RawValue),
+              );
+            }
             Token::InfixName | Token::InfixCName => {
               let identifier_name = source_slice.strip_prefix('$').unwrap_or(source_slice);
               let identifier = self.heap
@@ -2549,6 +2565,87 @@ impl<'ctx /* 'fix quotes */> Parser<'ctx /* 'fix quotes */> {
       }
 
       arity
+    }
+
+    /// Returns the inner field type when a constructor field carries a strictness marker.
+    /// This exists so parser payload lowering can preserve strictness as metadata instead of leaking it into later declaration consumers as a wrapped type node.
+    /// The invariant is that successful results come only from the canonical `Strict field_type` application shape.
+    fn strict_constructor_field_type(&self, field: Value) -> Option<Value> {
+      let field_ref = RawValue::from(field);
+      if field_ref < ATOM_LIMIT || self.heap[field_ref].tag != Tag::Ap {
+        return None;
+      }
+      if self.heap[field_ref].head != RawValue::from(Type::Strict) {
+        return None;
+      }
+
+      Some(self.heap[field_ref].tail.into())
+    }
+
+    /// Converts one parsed constructor field node into parser-facing payload metadata.
+    /// This exists so all constructor-field lowering uses one owner for strictness extraction and stored type payload shape.
+    /// The invariant is that the returned payload preserves source-order field type plus a separate strictness flag.
+    fn constructor_field_payload(&self, field: Value) -> ParserConstructorFieldPayload {
+      if let Some(type_expr) = self.strict_constructor_field_type(field) {
+        ParserConstructorFieldPayload {
+          type_expr,
+          is_strict: true,
+        }
+      } else {
+        ParserConstructorFieldPayload {
+          type_expr: field,
+          is_strict: false,
+        }
+      }
+    }
+
+    /// Returns the constructor head and source-order field nodes for one parsed constructor declaration.
+    /// This exists so top-level algebraic declaration lowering can normalize both prefix and infix constructor forms through one application-spine view.
+    /// The invariant is that successful results contain an identifier constructor head and source-order field arguments.
+    fn constructor_declaration_spine(&self, declaration: Value) -> Option<(RawValue, Vec<Value>)> {
+      let mut declaration_ref = RawValue::from(declaration);
+      if declaration_ref < ATOM_LIMIT {
+        return None;
+      }
+
+      let mut fields = Vec::new();
+      while self.heap[declaration_ref].tag == Tag::Ap {
+        fields.push(self.heap[declaration_ref].tail.into());
+        declaration_ref = self.heap[declaration_ref].head;
+        if declaration_ref < ATOM_LIMIT {
+          return None;
+        }
+      }
+
+      if self.heap[declaration_ref].tag != Tag::Id {
+        return None;
+      }
+
+      fields.reverse();
+      Some((declaration_ref, fields))
+    }
+
+    /// Builds one parser-facing constructor payload from a parsed constructor declaration tree.
+    /// This exists so active top-level algebraic declaration lowering records explicit constructor arity and field metadata before VM commit.
+    /// The invariant is that payload arity equals the number of source-order field payloads captured from the declaration spine.
+    fn constructor_payload_from_declaration(
+      &mut self,
+      declaration: Value,
+      parent_type: RawValue,
+      parent_type_arity: isize,
+      anchor: RawValue,
+    ) -> Option<ParserConstructorPayload> {
+      let (constructor, fields) = self.constructor_declaration_spine(declaration)?;
+      let field_payloads = fields.into_iter().map(|field| self.constructor_field_payload(field)).collect::<Vec<_>>();
+
+      Some(ParserConstructorPayload {
+        constructor,
+        parent_type,
+        parent_type_arity,
+        arity: field_payloads.len() as isize,
+        fields: field_payloads,
+        anchor,
+      })
     }
      
 

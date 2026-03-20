@@ -8,7 +8,11 @@ use crate::compiler::{
     ParserVmContext,
 };
 use crate::compiler::{token::ParserLookahead, Token};
-use crate::data::api::IdentifierValueTypeKind;
+use crate::data::api::{
+    AlgebraicConstructorFieldParts, AlgebraicConstructorFieldRef,
+    AlgebraicConstructorMetadataParts, AlgebraicConstructorMetadataRef, ConsList,
+    IdentifierValueTypeKind,
+};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -1240,7 +1244,11 @@ impl VM {
                 self.commit_top_level_specification_payload(current_file, specification);
             }
             for type_declaration in &payload.type_declarations {
-                self.commit_top_level_type_declaration_payload(current_file, type_declaration);
+                self.commit_top_level_type_declaration_payload(
+                    current_file,
+                    type_declaration,
+                    &payload.constructor_declarations,
+                );
             }
             for constructor in &payload.constructor_declarations {
                 self.commit_top_level_constructor_payload(current_file, constructor);
@@ -1286,18 +1294,27 @@ impl VM {
         &mut self,
         current_file: FileRecord,
         type_declaration: &ParserTypeDeclarationPayload,
+        constructor_payloads: &[ParserConstructorPayload],
     ) {
         let type_identifier = IdentifierRecordRef::from_ref(type_declaration.type_identifier);
         let definition_metadata = self.definition_metadata_from_anchor(type_declaration.anchor);
         type_identifier.set_definition(&mut self.heap, definition_metadata);
         type_identifier.set_type(&mut self.heap, Type::Type.into());
+        let info = if type_declaration.kind == IdentifierValueTypeKind::Algebraic {
+            self.commit_algebraic_type_constructor_info(
+                type_declaration.type_identifier,
+                constructor_payloads,
+            )
+        } else {
+            type_declaration.info
+        };
         let value = IdentifierValueRef::from_type_identifier_parts(
             &mut self.heap,
             TypeIdentifierValueParts {
                 arity: type_declaration.arity,
                 show_function: None,
                 kind: type_declaration.kind,
-                info: type_declaration.info,
+                info,
             },
         );
         type_identifier.set_value(&mut self.heap, value);
@@ -1314,13 +1331,7 @@ impl VM {
         let parent_type = IdentifierRecordRef::from_ref(constructor_payload.parent_type);
         let definition_metadata = self.definition_metadata_from_anchor(constructor_payload.anchor);
         constructor.set_definition(&mut self.heap, definition_metadata);
-        let mut constructor_type: Value = constructor_payload.parent_type.into();
-        for typevar_index in 1..=constructor_payload.parent_type_arity {
-            let typevar = self
-                .heap
-                .type_var_ref(Value::None, Value::Data(typevar_index as RawValue));
-            constructor_type = self.heap.apply_ref(constructor_type, typevar);
-        }
+        let constructor_type = self.build_declared_constructor_type(constructor_payload);
         constructor.set_type(&mut self.heap, constructor_type);
         let constructor_index = self.constructor_ordinal_in_parent_type(parent_type, constructor);
         let constructor_value =
@@ -1354,17 +1365,102 @@ impl VM {
             return 0;
         }
 
-        let mut constructors: ConsList<IdentifierRecordRef> =
-            ConsList::from_ref(self.heap[value_type.get_ref()].tail);
+        let Some(mut constructors) = value_type.algebraic_constructor_metadata(&self.heap) else {
+            return 0;
+        };
         let mut ordinal: i16 = 0;
         while let Some(next_constructor) = constructors.pop(&self.heap) {
-            if next_constructor == constructor {
+            if next_constructor.constructor(&self.heap) == constructor {
                 return ordinal;
             }
             ordinal += 1;
         }
 
         0
+    }
+
+    /// Commits parser-collected constructor payloads into subsystem-owned algebraic type metadata.
+    /// This exists so parent type identifiers retain constructor order, arity, field types, and strict-field flags after parser-local shapes disappear.
+    /// The invariant is that only payloads for `parent_type` are encoded, in declaration source order.
+    fn commit_algebraic_type_constructor_info(
+        &mut self,
+        parent_type: RawValue,
+        constructor_payloads: &[ParserConstructorPayload],
+    ) -> Value {
+        let mut committed_metadata = NIL;
+
+        for constructor_payload in constructor_payloads.iter().rev() {
+            if constructor_payload.parent_type != parent_type {
+                continue;
+            }
+
+            let committed_fields = ConsList::from_ref(
+                constructor_payload
+                    .fields
+                    .iter()
+                    .rev()
+                    .fold(NIL, |fields, field| {
+                        let field_ref = AlgebraicConstructorFieldRef::new(
+                            &mut self.heap,
+                            AlgebraicConstructorFieldParts {
+                                type_expr: field.type_expr,
+                                is_strict: field.is_strict,
+                            },
+                        );
+                        self.heap.cons_ref(field_ref.into(), fields)
+                    })
+                    .into(),
+            );
+            let metadata_ref = AlgebraicConstructorMetadataRef::new(
+                &mut self.heap,
+                AlgebraicConstructorMetadataParts {
+                    constructor: IdentifierRecordRef::from_ref(constructor_payload.constructor),
+                    arity: constructor_payload.arity,
+                    fields: committed_fields,
+                },
+            );
+            committed_metadata = self.heap.cons_ref(metadata_ref.into(), committed_metadata);
+        }
+
+        committed_metadata
+    }
+
+    /// Builds the result type for one declared algebraic constructor before field arrows are prepended.
+    /// This exists so constructor-type assembly reuses one owner for parent-type application over declared lhs type variables.
+    /// The invariant is that the returned type is `parent_type` applied to type variables `1..=arity` in source order.
+    fn build_declared_parent_type_application(
+        &mut self,
+        parent_type: RawValue,
+        arity: isize,
+    ) -> Value {
+        let mut parent_type_value: Value = parent_type.into();
+        for typevar_index in 1..=arity {
+            let typevar = self
+                .heap
+                .type_var_ref(Value::None, Value::Data(typevar_index as RawValue));
+            parent_type_value = self.heap.apply_ref(parent_type_value, typevar);
+        }
+
+        parent_type_value
+    }
+
+    /// Builds the committed runtime type for one constructor declaration.
+    /// This exists so constructor materialization consumes declared field metadata instead of relying on a nullary-only convention.
+    /// The invariant is that declared fields are prepended as right-associated arrow arguments in source order.
+    fn build_declared_constructor_type(
+        &mut self,
+        constructor_payload: &ParserConstructorPayload,
+    ) -> Value {
+        constructor_payload.fields.iter().rev().fold(
+            self.build_declared_parent_type_application(
+                constructor_payload.parent_type,
+                constructor_payload.parent_type_arity,
+            ),
+            |result_type, field| {
+                self.heap
+                    .apply2(Type::Arrow.into(), field.type_expr, result_type)
+            },
+        )
     }
 
     fn commit_top_level_free_bindings_payload(

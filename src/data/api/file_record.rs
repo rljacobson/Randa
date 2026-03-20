@@ -21,6 +21,15 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 // Todo: Rename `FileRecord` if a clearer semantic name is selected.
 //       Blocker: naming depends on broader runtime naming decisions beyond this tranche.
 //       Migration target: post-tranche naming pass coordinated with `llm/project-map.md`.
+/// Reference-semantics view of one file entry in the VM's `files` list.
+///
+/// Heap shape mapped by this proxy:
+/// `cons(cons(fileinfo(filename, mtime), share), definienda)` where `definienda` is a cons list of
+/// identifiers/types attributed to that file.
+///
+/// This proxy is used by load-time orchestration to track source files, included files, their
+/// shareability flag, and the definienda committed under each file header. The `defs_are_sorted`
+/// field is proxy-local state and is not part of the heap shape.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub(crate) struct FileRecord {
     reference: RawValue,

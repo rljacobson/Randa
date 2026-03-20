@@ -48,7 +48,10 @@ See [Data Representation.md](Data%20Representation.md) for a diagram of how Iden
 
 */
 
-use super::{DataPair, FileInfoRef, HeapObjectProxy, HeapString, LineNumber, PrivateNameRef};
+use super::{
+    AlgebraicConstructorMetadataRef, ConsList, DataPair, FileInfoRef, HeapObjectProxy, HeapString,
+    LineNumber, PrivateNameRef,
+};
 use crate::compiler::HereInfo;
 use crate::data::{Combinator, Heap, RawValue, Tag, Type, Value};
 use enum_primitive_derive::Primitive;
@@ -801,6 +804,17 @@ impl IdentifierValueTypeRef {
 
         IdentifierValueTypeKind::from_isize(number)
             .expect("Identifier value type discriminant is not a valid IdentifierValueTypeKind.")
+    }
+
+    /// Returns the committed constructor-metadata list for an algebraic type value.
+    /// This exists so load/typecheck consumers can access algebraic constructor facts through one typed query seam.
+    /// The invariant is that only algebraic typed values produce a list here; all other typed kinds return `None`.
+    pub fn algebraic_constructor_metadata(
+        &self,
+        heap: &Heap,
+    ) -> Option<ConsList<AlgebraicConstructorMetadataRef>> {
+        (self.get_identifier_value_type_kind(heap) == IdentifierValueTypeKind::Algebraic)
+            .then(|| ConsList::from_ref(heap[self.reference].tail))
     }
 }
 

@@ -413,6 +413,169 @@ fn load_file_rejects_declared_constructor_application_for_wrong_arity_in_formal(
 }
 
 #[test]
+fn load_file_accepts_declared_unary_constructor_application_in_formal() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("constructor_application_matching_arity_formal.m");
+    std::fs::write(
+        &source_path,
+        "maybe * ::= Nothing | Just *\nfromJust (Just x) = x\n",
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(
+        result.is_ok(),
+        "result={result:?} diagnostics={:?}",
+        vm.parser_diagnostics
+    );
+    assert!(vm.undefined_names.is_empty());
+
+    let maybe = vm
+        .heap
+        .get_identifier("maybe")
+        .expect("expected maybe type identifier");
+    let just = vm
+        .heap
+        .get_identifier("Just")
+        .expect("expected Just constructor");
+    let maybe_value = maybe
+        .get_value(&vm.heap)
+        .expect("expected typed algebraic value");
+    let IdentifierValueData::Typed { value_type, .. } = maybe_value.get_data(&vm.heap) else {
+        panic!("expected typed algebraic value")
+    };
+    let mut constructors = value_type
+        .algebraic_constructor_metadata(&vm.heap)
+        .expect("expected algebraic constructor metadata");
+    let nothing_metadata = constructors
+        .pop(&vm.heap)
+        .expect("expected Nothing metadata");
+    let just_metadata = constructors.pop(&vm.heap).expect("expected Just metadata");
+    assert_eq!(nothing_metadata.arity(&vm.heap), 0);
+    assert_eq!(just_metadata.arity(&vm.heap), 1);
+
+    let just_type = just.get_type(&vm.heap);
+    assert!(vm.heap.is_arrow_type(just_type));
+    let outer_arrow = ApNodeRef::from_ref(just_type.into());
+    let operator_application = outer_arrow
+        .function_application(&vm.heap)
+        .expect("expected binary arrow application");
+    let left = Value::from(operator_application.argument_raw(&vm.heap));
+    let right = Value::from(outer_arrow.argument_raw(&vm.heap));
+    assert!(vm.heap.is_type_variable(left));
+    let parent_application = ApNodeRef::from_ref(right.into());
+    assert_eq!(
+        Value::from(parent_application.function_raw(&vm.heap)),
+        maybe.into()
+    );
+    assert!(vm
+        .heap
+        .is_type_variable(Value::from(parent_application.argument_raw(&vm.heap))));
+}
+
+#[test]
+fn load_file_commits_strict_constructor_field_metadata() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("strict_constructor_field_metadata.m");
+    std::fs::write(&source_path, "strictpair * ** ::= Pair *! **!\n")
+        .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(
+        result.is_ok(),
+        "result={result:?} diagnostics={:?}",
+        vm.parser_diagnostics
+    );
+
+    let strictpair = vm
+        .heap
+        .get_identifier("strictpair")
+        .expect("expected strictpair type identifier");
+    let strictpair_value = strictpair
+        .get_value(&vm.heap)
+        .expect("expected typed algebraic value");
+    let IdentifierValueData::Typed { value_type, .. } = strictpair_value.get_data(&vm.heap) else {
+        panic!("expected typed algebraic value")
+    };
+    let mut constructors = value_type
+        .algebraic_constructor_metadata(&vm.heap)
+        .expect("expected algebraic constructor metadata");
+    let pair_metadata = constructors.pop(&vm.heap).expect("expected Pair metadata");
+    assert_eq!(pair_metadata.arity(&vm.heap), 2);
+
+    let mut fields = pair_metadata.fields(&vm.heap);
+    let first_field = fields.pop(&vm.heap).expect("expected first field metadata");
+    let second_field = fields
+        .pop(&vm.heap)
+        .expect("expected second field metadata");
+    assert!(first_field.is_strict(&vm.heap));
+    assert!(second_field.is_strict(&vm.heap));
+
+    let first_field_type = first_field.type_expr(&vm.heap);
+    let second_field_type = second_field.type_expr(&vm.heap);
+    let first_field_raw: RawValue = first_field_type.into();
+    let second_field_raw: RawValue = second_field_type.into();
+    assert_eq!(vm.heap[first_field_raw].tag, Tag::TypeVar);
+    assert_eq!(vm.heap[first_field_raw].tail, 1);
+    assert_eq!(vm.heap[second_field_raw].tag, Tag::TypeVar);
+    assert_eq!(vm.heap[second_field_raw].tail, 2);
+}
+
+#[test]
+fn load_file_rejects_declared_unary_constructor_used_nullary_in_formal() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("constructor_application_nullary_formal_wrong_arity.m");
+    std::fs::write(
+        &source_path,
+        "maybe * ::= Nothing | Just *\nbad Just = True\n",
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::ConstructorArityMismatchInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
+fn load_file_rejects_declared_unary_constructor_used_binary_in_formal() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("constructor_application_binary_formal_wrong_arity.m");
+    std::fs::write(
+        &source_path,
+        "maybe * ::= Nothing | Just *\nbad (Just x y) = x\n",
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::ConstructorArityMismatchInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
 fn load_file_rejects_undeclared_constructor_inside_tuple_formal() {
     let mut vm = VM::new_for_tests();
     vm.initializing = false;

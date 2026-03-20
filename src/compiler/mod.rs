@@ -27,10 +27,10 @@ pub(crate) use lexer::Lexer;
 pub use parser_activation::{ParserActivation, ParserVmContext};
 pub use parser_session::{ParserDeferredState, ParserSessionState};
 pub use parser_support::{
-    ParserConstructorPayload, ParserDefinitionPayload, ParserExportDirectivePayload,
-    ParserFreeBindingPayload, ParserIncludeDirectivePayload, ParserRunDiagnostics, ParserRunResult,
-    ParserSpecificationPayload, ParserSupportError, ParserTopLevelDirectivePayload,
-    ParserTopLevelScriptPayload, ParserTypeDeclarationPayload,
+    ParserConstructorFieldPayload, ParserConstructorPayload, ParserDefinitionPayload,
+    ParserExportDirectivePayload, ParserFreeBindingPayload, ParserIncludeDirectivePayload,
+    ParserRunDiagnostics, ParserRunResult, ParserSpecificationPayload, ParserSupportError,
+    ParserTopLevelDirectivePayload, ParserTopLevelScriptPayload, ParserTypeDeclarationPayload,
 };
 pub use token::Token;
 

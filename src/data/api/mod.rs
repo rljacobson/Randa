@@ -21,6 +21,7 @@ semantic optionality (a value may legitimately be absent), not validation failur
 like Result<_, ()> should be reserved for boundary checks rather than used in trusted proxy getters.
 */
 
+mod algebraic_constructor;
 mod alias_entry;
 mod ap_node;
 mod cons_list;
@@ -36,6 +37,7 @@ mod private_name;
 mod str_cons;
 
 // Implementors of HeapObjectProxy (defined below)
+pub(crate) use algebraic_constructor::*;
 pub(crate) use alias_entry::AliasEntry;
 pub(crate) use ap_node::ApNodeRef;
 pub(crate) use cons_list::ConsList;

@@ -17,6 +17,15 @@ use std::marker::PhantomData;
 
 use crate::data::{api::HeapObjectProxy, Combinator, Heap, RawValue, Value};
 
+/// Reference-semantics view of a Miranda cons list.
+///
+/// Heap shapes covered by this proxy:
+/// - the empty list sentinel `NIL`
+/// - zero or more `cons(head, tail)` cells ending in `NIL`
+///
+/// `ConsList<T>` is the typed traversal/mutation surface for the many heap-resident lists used by
+/// parser, loader, and VM code. The generic parameter describes how each list element is projected
+/// when read back from the list.
 #[derive(Eq, PartialEq, Debug)]
 pub struct ConsList<T = RawValue>
 where

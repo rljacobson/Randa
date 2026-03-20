@@ -2,7 +2,14 @@ use crate::data::{Heap, RawValue};
 
 use super::{HeapObjectProxy, IdentifierValueRef, StrConsRef};
 
-/// A proxy for private-name cells stored as `strcons(index, value)`.
+/// Reference-semantics view of one private-name environment entry.
+///
+/// Heap shape mapped by this proxy:
+/// `strcons(index, value)` where `index` is the private-symbol slot and `value` is the current
+/// identifier payload stored for that slot.
+///
+/// This proxy is used by bytecode/load machinery to read and update entries in Miranda's private
+/// namespace without open-coding `strcons` access.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub struct PrivateNameRef {
     reference: RawValue,

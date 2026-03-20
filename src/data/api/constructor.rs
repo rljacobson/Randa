@@ -2,7 +2,13 @@ use crate::data::{Heap, RawValue, Tag, Value};
 
 use super::HeapObjectProxy;
 
-/// A proxy for `Tag::Constructor` cells.
+/// Reference-semantics view of one runtime constructor value.
+///
+/// Heap shape mapped by this proxy:
+/// a `Tag::Constructor` cell with `head = constructor_ordinal` and `tail = payload`.
+///
+/// This proxy is used for runtime constructor values attached to identifiers and other values,
+/// letting the VM read or replace the constructor ordinal/payload without direct heap indexing.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub struct ConstructorRef {
     reference: RawValue,

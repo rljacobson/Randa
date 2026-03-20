@@ -2,7 +2,13 @@ use crate::data::{Heap, RawValue, Tag, Value};
 
 use super::HeapObjectProxy;
 
-/// A generic proxy for `Tag::StrCons` heap cells.
+/// Reference-semantics view of a generic `strcons` cell.
+///
+/// Heap shape mapped by this proxy:
+/// a `Tag::StrCons` cell with `head = left_payload` and `tail = right_payload`.
+///
+/// This is the shared low-level proxy for the runtime's `strcons`-backed records, including
+/// identifier-name headers, open-file queue entries, and private-name entries.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub struct StrConsRef {
     reference: RawValue,

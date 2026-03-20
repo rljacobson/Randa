@@ -119,6 +119,7 @@ pub enum Token {
     Colon2Equal = 263, // = 7 + TOKEN_BASE,  // "::="
     #[regex(r"[a-z][a-zA-Z0-9_']*")]
     Identifier = 264, // = 8 + TOKEN_BASE,  // IDENTIFIER
+    #[regex(r"\*{2,}")]
     TypeVar = 265, // = 9 + TOKEN_BASE,  // TYPEVAR
     Name = 266,  // = 10 + TOKEN_BASE, // NAME
     Constant = 267, // = 11 + TOKEN_BASE, // CONST

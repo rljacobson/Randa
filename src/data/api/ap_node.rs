@@ -2,7 +2,13 @@ use crate::data::{Heap, RawValue, Tag, Value, ATOM_LIMIT};
 
 use super::HeapObjectProxy;
 
-/// A proxy for `Tag::Ap` heap cells.
+/// Reference-semantics view of one Miranda application node.
+///
+/// Heap shape mapped by this proxy:
+/// a `Tag::Ap` cell with `head = function` and `tail = argument`.
+///
+/// This proxy is used anywhere the runtime wants to inspect or rewrite application spines through a
+/// typed API instead of open-coding `Tag::Ap` heap indexing.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub struct ApNodeRef {
     reference: RawValue,

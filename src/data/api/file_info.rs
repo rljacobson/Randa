@@ -2,7 +2,13 @@ use crate::data::{Heap, RawValue, Tag, Value};
 
 use super::{HeapObjectProxy, HeapString, LineNumber};
 
-/// A proxy for `Tag::FileInfo` heap cells.
+/// Reference-semantics view of one `fileinfo` payload.
+///
+/// Heap shape mapped by this proxy:
+/// a `Tag::FileInfo` cell with `head = script_file_string` and `tail = line_number_or_mtime`.
+///
+/// This proxy is used for source locations in identifier definitions and diagnostics, and also for
+/// file-record headers where Miranda reuses the numeric slot for last-modified time.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub struct FileInfoRef {
     reference: RawValue,

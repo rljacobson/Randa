@@ -1,6 +1,9 @@
 use super::*;
 use crate::compiler::Token;
-use crate::data::api::{IdentifierRecordRef, IdentifierValueTypeKind, IdentifierValueTypeRef};
+use crate::data::api::{
+    AlgebraicConstructorMetadataRef, IdentifierRecordRef, IdentifierValueTypeKind,
+    IdentifierValueTypeRef,
+};
 use crate::data::heap::is_capitalized;
 use crate::data::{Heap, RawValue, Tag, Type, Value, ATOM_LIMIT};
 
@@ -286,13 +289,19 @@ fn collect_formal_pattern_issues_in_pattern(
     match classify_committed_formal_pattern(heap, pattern) {
         CommittedFormalPattern::Binder(_) => {}
         CommittedFormalPattern::ConstructorIntentIdentifier(identifier) => {
-            if !is_constructor_identifier(heap, identifier) {
+            if let Some(expected_arity) = constructor_identifier_arity(heap, identifier) {
+                if expected_arity != 0 {
+                    constructor_arity_mismatch_in_formals.insert_ordered(heap, identifier);
+                }
+            } else {
                 undeclared_constructors_in_formals.insert_ordered(heap, identifier);
             }
         }
         CommittedFormalPattern::ConstructorApplication { head, arguments } => {
-            if is_constructor_identifier(heap, head) {
-                constructor_arity_mismatch_in_formals.insert_ordered(heap, head);
+            if let Some(expected_arity) = constructor_identifier_arity(heap, head) {
+                if expected_arity != arguments.len() {
+                    constructor_arity_mismatch_in_formals.insert_ordered(heap, head);
+                }
             } else {
                 undeclared_constructors_in_formals.insert_ordered(heap, head);
             }
@@ -663,6 +672,53 @@ fn pattern_application_spine(
 fn is_constructor_identifier(heap: &Heap, identifier: IdentifierRecordRef) -> bool {
     let raw_value: RawValue = identifier.get_value_field(heap).into();
     raw_value >= ATOM_LIMIT && heap[raw_value].tag == Tag::Constructor
+}
+
+/// Returns the declared arity for a committed constructor identifier when available.
+/// This exists so formal-pattern validation consumes constructor arity from committed declaration metadata instead of parser-era conventions.
+/// The invariant is that successful results come only from real committed constructor metadata.
+fn constructor_identifier_arity(heap: &Heap, identifier: IdentifierRecordRef) -> Option<usize> {
+    committed_constructor_metadata(heap, identifier)
+        .map(|metadata| metadata.arity(heap).max(0) as usize)
+}
+
+/// Returns the committed constructor-metadata entry for one constructor identifier.
+/// This exists so typecheck owns one query seam from constructor identifiers to declaration-side constructor facts.
+/// The invariant is that the returned metadata entry belongs to `constructor` and comes from its parent algebraic type's committed metadata list.
+fn committed_constructor_metadata(
+    heap: &Heap,
+    constructor: IdentifierRecordRef,
+) -> Option<AlgebraicConstructorMetadataRef> {
+    let parent_identifier = constructor_parent_type_identifier(heap, constructor)?;
+    let parent_value = parent_identifier.get_value(heap)?;
+    let IdentifierValueData::Typed { value_type, .. } = parent_value.get_data(heap) else {
+        return None;
+    };
+    let mut constructors = value_type.algebraic_constructor_metadata(heap)?;
+    while let Some(metadata) = constructors.pop(heap) {
+        if metadata.constructor(heap) == constructor {
+            return Some(metadata);
+        }
+    }
+
+    None
+}
+
+/// Returns the parent algebraic type identifier implied by a constructor's committed type.
+/// This exists so constructor metadata lookup can recover the parent declaration owner without depending on parser-local side tables.
+/// The invariant is that the returned identifier is the head of the constructor result-type application spine after stripping declared field arrows.
+fn constructor_parent_type_identifier(
+    heap: &Heap,
+    constructor: IdentifierRecordRef,
+) -> Option<IdentifierRecordRef> {
+    let mut result_type = constructor.get_type(heap);
+    let mut result_type_ref: RawValue = result_type.into();
+    while result_type_ref >= ATOM_LIMIT && heap.is_arrow_type(result_type) {
+        result_type = heap[result_type_ref].tail.into();
+        result_type_ref = result_type.into();
+    }
+
+    type_application_spine(heap, result_type).map(|(identifier, _, _)| identifier)
 }
 
 /// Projects the committed synonym RHS type-expression payload from a typed type-identifier value.

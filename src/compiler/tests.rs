@@ -195,6 +195,46 @@ fn parser_parses_nullary_constructor_pattern_form() {
 }
 
 #[test]
+fn parser_records_constructor_field_metadata_in_payloads() {
+    let (_heap, result) = run_parser(
+        "constructor_field_payloads.m",
+        "maybe * ::= Nothing | Just *\nstrictpair * ** ::= Pair *! **!\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success");
+    };
+    assert_eq!(payload.constructor_declarations.len(), 3);
+
+    let nothing = &payload.constructor_declarations[0];
+    assert_eq!(nothing.arity, 0);
+    assert!(nothing.fields.is_empty());
+
+    let just = &payload.constructor_declarations[1];
+    assert_eq!(just.arity, 1);
+    assert_eq!(just.fields.len(), 1);
+    assert!(!just.fields[0].is_strict);
+
+    let pair = &payload.constructor_declarations[2];
+    assert_eq!(pair.arity, 2);
+    assert_eq!(pair.fields.len(), 2);
+    assert!(pair.fields[0].is_strict);
+    assert!(pair.fields[1].is_strict);
+}
+
+#[test]
+fn parser_rejects_prefix_bang_constructor_field_syntax() {
+    let (_heap, result) = run_parser(
+        "constructor_field_prefix_bang.m",
+        "strictpair * ** ::= Pair !* **!\n",
+    );
+
+    let ParserRunResult::SyntaxError(_diagnostics) = result else {
+        panic!("expected syntax error result");
+    };
+}
+
+#[test]
 fn parser_returns_provisional_payload_for_include_export_directives() {
     let (heap, result) = run_parser(
         "directive_payload.m",

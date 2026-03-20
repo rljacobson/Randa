@@ -13,6 +13,13 @@ Of course, the `OpenFile` structure does not have `stream` and `file_record` as 
 a handle, an index into a vector of streams owned by the VM.
 */
 
+/// Reference-semantics view of one open-file queue entry.
+///
+/// Heap shape mapped by this proxy:
+/// `strcons(stream_handle, file_record_ref)`.
+///
+/// This proxy is used by the VM's `fileq` / `file_queue` machinery to pair an open input stream
+/// with the corresponding committed `FileRecord` entry.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub struct OpenFile {
     reference: RawValue,

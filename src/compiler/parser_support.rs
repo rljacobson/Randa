@@ -66,10 +66,18 @@ pub struct ParserTypeDeclarationPayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParserConstructorFieldPayload {
+    pub type_expr: Value,
+    pub is_strict: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParserConstructorPayload {
     pub constructor: RawValue,
     pub parent_type: RawValue,
     pub parent_type_arity: isize,
+    pub arity: isize,
+    pub fields: Vec<ParserConstructorFieldPayload>,
     pub anchor: RawValue,
 }
 
