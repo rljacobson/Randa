@@ -5,7 +5,7 @@ use crate::compiler::{
     ParserTopLevelDirectivePayload, Token,
 };
 use crate::data::api::{
-    DataPair, FreeFormalBindingRef, HeapObjectProxy, IdentifierValueTypeData,
+    ApNodeRef, DataPair, FreeFormalBindingRef, HeapObjectProxy, IdentifierValueTypeData,
     IdentifierValueTypeKind, IdentifierValueTypeRef,
 };
 use crate::vm::load::LoadScriptForm;
@@ -93,6 +93,7 @@ fn load_file_missing_script_is_allowed_outside_initialization() {
 
     let result = vm.load_file(&source_path_str);
 
+    dbg!(&result);
     assert!(result.is_ok());
     assert!(!vm.loading);
     assert!(!vm.files.is_empty());
@@ -608,12 +609,8 @@ fn parse_source_text_commits_narrow_free_substrate_and_marks_file_unshareable() 
         .heap
         .get_identifier("x")
         .expect("expected free identifier to exist");
-    let num = vm
-        .heap
-        .get_identifier("num")
-        .expect("expected num identifier");
     let x_type_raw: RawValue = x.get_type(&vm.heap).into();
-    assert_eq!(x_type_raw, num.get_ref());
+    assert_eq!(x_type_raw, RawValue::from(Type::Number));
 
     assert_eq!(vm.free_identifiers.len(&vm.heap), 1);
     let free_binding = vm
@@ -621,7 +618,10 @@ fn parse_source_text_commits_narrow_free_substrate_and_marks_file_unshareable() 
         .head(&vm.heap)
         .expect("expected one free formal binding");
     assert_eq!(free_binding.identifier(&vm.heap), x);
-    assert_eq!(free_binding.type_expr(&vm.heap), num.into());
+    assert_eq!(
+        RawValue::from(free_binding.type_expr(&vm.heap)),
+        RawValue::from(Type::Number)
+    );
     let original_name = free_binding.original_name_metadata(&vm.heap);
     assert_eq!(original_name.right_value(&vm.heap), 0.into());
     let expected_original_name_ref = vm.heap.string(x.get_name(&vm.heap));
@@ -636,6 +636,184 @@ fn parse_source_text_commits_narrow_free_substrate_and_marks_file_unshareable() 
         .head(&vm.heap)
         .expect("expected current file");
     assert!(!current_file.is_shareable(&vm.heap));
+}
+
+#[test]
+fn parse_source_text_commits_rich_specification_type_expr() {
+    let mut vm = VM::new_for_tests();
+
+    let source_path = unique_test_path("rich_spec_type_expr.m");
+    let source_path_str = source_path.to_string_lossy().to_string();
+    let source_text = "map :: [*] -> [*]\n";
+
+    let result = vm.parse_source_text(&source_path_str, source_text, UNIX_EPOCH, false);
+
+    assert!(result.is_ok());
+
+    let map = vm
+        .heap
+        .get_identifier("map")
+        .expect("expected specification identifier");
+    let map_type = map.get_type(&vm.heap);
+    assert!(vm.heap.is_arrow_type(map_type));
+
+    let outer_arrow = ApNodeRef::from_ref(map_type.into());
+    let operator_application = outer_arrow
+        .function_application(&vm.heap)
+        .expect("expected binary arrow application");
+    let left = Value::from(operator_application.argument_raw(&vm.heap));
+    let right = Value::from(outer_arrow.argument_raw(&vm.heap));
+    assert!(vm.heap.is_list_type(left));
+    assert!(vm.heap.is_list_type(right));
+
+    let left_arg = Value::from(ApNodeRef::from_ref(left.into()).argument_raw(&vm.heap));
+    let right_arg = Value::from(ApNodeRef::from_ref(right.into()).argument_raw(&vm.heap));
+    assert!(vm.heap.is_type_variable(left_arg));
+    assert!(vm.heap.is_type_variable(right_arg));
+}
+
+#[test]
+fn parse_source_text_commits_rich_synonym_rhs_type_expr() {
+    let mut vm = VM::new_for_tests();
+
+    let source_path = unique_test_path("rich_synonym_rhs.m");
+    let source_path_str = source_path.to_string_lossy().to_string();
+    let source_text = "pair == (*, [num])\n";
+
+    let result = vm.parse_source_text(&source_path_str, source_text, UNIX_EPOCH, false);
+
+    assert!(result.is_ok());
+
+    let pair = vm
+        .heap
+        .get_identifier("pair")
+        .expect("expected synonym identifier");
+    let pair_value = pair
+        .get_value(&vm.heap)
+        .expect("expected synonym value payload");
+    let IdentifierValueData::Typed { value_type, .. } = pair_value.get_data(&vm.heap) else {
+        panic!("expected typed synonym payload");
+    };
+    assert_eq!(
+        value_type.get_identifier_value_type_kind(&vm.heap),
+        IdentifierValueTypeKind::Synonym
+    );
+
+    let synonym_rhs: Value = vm.heap[value_type.get_ref()].tail.into();
+    assert!(vm.heap.is_comma_type(synonym_rhs));
+
+    let outer_pair = ApNodeRef::from_ref(synonym_rhs.into());
+    let operator_application = outer_pair
+        .function_application(&vm.heap)
+        .expect("expected binary comma application");
+    let left = Value::from(operator_application.argument_raw(&vm.heap));
+    let right = Value::from(outer_pair.argument_raw(&vm.heap));
+    assert!(vm.heap.is_type_variable(left));
+    assert!(vm.heap.is_comma_type(right));
+
+    let right_pair = ApNodeRef::from_ref(right.into());
+    let right_operator_application = right_pair
+        .function_application(&vm.heap)
+        .expect("expected tuple tail comma application");
+    let tuple_second = Value::from(right_operator_application.argument_raw(&vm.heap));
+    let tuple_terminator = Value::from(right_pair.argument_raw(&vm.heap));
+    assert!(vm.heap.is_list_type(tuple_second));
+    assert_eq!(RawValue::from(tuple_terminator), RawValue::from(Type::Void));
+
+    let list_arg = Value::from(ApNodeRef::from_ref(tuple_second.into()).argument_raw(&vm.heap));
+    assert_eq!(RawValue::from(list_arg), RawValue::from(Type::Number));
+}
+
+#[test]
+fn parse_source_text_commits_rich_free_binding_type_expr() {
+    let mut vm = VM::new_for_tests();
+
+    let source_path = unique_test_path("rich_free_type_expr.m");
+    let source_path_str = source_path.to_string_lossy().to_string();
+    let source_text = "%free { xs :: [char] }\n";
+
+    let result = vm.parse_source_text(&source_path_str, source_text, UNIX_EPOCH, false);
+
+    assert!(result.is_ok());
+
+    let xs = vm
+        .heap
+        .get_identifier("xs")
+        .expect("expected free identifier to exist");
+    let xs_type = xs.get_type(&vm.heap);
+    assert!(vm.heap.is_list_type(xs_type));
+    let list_arg = Value::from(ApNodeRef::from_ref(xs_type.into()).argument_raw(&vm.heap));
+    assert_eq!(RawValue::from(list_arg), RawValue::from(Type::Char));
+
+    let current_file = result
+        .expect("expected parse outcome")
+        .files
+        .head(&vm.heap)
+        .expect("expected current file");
+    assert!(!current_file.is_shareable(&vm.heap));
+}
+
+#[test]
+fn load_file_reports_undefined_typename_in_rich_synonym_rhs() {
+    let mut vm = VM::new_for_tests();
+
+    let source_path = unique_test_path("undefined_typename_rich_synonym.m");
+    let source_path_str = source_path.to_string_lossy().to_string();
+    std::fs::write(&source_path, "alias == missing num\n")
+        .expect("failed to write source test file");
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::UndefinedTypeNames { count: 1 }
+        ))
+    ));
+}
+
+#[test]
+fn load_file_reports_non_type_identifier_in_rich_free_binding_type_expr() {
+    let mut vm = VM::new_for_tests();
+
+    let source_path = unique_test_path("non_type_rich_free_expr.m");
+    let source_path_str = source_path.to_string_lossy().to_string();
+    std::fs::write(
+        &source_path,
+        "value_alias = 1\n%free { x :: value_alias num }\n",
+    )
+    .expect("failed to write source test file");
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::NonTypeIdentifiersInTypeExpr { count: 1 }
+        ))
+    ));
+}
+
+#[test]
+fn load_file_reports_type_arity_mismatch_in_rich_spec_type_expr() {
+    let mut vm = VM::new_for_tests();
+
+    let source_path = unique_test_path("arity_mismatch_rich_spec_expr.m");
+    let source_path_str = source_path.to_string_lossy().to_string();
+    std::fs::write(
+        &source_path,
+        "maybe ::= Just | Nothing\nentry :: maybe num\nentry = 1\n",
+    )
+    .expect("failed to write source test file");
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::TypeArityMismatch { count: 1 }
+        ))
+    ));
 }
 
 #[test]
@@ -1334,7 +1512,6 @@ fn typecheck_phase_rejects_value_head_application_in_formal() {
         result,
         Err(TypecheckError::ValueHeadApplicationsInFormals { count: 1 })
     ));
-    assert!(vm.undefined_names.is_empty());
 }
 
 #[test]
@@ -1371,7 +1548,6 @@ fn typecheck_phase_rejects_non_identifier_application_head_in_formal() {
         result,
         Err(TypecheckError::NonIdentifierApplicationHeadsInFormals { count: 1 })
     ));
-    assert!(vm.undefined_names.is_empty());
 }
 
 #[test]

@@ -39,7 +39,7 @@ use super::{
 use crate::{
     big_num::IntegerRef,
     data::{
-        api::{ConsList, FileInfoRef, HeapObjectProxy, IdentifierValueTypeKind},
+        api::{ConsList, FileInfoRef, HeapObjectProxy, IdentifierRecordRef, IdentifierValueTypeKind},
         tag::Tag,
         values::{
             Value,
@@ -116,7 +116,7 @@ use crate::{
     OpenBrace CloseBrace OpenParenthesis CloseParenthesis OpenBracket
     CloseBracket StringLiteral Integer Float
 
-%right Arrow
+%right RightArrow
 %right PlusPlus Colon MinusMinus
 %nonassoc DotDot
 %right Vel
@@ -288,12 +288,11 @@ top_level_definition_anchor:
     ;
 
 top_level_type_expr:
-    Name { $$ = $1; }
-    | Type { $$ = Type::Type.into(); }
+    ttype { $$ = $1; }
     ;
 
 top_level_free_type_expr:
-    Name { $$ = $1; }
+    ttype { $$ = $1; }
     ;
 
 top_level_constructor_list:
@@ -1002,7 +1001,7 @@ arg:
 lexrules:
     lexrules lstart here re indent { if !SYNERR { self.lex_mode = 2; } }
 
-    Arrow exp lpostfix { if !SYNERR { self.lex_mode = 1; } } outdent {
+    RightArrow exp lpostfix { if !SYNERR { self.lex_mode = 1; } } outdent {
         if $9 < 0 && e_re($4) {
           errs = $3;
           syntax("illegal lex rule - lhs matches empty\n");
@@ -1823,20 +1822,20 @@ v3:
     ;
 
 type:
-    type1
-    | type Arrow type { $$ = self.heap.apply2(Type::Arrow.into(), $1, $3); }
+    type1 { $$ = $1; }
+    | type RightArrow type { $$ = self.heap.apply2(Type::Arrow.into(), $1, $3); }
     ;
 
 type1:
     type2 InfixName type1 { $$ = self.heap.apply2($2, $1, $3); }
-    | type2
+    | type2 { $$ = $1; }
     ;
 
 type2:
     /* type2 argtype  /* too permissive - fix later */
         /* = { $$ = self.heap.apply($1, $2); }| */
-    tap
-    | argtype
+    tap { $$ = $1; }
+    | argtype { $$ = $1; }
     ;
 
 tap:
@@ -1845,36 +1844,41 @@ tap:
     ;
 
 argtype:
-    Name { $$ = transtypeid($1); }
+    Name {
+        let identifier = IdentifierRecordRef::from_ref($1.into());
+        $$ = match identifier.get_name(self.heap).as_str() {
+          "bool" => Type::Bool.into(),
+          "num" => Type::Number.into(),
+          "char" => Type::Char.into(),
+          _ => identifier.into(),
+        };
+      }
            /* necessary while prelude not meta_tchecked (for prelude) */
     | typevar {
-        if (self.type_variable_scope && !memb(self.used_identifiers.into(), $1)){
-          printf(
-            "%ssyntax error: unbound type variable ",
-            if echoing {"\n"} else {""}
-          );
-          out_type($1);
-          putchar('\n');
-          acterror();
+        if self.type_variable_scope
+          && !ConsList::<Value>::from_ref(self.used_identifiers).contains(self.heap, $1)
+        {
+          self.syntax("unbound type variable\n");
         }
         $$ = $1;
       }
     | OpenParenthesis typelist CloseParenthesis { $$ = $2; }
     | OpenBracket type CloseBracket  /* at release one was `typelist' */ { $$ = self.heap.apply_ref(Type::List.into(), $2); }
     | OpenBracket type Comma typel CloseBracket {
-        syntax(
+        self.syntax(
           "tuple-type with missing parentheses (obsolete syntax)\n"
         );
+        $$ = Type::Wrong.into();
       }
     ;
 
 typelist:
     /* empty */ { $$ = Type::Void.into(); }  /* voidtype */
-    | type
+    | type { $$ = $1; }
     | type Comma typel {
-        let mut x = $3;
+        let mut x: RawValue = $3.into();
         let mut y = Type::Void.into();
-        while (x!=NIL) {
+        while x != NIL_RAW {
           y = self.heap.apply2(Type::Comma.into(), self.heap[x].head.into(), y);
           x = self.heap[x].tail;
         }
@@ -2001,13 +2005,13 @@ typeform:
     ;
 
 ttype:
-    type
+    type { $$ = $1; }
     | Type { $$ = Type::Type.into(); }
     ;
 
 typevar:
-    Times { $$ = mktvar(1); }
-    | TypeVar
+    Times { $$ = self.heap.type_var_ref(Value::None, Value::Data(1)); }
+    | TypeVar { $$ = $1; }
     ;
 
 typevars:
