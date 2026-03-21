@@ -4,6 +4,12 @@ use crate::data::Value;
 
 use super::{ParserDeferredState, ParserSessionState};
 
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum ParserEntryMode {
+    Mixed,
+    TopLevelScriptOnly,
+}
+
 #[derive(Debug, Copy, Clone)]
 pub struct ParserVmContext {
     listdiff_function: Value,
@@ -44,4 +50,5 @@ pub struct ParserActivation<'ctx> {
     pub vm: ParserVmContext,
     pub session: ParserSessionState,
     pub deferred: ParserDeferredState,
+    pub entry_mode: ParserEntryMode,
 }

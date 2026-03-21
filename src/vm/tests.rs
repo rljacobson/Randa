@@ -1516,6 +1516,45 @@ fn parse_source_text_rejects_uppercase_type_lhs_in_synonym() {
 }
 
 #[test]
+fn parse_source_text_rejects_repeated_type_variable_on_type_lhs() {
+    let mut vm = VM::new_for_tests();
+
+    let source_path = unique_test_path("repeated_typevar_lhs_type_def.m");
+    let source_path_str = source_path.to_string_lossy().to_string();
+    let result = vm.parse_source_text(&source_path_str, "pair * * == *\n", UNIX_EPOCH, false);
+
+    let outcome = result.expect("expected parse outcome");
+    assert_eq!(outcome.status, ParsePhaseStatus::SyntaxError);
+    assert!(vm.parser_diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("repeated type variable on lhs of type def")
+    }));
+}
+
+#[test]
+fn parse_source_text_accepts_distinct_type_variables_on_algebraic_lhs() {
+    let mut vm = VM::new_for_tests();
+
+    let source_path = unique_test_path("distinct_typevars_algebraic_lhs.m");
+    let source_path_str = source_path.to_string_lossy().to_string();
+    let result = vm.parse_source_text(
+        &source_path_str,
+        "pair * ** ::= Pair * **\n",
+        UNIX_EPOCH,
+        false,
+    );
+
+    let outcome = result.expect("expected parse outcome");
+    assert_eq!(
+        outcome.status,
+        ParsePhaseStatus::Parsed,
+        "diagnostics={:?}",
+        vm.parser_diagnostics
+    );
+}
+
+#[test]
 fn parse_source_script_reads_file_and_delegates_to_text_entry() {
     let mut vm = VM::new_for_tests();
     let source_path = unique_test_path("parse_source_script_wrapper.m");

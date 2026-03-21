@@ -131,4 +131,14 @@ mod tests {
         assert_eq!(second.token, Token::Pipe);
         assert_eq!(second.loc, Loc::new(2, 3));
     }
+
+    #[test]
+    fn consecutive_stars_tokenize_as_typevar() {
+        let mut lexer = Lexer::new("typevar.m", "**");
+
+        let lookahead = lexer.yylex().expect("lexer should produce a token");
+
+        assert_eq!(lookahead.token, Token::TypeVar);
+        assert_eq!(lookahead.loc, Loc::new(0, 2));
+    }
 }

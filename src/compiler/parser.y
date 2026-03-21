@@ -22,6 +22,7 @@ use super::{
   ParserActivation,
   ParserConstructorFieldPayload,
   ParserDiagnostic,
+  ParserEntryMode,
   ParserConstructorPayload,
   ParserDefinitionPayload,
   ParserExportDirectivePayload,
@@ -67,6 +68,7 @@ use crate::{
   syntax_error_found: bool,
   diagnostics: ParserRunDiagnostics,
   top_level_script_parsed: bool,
+  entry_mode: ParserEntryMode,
   directive_include_requests: Vec<ParserIncludeDirectivePayload>,
   definition_payloads: Vec<ParserDefinitionPayload>,
   specification_payloads: Vec<ParserSpecificationPayload>,
@@ -203,6 +205,9 @@ Miranda uses the following utility functions:
 
 parse_entry:
     exp {
+        if self.entry_mode == ParserEntryMode::TopLevelScriptOnly {
+          self.syntax("expected top-level source form\n");
+        }
         self.result = Some($1);
         $$ = $1;
       }
@@ -533,25 +538,25 @@ top_level_specification_item:
 top_level_type_lhs_typevars:
     /* empty */ { $$ = NIL; }
     | typevar top_level_type_lhs_typevars {
-        if self.typevar_list_contains($2, $1) {
+        let current = $1;
+        let tail_value = $2;
+        let tail = ConsList::<Value>::from_ref(tail_value.into());
+        if self.typevar_list_contains(tail, current) {
           self.syntax("repeated type variable on lhs of type def\n");
         }
-        let tail = match $2 {
-          Value::Reference(_) | Value::Combinator(Combinator::Nil) => $2,
+        let head = match current {
+          Value::Reference(_) | Value::Combinator(_) | Value::Char(_) | Value::Data(_) | Value::Token(_) => current,
           _ => NIL,
         };
-        let head = match $1 {
-          Value::Reference(_) | Value::Combinator(_) | Value::Char(_) | Value::Data(_) | Value::Token(_) => $1,
-          _ => NIL,
-        };
-        $$ = self.heap.cons_ref(head, tail);
+        $$ = self.heap.cons_ref(head, tail.into());
       }
     ;
 
 top_level_synonym_type_item:
     Name top_level_type_lhs_typevars top_level_definition_anchor EqualEqual top_level_type_expr directive_terminators {
         let type_identifier = $1;
-        let arity = self.typevar_list_arity($2);
+        let typevars = $2;
+        let arity = ConsList::<Value>::from_ref(typevars.into()).len(&self.heap) as isize;
         let anchor = $3;
         let info = $5;
         self.type_declaration_payloads.push(ParserTypeDeclarationPayload {
@@ -572,7 +577,8 @@ top_level_synonym_type_item:
 top_level_algebraic_type_item:
     Name top_level_type_lhs_typevars top_level_definition_anchor Colon2Equal top_level_constructor_list directive_terminators {
         let type_identifier = $1;
-        let arity = self.typevar_list_arity($2);
+        let typevars = $2;
+        let arity = ConsList::<Value>::from_ref(typevars.into()).len(&self.heap) as isize;
         let anchor = $3;
         let mut constructor_list: RawValue = $5.into();
         let mut source_order_constructors = NIL_RAW;
@@ -2124,18 +2130,17 @@ typevar:
 typevars:
     /* empty */ { $$ = NIL; }
     | typevar typevars {
-        if self.typevar_list_contains($2, $1) {
+        let current = $1;
+        let tail_value = $2;
+        let tail = ConsList::<Value>::from_ref(tail_value.into());
+        if self.typevar_list_contains(tail, current) {
           self.syntax("repeated type variable on lhs of type def\n");
         }
-        let tail = match $2 {
-          Value::Reference(_) | Value::Combinator(Combinator::Nil) => $2,
+        let head = match current {
+          Value::Reference(_) | Value::Combinator(_) | Value::Char(_) | Value::Data(_) | Value::Token(_) => current,
           _ => NIL,
         };
-        let head = match $1 {
-          Value::Reference(_) | Value::Combinator(_) | Value::Char(_) | Value::Data(_) | Value::Token(_) => $1,
-          _ => NIL,
-        };
-        $$ = self.heap.cons_ref(head, tail);
+        $$ = self.heap.cons_ref(head, tail.into());
       }
     ;
 
@@ -2429,6 +2434,7 @@ impl<'ctx /* 'fix quotes */> Parser<'ctx /* 'fix quotes */> {
         vm,
         session,
         deferred,
+        entry_mode,
       } = activation;
 
       Self {
@@ -2444,6 +2450,7 @@ impl<'ctx /* 'fix quotes */> Parser<'ctx /* 'fix quotes */> {
         syntax_error_found: false,
         diagnostics: ParserRunDiagnostics::default(),
         top_level_script_parsed: false,
+        entry_mode,
         directive_include_requests: Vec::new(),
         definition_payloads: Vec::new(),
         specification_payloads: Vec::new(),
@@ -2584,35 +2591,15 @@ impl<'ctx /* 'fix quotes */> Parser<'ctx /* 'fix quotes */> {
       self.heap[left_ref].tail == self.heap[right_ref].tail
     }
 
-    fn typevar_list_contains(&self, list: Value, needle: Value) -> bool {
-      let mut cursor = match list {
-        Value::Reference(_) => RawValue::from(list),
-        Value::Combinator(Combinator::Nil) => return false,
-        _ => return false,
-      };
-      while cursor != NIL_RAW {
-        if self.same_type_variable(self.heap[cursor].head.into(), needle) {
+    fn typevar_list_contains(&self, list: ConsList<Value>, needle: Value) -> bool {
+      let mut cursor = list;
+      while let Some(next) = cursor.pop_value(&self.heap) {
+        if self.same_type_variable(next, needle) {
           return true;
         }
-        cursor = self.heap[cursor].tail;
       }
 
       false
-    }
-
-    fn typevar_list_arity(&self, list: Value) -> isize {
-      let mut cursor = match list {
-        Value::Reference(_) => RawValue::from(list),
-        Value::Combinator(Combinator::Nil) => return 0,
-        _ => return 0,
-      };
-      let mut arity = 0;
-      while cursor != NIL_RAW {
-        arity += 1;
-        cursor = self.heap[cursor].tail;
-      }
-
-      arity
     }
 
     /// Returns the application head for one active top-level pattern application step. This exists so parser-visible

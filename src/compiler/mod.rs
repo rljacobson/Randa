@@ -24,7 +24,7 @@ pub mod token;
 
 use crate::data::api::HeapString;
 pub(crate) use lexer::Lexer;
-pub use parser_activation::{ParserActivation, ParserVmContext};
+pub use parser_activation::{ParserActivation, ParserEntryMode, ParserVmContext};
 pub use parser_session::{ParserDeferredState, ParserSessionState};
 pub use parser_support::{
     ParserConstructorFieldPayload, ParserConstructorPayload, ParserDefinitionPayload,

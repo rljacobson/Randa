@@ -16,6 +16,7 @@ fn run_parser(source_path: &str, source_text: &str) -> (Heap, ParserRunResult) {
         vm: ParserVmContext::new(Combinator::Undef.into(), TEST_VOID_TUPLE),
         session: ParserSessionState::default(),
         deferred: ParserDeferredState::default(),
+        entry_mode: ParserEntryMode::Mixed,
     };
     let mut parser = parser::Parser::new(lexer, activation);
     let parsed = parser.parse();
