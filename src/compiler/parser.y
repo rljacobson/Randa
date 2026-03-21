@@ -256,7 +256,8 @@ exp:
 /* The active top-level script slice currently accepts `%include`, `%export`,
    top-level value definitions, and a narrow top-level function/pattern slice.
    The currently active parameter subset includes simple name parameters plus a
-   small parser-owned pattern subset used only at top level. Other top-level
+   small parser-owned pattern subset used only at top level, including the
+   currently owned infix-name/infix-constructor pattern forms. Other top-level
    forms are still classified before parser entry and follow the deferred
    integration path. */
 top_level_script:
@@ -407,8 +408,22 @@ top_level_definition_parameter:
     ;
 
 top_level_pattern:
-    top_level_pattern_atom Colon top_level_pattern { $$ = self.heap.cons_ref($1, $3); }
-    | top_level_pattern_application { $$ = $1; }
+    top_level_pattern_infix Colon top_level_pattern { $$ = self.heap.cons_ref($1, $3); }
+    | top_level_pattern_infix { $$ = $1; }
+    ;
+
+top_level_pattern_infix:
+    top_level_pattern_application_or_atom InfixName top_level_pattern_infix {
+        $$ = self.heap.apply2($2, $1, $3);
+      }
+    | top_level_pattern_application_or_atom InfixCName top_level_pattern_infix {
+        $$ = self.heap.apply2($2, $1, $3);
+      }
+    | top_level_pattern_application_or_atom { $$ = $1; }
+    ;
+
+top_level_pattern_application_or_atom:
+    top_level_pattern_application { $$ = $1; }
     | top_level_pattern_atom { $$ = $1; }
     ;
 

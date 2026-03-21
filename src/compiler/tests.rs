@@ -195,6 +195,54 @@ fn parser_parses_nullary_constructor_pattern_form() {
 }
 
 #[test]
+fn parser_parses_top_level_infix_constructor_pattern_form() {
+    let (heap, result) = run_parser(
+        "infix_constructor_pattern_form_substrate.m",
+        "pair * ** ::= * $Pair **\nfirst (x $Pair y) = x\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success");
+    };
+    assert_eq!(payload.definitions.len(), 1);
+    assert_eq!(payload.constructor_declarations.len(), 1);
+
+    let lambda_raw = payload.definitions[0].body;
+    assert_eq!(heap[lambda_raw].tag, Tag::Lambda);
+    let pattern_raw = heap[lambda_raw].head;
+    assert_eq!(heap[pattern_raw].tag, Tag::Ap);
+    let operator_application_raw = heap[pattern_raw].head;
+    assert_eq!(heap[operator_application_raw].tag, Tag::Ap);
+    let operator_identifier = IdentifierRecordRef::from_ref(heap[operator_application_raw].head);
+    assert_eq!(operator_identifier.get_name(&heap), "Pair");
+
+    let body_identifier = IdentifierRecordRef::from_ref(heap[lambda_raw].tail);
+    assert_eq!(body_identifier.get_name(&heap), "x");
+}
+
+#[test]
+fn parser_parses_top_level_infix_name_pattern_form_as_application() {
+    let (heap, result) = run_parser(
+        "infix_name_pattern_form_substrate.m",
+        "bad (x $merge y) = x\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success");
+    };
+    assert_eq!(payload.definitions.len(), 1);
+
+    let lambda_raw = payload.definitions[0].body;
+    assert_eq!(heap[lambda_raw].tag, Tag::Lambda);
+    let pattern_raw = heap[lambda_raw].head;
+    assert_eq!(heap[pattern_raw].tag, Tag::Ap);
+    let operator_application_raw = heap[pattern_raw].head;
+    assert_eq!(heap[operator_application_raw].tag, Tag::Ap);
+    let operator_identifier = IdentifierRecordRef::from_ref(heap[operator_application_raw].head);
+    assert_eq!(operator_identifier.get_name(&heap), "merge");
+}
+
+#[test]
 fn parser_records_constructor_field_metadata_in_payloads() {
     let (_heap, result) = run_parser(
         "constructor_field_payloads.m",

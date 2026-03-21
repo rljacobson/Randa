@@ -478,6 +478,69 @@ fn load_file_accepts_declared_unary_constructor_application_in_formal() {
 }
 
 #[test]
+fn load_file_accepts_declared_infix_constructor_application_in_formal() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("infix_constructor_application_formal.m");
+    std::fs::write(
+        &source_path,
+        "pair * ** ::= * $Pair **\nfirst (x $Pair y) = x\n",
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(
+        result.is_ok(),
+        "result={result:?} diagnostics={:?}",
+        vm.parser_diagnostics
+    );
+    assert!(vm.undefined_names.is_empty());
+}
+
+#[test]
+fn load_file_rejects_infix_name_application_in_formal() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("infix_name_application_formal.m");
+    std::fs::write(&source_path, "bad (x $merge y) = x\n")
+        .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::ValueHeadApplicationsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
+fn load_file_reports_infix_name_formal_before_generic_undefined_name() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("infix_name_formal_precedes_undefined_name.m");
+    std::fs::write(&source_path, "bad (x $merge y) = missing\n")
+        .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::ValueHeadApplicationsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
 fn load_file_commits_strict_constructor_field_metadata() {
     let mut vm = VM::new_for_tests();
     vm.initializing = false;
@@ -1877,6 +1940,85 @@ fn typecheck_phase_invalid_application_formal_does_not_bind_interior_names() {
     let identifier = undefined_names
         .pop(&mut vm.heap)
         .expect("expected one undefined name from invalid formal interior");
+    assert_eq!(vm.identifier_name(identifier), "x");
+}
+
+#[test]
+fn typecheck_phase_rejects_unsupported_arithmetic_pattern_in_formal() {
+    let mut vm = VM::new_for_tests();
+
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("unsupported_arithmetic_formal.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        ConsList::EMPTY,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+
+    let f = vm.heap.make_empty_identifier("f");
+    let x = vm.heap.make_empty_identifier("x");
+    let one = IntegerRef::from_i64(&mut vm.heap, 1);
+    let arithmetic_pattern = vm
+        .heap
+        .apply2(Combinator::Plus.into(), one.into(), x.into());
+    let lambda_body = vm.heap.lambda_ref(arithmetic_pattern.into(), x.into());
+    f.set_value_from_data(
+        &mut vm.heap,
+        IdentifierValueData::Arbitrary(lambda_body.into()),
+    );
+    current_file.push_item_onto_definienda(&mut vm.heap, f);
+
+    let result = vm.run_checktypes_phase();
+
+    assert!(matches!(
+        result,
+        Err(TypecheckError::UnsupportedArithmeticPatternsInFormals { count: 1 })
+    ));
+}
+
+#[test]
+fn typecheck_phase_unsupported_arithmetic_pattern_does_not_bind_interior_names() {
+    let mut vm = VM::new_for_tests();
+
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("unsupported_arithmetic_nonbinding.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        ConsList::EMPTY,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+
+    let f = vm.heap.make_empty_identifier("f");
+    let x = vm.heap.make_empty_identifier("x");
+    let one = IntegerRef::from_i64(&mut vm.heap, 1);
+    let arithmetic_pattern = vm
+        .heap
+        .apply2(Combinator::Plus.into(), one.into(), x.into());
+    let lambda_body = vm.heap.lambda_ref(arithmetic_pattern.into(), x.into());
+    f.set_value_from_data(
+        &mut vm.heap,
+        IdentifierValueData::Arbitrary(lambda_body.into()),
+    );
+    current_file.push_item_onto_definienda(&mut vm.heap, f);
+
+    let inputs = typecheck::TypecheckBoundaryInputs::from_vm(&vm);
+    let result = typecheck::run_partial_typecheck(&mut vm.heap, inputs);
+
+    assert!(matches!(
+        &result.failure,
+        Some(TypecheckError::UnsupportedArithmeticPatternsInFormals { count: 1 })
+    ));
+    let mut undefined_names = result.undefined_names;
+    assert_eq!(undefined_names.len(&vm.heap), 1);
+    let identifier = undefined_names
+        .pop(&mut vm.heap)
+        .expect("expected one undefined name from unsupported arithmetic formal interior");
     assert_eq!(vm.identifier_name(identifier), "x");
 }
 

@@ -5,7 +5,7 @@ use crate::data::api::{
     IdentifierValueTypeRef, TypeExprRef,
 };
 use crate::data::heap::is_capitalized;
-use crate::data::{Heap, RawValue, Tag, Type, Value, ATOM_LIMIT};
+use crate::data::{Combinator, Heap, RawValue, Tag, Type, Value, ATOM_LIMIT};
 
 pub(super) struct TypecheckBoundaryInputs {
     current_file: Option<FileRecord>,
@@ -46,6 +46,7 @@ pub(super) fn run_partial_typecheck(
     let mut specified_but_not_defined = ConsList::EMPTY;
     let mut undeclared_constructors_in_formals = ConsList::EMPTY;
     let mut constructor_arity_mismatch_in_formals = ConsList::EMPTY;
+    let mut unsupported_arithmetic_patterns_in_formals = 0usize;
     let mut value_head_applications_in_formals = 0usize;
     let mut non_identifier_application_heads_in_formals = 0usize;
     let mut checked_definition_count = 0usize;
@@ -82,6 +83,7 @@ pub(super) fn run_partial_typecheck(
                         body,
                         &mut undeclared_constructors_in_formals,
                         &mut constructor_arity_mismatch_in_formals,
+                        &mut unsupported_arithmetic_patterns_in_formals,
                         &mut value_head_applications_in_formals,
                         &mut non_identifier_application_heads_in_formals,
                     );
@@ -194,6 +196,10 @@ pub(super) fn run_partial_typecheck(
         Some(TypecheckError::ConstructorArityMismatchInFormals {
             count: constructor_formal_arity_mismatch_count,
         })
+    } else if unsupported_arithmetic_patterns_in_formals > 0 {
+        Some(TypecheckError::UnsupportedArithmeticPatternsInFormals {
+            count: unsupported_arithmetic_patterns_in_formals,
+        })
     } else if value_head_applications_in_formals > 0 {
         Some(TypecheckError::ValueHeadApplicationsInFormals {
             count: value_head_applications_in_formals,
@@ -219,12 +225,13 @@ pub(super) fn run_partial_typecheck(
 
 /// Walks committed lambda-head patterns and records formal-pattern misuse in the active subset.
 /// This exists so the typecheck boundary owns formal-pattern diagnostics over the already lowered top-level forms.
-/// The invariant is that constructor misuse and invalid application shapes are diagnosed before generic undefined-name reporting.
+/// The invariant is that constructor misuse, deferred arithmetic forms, and invalid application shapes are diagnosed before generic undefined-name reporting.
 fn collect_formal_pattern_issues(
     heap: &mut Heap,
     expression: Value,
     undeclared_constructors_in_formals: &mut ConsList<IdentifierRecordRef>,
     constructor_arity_mismatch_in_formals: &mut ConsList<IdentifierRecordRef>,
+    unsupported_arithmetic_patterns_in_formals: &mut usize,
     value_head_applications_in_formals: &mut usize,
     non_identifier_application_heads_in_formals: &mut usize,
 ) {
@@ -241,6 +248,7 @@ fn collect_formal_pattern_issues(
                 pattern,
                 undeclared_constructors_in_formals,
                 constructor_arity_mismatch_in_formals,
+                unsupported_arithmetic_patterns_in_formals,
                 value_head_applications_in_formals,
                 non_identifier_application_heads_in_formals,
             );
@@ -250,6 +258,7 @@ fn collect_formal_pattern_issues(
                 body,
                 undeclared_constructors_in_formals,
                 constructor_arity_mismatch_in_formals,
+                unsupported_arithmetic_patterns_in_formals,
                 value_head_applications_in_formals,
                 non_identifier_application_heads_in_formals,
             );
@@ -260,6 +269,7 @@ fn collect_formal_pattern_issues(
                 heap[raw_reference].tail.into(),
                 undeclared_constructors_in_formals,
                 constructor_arity_mismatch_in_formals,
+                unsupported_arithmetic_patterns_in_formals,
                 value_head_applications_in_formals,
                 non_identifier_application_heads_in_formals,
             );
@@ -270,6 +280,7 @@ fn collect_formal_pattern_issues(
                 heap[raw_reference].head.into(),
                 undeclared_constructors_in_formals,
                 constructor_arity_mismatch_in_formals,
+                unsupported_arithmetic_patterns_in_formals,
                 value_head_applications_in_formals,
                 non_identifier_application_heads_in_formals,
             );
@@ -283,6 +294,7 @@ fn collect_formal_pattern_issues_in_pattern(
     pattern: Value,
     undeclared_constructors_in_formals: &mut ConsList<IdentifierRecordRef>,
     constructor_arity_mismatch_in_formals: &mut ConsList<IdentifierRecordRef>,
+    unsupported_arithmetic_patterns_in_formals: &mut usize,
     value_head_applications_in_formals: &mut usize,
     non_identifier_application_heads_in_formals: &mut usize,
 ) {
@@ -312,10 +324,14 @@ fn collect_formal_pattern_issues_in_pattern(
                     argument,
                     undeclared_constructors_in_formals,
                     constructor_arity_mismatch_in_formals,
+                    unsupported_arithmetic_patterns_in_formals,
                     value_head_applications_in_formals,
                     non_identifier_application_heads_in_formals,
                 );
             }
+        }
+        CommittedFormalPattern::UnsupportedArithmeticPattern { .. } => {
+            *unsupported_arithmetic_patterns_in_formals += 1;
         }
         CommittedFormalPattern::ValueHeadApplication { .. } => {
             *value_head_applications_in_formals += 1;
@@ -330,6 +346,7 @@ fn collect_formal_pattern_issues_in_pattern(
                 head,
                 undeclared_constructors_in_formals,
                 constructor_arity_mismatch_in_formals,
+                unsupported_arithmetic_patterns_in_formals,
                 value_head_applications_in_formals,
                 non_identifier_application_heads_in_formals,
             );
@@ -338,6 +355,7 @@ fn collect_formal_pattern_issues_in_pattern(
                 tail,
                 undeclared_constructors_in_formals,
                 constructor_arity_mismatch_in_formals,
+                unsupported_arithmetic_patterns_in_formals,
                 value_head_applications_in_formals,
                 non_identifier_application_heads_in_formals,
             );
@@ -508,7 +526,7 @@ fn collect_type_expression_issues(
 
 /// Collects identifiers bound by a pattern node into the active local-binding scope.
 /// This exists so lambda-bound names are excluded from undefined-name diagnostics in the body they bind.
-/// The invariant is that constructor heads, literal forms, and invalid application shapes do not add local bindings.
+/// The invariant is that constructor heads, literal forms, deferred arithmetic forms, and invalid application shapes do not add local bindings.
 fn collect_pattern_bound_identifiers(
     heap: &Heap,
     pattern: Value,
@@ -529,7 +547,8 @@ fn collect_pattern_bound_identifiers(
                 collect_pattern_bound_identifiers(heap, argument, bound_identifiers);
             }
         }
-        CommittedFormalPattern::ValueHeadApplication { .. }
+        CommittedFormalPattern::UnsupportedArithmeticPattern { .. }
+        | CommittedFormalPattern::ValueHeadApplication { .. }
         | CommittedFormalPattern::NonIdentifierHeadApplication { .. } => {}
         CommittedFormalPattern::StructuralCons { head, tail }
         | CommittedFormalPattern::StructuralTuple { head, tail } => {
@@ -547,13 +566,17 @@ enum CommittedFormalPattern {
         head: IdentifierRecordRef,
         arguments: Vec<Value>,
     },
+    UnsupportedArithmeticPattern {
+        operator: Value,
+        arguments: Vec<Value>,
+    },
     ValueHeadApplication {
         head: IdentifierRecordRef,
         arguments: Vec<Value>,
     },
     NonIdentifierHeadApplication {
         head: Value,
-        tail: Value,
+        arguments: Vec<Value>,
     },
     StructuralCons {
         head: Value,
@@ -570,7 +593,7 @@ enum CommittedFormalPattern {
 
 /// Classifies one committed formal-pattern node into the shared semantic taxonomy used by typecheck.
 /// This exists so bound-name collection and formal diagnostics interpret the same committed shapes consistently.
-/// The invariant is that wrapped constant cells and invalid application families are distinguished before either walk recurses or records bindings.
+/// The invariant is that wrapped constant cells, deferred arithmetic families, and invalid application families are distinguished before either walk recurses or records bindings.
 fn classify_committed_formal_pattern(heap: &Heap, pattern: Value) -> CommittedFormalPattern {
     let raw_reference: RawValue = pattern.into();
     if raw_reference < ATOM_LIMIT {
@@ -587,16 +610,30 @@ fn classify_committed_formal_pattern(heap: &Heap, pattern: Value) -> CommittedFo
             }
         }
         Tag::Ap => {
-            if let Some((head, arguments)) = pattern_application_spine(heap, pattern) {
-                if identifier_has_constructor_intent(heap, head) {
-                    CommittedFormalPattern::ConstructorApplication { head, arguments }
+            let (head_raw, arguments) = pattern_application_spine(heap, pattern);
+            if head_raw >= ATOM_LIMIT && heap[head_raw].tag == Tag::Id {
+                let identifier = IdentifierRecordRef::from_ref(head_raw);
+                if identifier_has_constructor_intent(heap, identifier) {
+                    CommittedFormalPattern::ConstructorApplication {
+                        head: identifier,
+                        arguments,
+                    }
                 } else {
-                    CommittedFormalPattern::ValueHeadApplication { head, arguments }
+                    CommittedFormalPattern::ValueHeadApplication {
+                        head: identifier,
+                        arguments,
+                    }
                 }
             } else {
-                CommittedFormalPattern::NonIdentifierHeadApplication {
-                    head: heap[raw_reference].head.into(),
-                    tail: heap[raw_reference].tail.into(),
+                let head = Value::from(head_raw);
+                match head {
+                    Value::Combinator(Combinator::Plus | Combinator::Minus) => {
+                        CommittedFormalPattern::UnsupportedArithmeticPattern {
+                            operator: head,
+                            arguments,
+                        }
+                    }
+                    _ => CommittedFormalPattern::NonIdentifierHeadApplication { head, arguments },
                 }
             }
         }
@@ -631,30 +668,25 @@ fn identifier_has_constructor_intent(heap: &Heap, identifier: IdentifierRecordRe
     is_capitalized(identifier.get_name(heap).as_str())
 }
 
-fn pattern_application_spine(
-    heap: &Heap,
-    pattern: Value,
-) -> Option<(IdentifierRecordRef, Vec<Value>)> {
+/// Returns the head value plus source-order arguments for one committed pattern-application spine.
+/// This exists so the shared committed-formal classifier can distinguish identifier-headed applications from deferred arithmetic and other non-identifier heads.
+/// The invariant is that the returned arguments preserve the original left-to-right source order of the committed application tree.
+fn pattern_application_spine(heap: &Heap, pattern: Value) -> (RawValue, Vec<Value>) {
     let mut raw_reference: RawValue = pattern.into();
-    if raw_reference < ATOM_LIMIT {
-        return None;
-    }
+    debug_assert!(raw_reference >= ATOM_LIMIT);
+    debug_assert_eq!(heap[raw_reference].tag, Tag::Ap);
 
     let mut arguments = Vec::new();
     while heap[raw_reference].tag == Tag::Ap {
         arguments.push(heap[raw_reference].tail.into());
         raw_reference = heap[raw_reference].head;
         if raw_reference < ATOM_LIMIT {
-            return None;
+            break;
         }
     }
 
-    if heap[raw_reference].tag != Tag::Id {
-        return None;
-    }
-
     arguments.reverse();
-    Some((IdentifierRecordRef::from_ref(raw_reference), arguments))
+    (raw_reference, arguments)
 }
 
 /// Returns whether an identifier currently denotes a constructor-valued binding.
