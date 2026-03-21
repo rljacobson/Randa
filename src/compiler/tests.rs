@@ -1,5 +1,6 @@
 use super::*;
 
+use crate::big_num::SIGN_BIT_MASK;
 use crate::data::{
     api::{ConsList, FileInfoRef, HeapObjectProxy, IdentifierRecordRef},
     Combinator, Heap, RawValue, Tag, Value,
@@ -382,19 +383,106 @@ fn parser_rejects_floating_point_literal_pattern_in_top_level_formals() {
 }
 
 #[test]
-fn parser_rejects_unary_minus_pattern_in_top_level_formals() {
-    let (_heap, result) = run_parser("minus_pattern_form_syntax.m", "bad -1 = 0\n");
+fn parser_parses_negative_integer_literal_pattern_in_top_level_formals() {
+    let (heap, result) = run_parser("minus_pattern_form_substrate.m", "sign (-1) = 0\n");
 
-    let ParserRunResult::SyntaxError(_diagnostics) = result else {
-        panic!("expected syntax error result");
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success");
     };
+    assert_eq!(payload.definitions.len(), 1);
+
+    let lambda_raw = payload.definitions[0].body;
+    assert_eq!(heap[lambda_raw].tag, Tag::Lambda);
+    let pattern_raw = heap[lambda_raw].head;
+    assert_eq!(heap[pattern_raw].tag, Tag::Cons);
+    let integer_raw = heap[pattern_raw].tail;
+    assert_eq!(heap[integer_raw].tag, Tag::Int);
+    assert_ne!(heap[integer_raw].head & SIGN_BIT_MASK, 0);
 }
 
 #[test]
-fn parser_rejects_n_plus_k_pattern_in_top_level_formals() {
-    let (_heap, result) = run_parser("n_plus_k_pattern_form_syntax.m", "bad (x+1) = x\n");
+fn parser_parses_n_plus_k_pattern_in_top_level_formals() {
+    let (heap, result) = run_parser("n_plus_k_pattern_form_substrate.m", "pred (x+1) = x\n");
 
-    let ParserRunResult::SyntaxError(_diagnostics) = result else {
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success");
+    };
+    assert_eq!(payload.definitions.len(), 1);
+
+    let lambda_raw = payload.definitions[0].body;
+    assert_eq!(heap[lambda_raw].tag, Tag::Lambda);
+    let pattern_raw = heap[lambda_raw].head;
+    assert_eq!(heap[pattern_raw].tag, Tag::Ap);
+
+    let operator_application_raw = heap[pattern_raw].head;
+    assert_eq!(heap[operator_application_raw].tag, Tag::Ap);
+    assert_eq!(
+        Value::from(heap[operator_application_raw].head),
+        Combinator::Plus.into()
+    );
+
+    let offset_raw = heap[operator_application_raw].tail;
+    assert_eq!(heap[offset_raw].tag, Tag::Int);
+    assert_eq!(heap[offset_raw].head & SIGN_BIT_MASK, 0);
+
+    let body_identifier = IdentifierRecordRef::from_ref(heap[lambda_raw].tail);
+    assert_eq!(body_identifier.get_name(&heap), "x");
+}
+
+#[test]
+fn parser_parses_nested_n_plus_k_pattern_inside_cons_form() {
+    let (heap, result) = run_parser(
+        "nested_n_plus_k_cons_pattern_form_substrate.m",
+        "headAfter ((x+1):xs) = x\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success");
+    };
+    assert_eq!(payload.definitions.len(), 1);
+
+    let lambda_raw = payload.definitions[0].body;
+    assert_eq!(heap[lambda_raw].tag, Tag::Lambda);
+    let pattern_raw = heap[lambda_raw].head;
+    assert_eq!(heap[pattern_raw].tag, Tag::Cons);
+    let successor_raw = heap[pattern_raw].head;
+    assert_eq!(heap[successor_raw].tag, Tag::Ap);
+
+    let operator_application_raw = heap[successor_raw].head;
+    assert_eq!(heap[operator_application_raw].tag, Tag::Ap);
+    assert_eq!(
+        Value::from(heap[operator_application_raw].head),
+        Combinator::Plus.into()
+    );
+
+    let body_identifier = IdentifierRecordRef::from_ref(heap[lambda_raw].tail);
+    assert_eq!(body_identifier.get_name(&heap), "x");
+}
+
+#[test]
+fn parser_rejects_non_integer_unary_minus_pattern_in_top_level_formals() {
+    let (_heap, result) = run_parser("minus_float_pattern_form_syntax.m", "bad (-1.5) = 0\n");
+
+    let ParserRunResult::SyntaxError(diagnostics) = result else {
         panic!("expected syntax error result");
     };
+    assert!(diagnostics.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("inappropriate use of \"-\" in pattern")
+    }));
+}
+
+#[test]
+fn parser_rejects_non_natural_n_plus_k_pattern_in_top_level_formals() {
+    let (_heap, result) = run_parser("n_plus_k_pattern_bad_offset_syntax.m", "bad (x+1.5) = x\n");
+
+    let ParserRunResult::SyntaxError(diagnostics) = result else {
+        panic!("expected syntax error result");
+    };
+    assert!(diagnostics.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("inappropriate use of \"+\" in pattern")
+    }));
 }

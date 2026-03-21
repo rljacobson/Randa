@@ -1,4 +1,5 @@
 use super::*;
+use crate::big_num::SIGN_BIT_MASK;
 use crate::compiler::Token;
 use crate::data::api::{
     AlgebraicConstructorMetadataRef, IdentifierRecordRef, IdentifierValueTypeKind,
@@ -225,7 +226,7 @@ pub(super) fn run_partial_typecheck(
 
 /// Walks committed lambda-head patterns and records formal-pattern misuse in the active subset.
 /// This exists so the typecheck boundary owns formal-pattern diagnostics over the already lowered top-level forms.
-/// The invariant is that constructor misuse, deferred arithmetic forms, and invalid application shapes are diagnosed before generic undefined-name reporting.
+/// The invariant is that constructor misuse, canonical successor-pattern recursion, deferred arithmetic forms, and invalid application shapes are diagnosed before generic undefined-name reporting.
 fn collect_formal_pattern_issues(
     heap: &mut Heap,
     expression: Value,
@@ -329,6 +330,17 @@ fn collect_formal_pattern_issues_in_pattern(
                     non_identifier_application_heads_in_formals,
                 );
             }
+        }
+        CommittedFormalPattern::SuccessorPattern { inner, .. } => {
+            collect_formal_pattern_issues_in_pattern(
+                heap,
+                inner,
+                undeclared_constructors_in_formals,
+                constructor_arity_mismatch_in_formals,
+                unsupported_arithmetic_patterns_in_formals,
+                value_head_applications_in_formals,
+                non_identifier_application_heads_in_formals,
+            );
         }
         CommittedFormalPattern::UnsupportedArithmeticPattern { .. } => {
             *unsupported_arithmetic_patterns_in_formals += 1;
@@ -526,7 +538,7 @@ fn collect_type_expression_issues(
 
 /// Collects identifiers bound by a pattern node into the active local-binding scope.
 /// This exists so lambda-bound names are excluded from undefined-name diagnostics in the body they bind.
-/// The invariant is that constructor heads, literal forms, deferred arithmetic forms, and invalid application shapes do not add local bindings.
+/// The invariant is that constructor heads, literal forms, canonical successor offsets, deferred arithmetic forms, and invalid application shapes do not add local bindings.
 fn collect_pattern_bound_identifiers(
     heap: &Heap,
     pattern: Value,
@@ -547,6 +559,9 @@ fn collect_pattern_bound_identifiers(
                 collect_pattern_bound_identifiers(heap, argument, bound_identifiers);
             }
         }
+        CommittedFormalPattern::SuccessorPattern { inner, .. } => {
+            collect_pattern_bound_identifiers(heap, inner, bound_identifiers);
+        }
         CommittedFormalPattern::UnsupportedArithmeticPattern { .. }
         | CommittedFormalPattern::ValueHeadApplication { .. }
         | CommittedFormalPattern::NonIdentifierHeadApplication { .. } => {}
@@ -565,6 +580,10 @@ enum CommittedFormalPattern {
     ConstructorApplication {
         head: IdentifierRecordRef,
         arguments: Vec<Value>,
+    },
+    SuccessorPattern {
+        offset: Value,
+        inner: Value,
     },
     UnsupportedArithmeticPattern {
         operator: Value,
@@ -593,7 +612,7 @@ enum CommittedFormalPattern {
 
 /// Classifies one committed formal-pattern node into the shared semantic taxonomy used by typecheck.
 /// This exists so bound-name collection and formal diagnostics interpret the same committed shapes consistently.
-/// The invariant is that wrapped constant cells, deferred arithmetic families, and invalid application families are distinguished before either walk recurses or records bindings.
+/// The invariant is that wrapped constant cells, canonical successor patterns, deferred arithmetic families, and invalid application families are distinguished before either walk recurses or records bindings.
 fn classify_committed_formal_pattern(heap: &Heap, pattern: Value) -> CommittedFormalPattern {
     let raw_reference: RawValue = pattern.into();
     if raw_reference < ATOM_LIMIT {
@@ -628,9 +647,15 @@ fn classify_committed_formal_pattern(heap: &Heap, pattern: Value) -> CommittedFo
                 let head = Value::from(head_raw);
                 match head {
                     Value::Combinator(Combinator::Plus | Combinator::Minus) => {
-                        CommittedFormalPattern::UnsupportedArithmeticPattern {
-                            operator: head,
-                            arguments,
+                        if let Some((offset, inner)) =
+                            canonical_successor_pattern(heap, head, &arguments)
+                        {
+                            CommittedFormalPattern::SuccessorPattern { offset, inner }
+                        } else {
+                            CommittedFormalPattern::UnsupportedArithmeticPattern {
+                                operator: head,
+                                arguments,
+                            }
                         }
                     }
                     _ => CommittedFormalPattern::NonIdentifierHeadApplication { head, arguments },
@@ -669,7 +694,7 @@ fn identifier_has_constructor_intent(heap: &Heap, identifier: IdentifierRecordRe
 }
 
 /// Returns the head value plus source-order arguments for one committed pattern-application spine.
-/// This exists so the shared committed-formal classifier can distinguish identifier-headed applications from deferred arithmetic and other non-identifier heads.
+/// This exists so the shared committed-formal classifier can distinguish identifier-headed applications, canonical successor patterns, and other non-identifier heads.
 /// The invariant is that the returned arguments preserve the original left-to-right source order of the committed application tree.
 fn pattern_application_spine(heap: &Heap, pattern: Value) -> (RawValue, Vec<Value>) {
     let mut raw_reference: RawValue = pattern.into();
@@ -687,6 +712,27 @@ fn pattern_application_spine(heap: &Heap, pattern: Value) -> (RawValue, Vec<Valu
 
     arguments.reverse();
     (raw_reference, arguments)
+}
+
+// Todo: promote this raw heap-shape natural-integer check to a bigint-owned query once `IntegerRef`
+// exposes a crate-visible Miranda `isnat` predicate.
+fn canonical_successor_pattern(
+    heap: &Heap,
+    head: Value,
+    arguments: &[Value],
+) -> Option<(Value, Value)> {
+    if head != Value::Combinator(Combinator::Plus) || arguments.len() != 2 {
+        return None;
+    }
+
+    let offset = arguments[0];
+    let inner = arguments[1];
+    let offset_raw: RawValue = offset.into();
+    if offset_raw < ATOM_LIMIT || heap[offset_raw].tag != Tag::Int {
+        return None;
+    }
+
+    ((heap[offset_raw].head & SIGN_BIT_MASK) == 0).then_some((offset, inner))
 }
 
 /// Returns whether an identifier currently denotes a constructor-valued binding.

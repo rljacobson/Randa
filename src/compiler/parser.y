@@ -39,6 +39,7 @@ use super::{
 
 use crate::{
     big_num::IntegerRef,
+    big_num::SIGN_BIT_MASK,
     data::{
         api::{ConsList, FileInfoRef, HeapObjectProxy, IdentifierRecordRef, IdentifierValueTypeKind},
         tag::Tag,
@@ -408,15 +409,41 @@ top_level_definition_parameter:
     ;
 
 top_level_pattern:
-    top_level_pattern_infix Colon top_level_pattern { $$ = self.heap.cons_ref($1, $3); }
-    | top_level_pattern_infix { $$ = $1; }
+    top_level_pattern_arithmetic Colon top_level_pattern { $$ = self.heap.cons_ref($1, $3); }
+    | top_level_pattern_arithmetic { $$ = $1; }
     ;
 
-top_level_pattern_infix:
-    top_level_pattern_application_or_atom InfixName top_level_pattern_infix {
+top_level_pattern_arithmetic:
+    top_level_pattern_arithmetic Plus Constant {
+        let inner = $1;
+        let constant = $3;
+        let constant_raw: RawValue = constant.into();
+        if constant_raw < ATOM_LIMIT
+          || self.heap[constant_raw].tag != Tag::Int
+          || (self.heap[constant_raw].head & SIGN_BIT_MASK) != 0
+        {
+          self.syntax("inappropriate use of \"+\" in pattern\n");
+        }
+        $$ = self.heap.apply2(Combinator::Plus.into(), constant, inner);
+      }
+    | Minus Constant {
+        let constant = $2;
+        let constant_raw: RawValue = constant.into();
+        if constant_raw >= ATOM_LIMIT && self.heap[constant_raw].tag == Tag::Int {
+          let negated = IntegerRef::from_ref(constant_raw).negate(self.heap);
+          $$ = self.heap.cons_ref(
+            Token::Constant.into(),
+            negated.into(),
+          );
+        } else {
+          self.syntax("inappropriate use of \"-\" in pattern\n");
+          $$ = self.heap.cons_ref(Token::Constant.into(), constant);
+        }
+      }
+    | top_level_pattern_application_or_atom InfixName top_level_pattern_arithmetic {
         $$ = self.heap.apply2($2, $1, $3);
       }
-    | top_level_pattern_application_or_atom InfixCName top_level_pattern_infix {
+    | top_level_pattern_application_or_atom InfixCName top_level_pattern_arithmetic {
         $$ = self.heap.apply2($2, $1, $3);
       }
     | top_level_pattern_application_or_atom { $$ = $1; }

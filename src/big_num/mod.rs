@@ -22,4 +22,5 @@ mod integer_ref;
 mod internal;
 mod text;
 
+pub(crate) use constants::SIGN_BIT_MASK;
 pub(crate) use integer_ref::IntegerRef;

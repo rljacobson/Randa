@@ -351,6 +351,44 @@ fn load_file_keeps_cons_pattern_tail_name_bound_after_constructor_formal_checks(
 }
 
 #[test]
+fn load_file_accepts_negative_integer_literal_pattern_in_formal() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("negative_integer_literal_formal.m");
+    std::fs::write(&source_path, "sign (-1) = 0\n").expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(
+        result.is_ok(),
+        "result={result:?} diagnostics={:?}",
+        vm.parser_diagnostics
+    );
+    assert!(vm.undefined_names.is_empty());
+}
+
+#[test]
+fn load_file_accepts_n_plus_k_pattern_and_binds_inner_name() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("n_plus_k_formal.m");
+    std::fs::write(&source_path, "pred (x+1) = x\n").expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(
+        result.is_ok(),
+        "result={result:?} diagnostics={:?}",
+        vm.parser_diagnostics
+    );
+    assert!(vm.undefined_names.is_empty());
+}
+
+#[test]
 fn load_file_rejects_undeclared_constructor_atom_in_formal() {
     let mut vm = VM::new_for_tests();
     vm.initializing = false;
@@ -1944,6 +1982,79 @@ fn typecheck_phase_invalid_application_formal_does_not_bind_interior_names() {
 }
 
 #[test]
+fn typecheck_phase_successor_pattern_binds_inner_name() {
+    let mut vm = VM::new_for_tests();
+
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("successor_pattern_binding.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        ConsList::EMPTY,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+
+    let f = vm.heap.make_empty_identifier("f");
+    let x = vm.heap.make_empty_identifier("x");
+    let one = IntegerRef::from_i64(&mut vm.heap, 1);
+    let successor_pattern = vm
+        .heap
+        .apply2(Combinator::Plus.into(), one.into(), x.into());
+    let lambda_body = vm.heap.lambda_ref(successor_pattern.into(), x.into());
+    f.set_value_from_data(
+        &mut vm.heap,
+        IdentifierValueData::Arbitrary(lambda_body.into()),
+    );
+    current_file.push_item_onto_definienda(&mut vm.heap, f);
+
+    let inputs = typecheck::TypecheckBoundaryInputs::from_vm(&vm);
+    let result = typecheck::run_partial_typecheck(&mut vm.heap, inputs);
+
+    assert!(result.failure.is_none());
+    assert!(result.undefined_names.is_empty());
+}
+
+#[test]
+fn typecheck_phase_rejects_undeclared_constructor_inside_successor_pattern() {
+    let mut vm = VM::new_for_tests();
+
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("successor_pattern_undeclared_constructor.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        ConsList::EMPTY,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+
+    let f = vm.heap.make_empty_identifier("f");
+    let nope = vm.heap.make_empty_identifier("Nope");
+    let x = vm.heap.make_empty_identifier("x");
+    let one = IntegerRef::from_i64(&mut vm.heap, 1);
+    let inner_pattern = vm.heap.apply_ref(nope.into(), x.into());
+    let successor_pattern =
+        vm.heap
+            .apply2(Combinator::Plus.into(), one.into(), inner_pattern.into());
+    let lambda_body = vm.heap.lambda_ref(successor_pattern.into(), x.into());
+    f.set_value_from_data(
+        &mut vm.heap,
+        IdentifierValueData::Arbitrary(lambda_body.into()),
+    );
+    current_file.push_item_onto_definienda(&mut vm.heap, f);
+
+    let result = vm.run_checktypes_phase();
+
+    assert!(matches!(
+        result,
+        Err(TypecheckError::UndeclaredConstructorsInFormals { count: 1 })
+    ));
+}
+
+#[test]
 fn typecheck_phase_rejects_unsupported_arithmetic_pattern_in_formal() {
     let mut vm = VM::new_for_tests();
 
@@ -1963,7 +2074,7 @@ fn typecheck_phase_rejects_unsupported_arithmetic_pattern_in_formal() {
     let one = IntegerRef::from_i64(&mut vm.heap, 1);
     let arithmetic_pattern = vm
         .heap
-        .apply2(Combinator::Plus.into(), one.into(), x.into());
+        .apply2(Combinator::Plus.into(), x.into(), one.into());
     let lambda_body = vm.heap.lambda_ref(arithmetic_pattern.into(), x.into());
     f.set_value_from_data(
         &mut vm.heap,
@@ -1999,7 +2110,7 @@ fn typecheck_phase_unsupported_arithmetic_pattern_does_not_bind_interior_names()
     let one = IntegerRef::from_i64(&mut vm.heap, 1);
     let arithmetic_pattern = vm
         .heap
-        .apply2(Combinator::Plus.into(), one.into(), x.into());
+        .apply2(Combinator::Plus.into(), x.into(), one.into());
     let lambda_body = vm.heap.lambda_ref(arithmetic_pattern.into(), x.into());
     f.set_value_from_data(
         &mut vm.heap,
