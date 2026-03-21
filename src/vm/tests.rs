@@ -579,6 +579,83 @@ fn load_file_reports_infix_name_formal_before_generic_undefined_name() {
 }
 
 #[test]
+fn load_file_rejects_value_head_application_in_formal() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("value_head_application_formal.m");
+    std::fs::write(&source_path, "bad (g x) = x\n").expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::ValueHeadApplicationsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
+fn load_file_rejects_non_identifier_head_application_in_formal() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("non_identifier_head_application_formal.m");
+    std::fs::write(&source_path, "bad ((x:xs) y) = y\n").expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::NonIdentifierApplicationHeadsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
+fn load_file_repeated_name_application_head_still_reaches_value_head_bucket() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("repeated_name_application_head_formal.m");
+    std::fs::write(&source_path, "bad (x, (x y)) = y\n").expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::ValueHeadApplicationsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
+fn load_file_arithmetic_head_application_still_reaches_unsupported_arithmetic_bucket() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("arithmetic_head_application_formal.m");
+    std::fs::write(&source_path, "bad (((x+1)) y) = y\n")
+        .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::UnsupportedArithmeticPatternsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
 fn load_file_commits_strict_constructor_field_metadata() {
     let mut vm = VM::new_for_tests();
     vm.initializing = false;

@@ -244,6 +244,102 @@ fn parser_parses_top_level_infix_name_pattern_form_as_application() {
 }
 
 #[test]
+fn parser_parses_top_level_value_head_application_pattern_form() {
+    let (heap, result) = run_parser(
+        "value_head_application_pattern_form_substrate.m",
+        "bad (g x) = x\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success");
+    };
+    assert_eq!(payload.definitions.len(), 1);
+
+    let lambda_raw = payload.definitions[0].body;
+    assert_eq!(heap[lambda_raw].tag, Tag::Lambda);
+    let pattern_raw = heap[lambda_raw].head;
+    assert_eq!(heap[pattern_raw].tag, Tag::Ap);
+    let head_identifier = IdentifierRecordRef::from_ref(heap[pattern_raw].head);
+    assert_eq!(head_identifier.get_name(&heap), "g");
+    let argument_identifier = IdentifierRecordRef::from_ref(heap[pattern_raw].tail);
+    assert_eq!(argument_identifier.get_name(&heap), "x");
+}
+
+#[test]
+fn parser_parses_top_level_multi_argument_value_head_application_pattern_form() {
+    let (heap, result) = run_parser(
+        "multi_argument_value_head_application_pattern_form_substrate.m",
+        "bad (g x y) = x\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success");
+    };
+    assert_eq!(payload.definitions.len(), 1);
+
+    let lambda_raw = payload.definitions[0].body;
+    assert_eq!(heap[lambda_raw].tag, Tag::Lambda);
+    let outer_application_raw = heap[lambda_raw].head;
+    assert_eq!(heap[outer_application_raw].tag, Tag::Ap);
+    let inner_application_raw = heap[outer_application_raw].head;
+    assert_eq!(heap[inner_application_raw].tag, Tag::Ap);
+
+    let head_identifier = IdentifierRecordRef::from_ref(heap[inner_application_raw].head);
+    assert_eq!(head_identifier.get_name(&heap), "g");
+    let first_argument = IdentifierRecordRef::from_ref(heap[inner_application_raw].tail);
+    assert_eq!(first_argument.get_name(&heap), "x");
+    let second_argument = IdentifierRecordRef::from_ref(heap[outer_application_raw].tail);
+    assert_eq!(second_argument.get_name(&heap), "y");
+}
+
+#[test]
+fn parser_parses_top_level_non_identifier_head_application_pattern_form() {
+    let (heap, result) = run_parser(
+        "non_identifier_head_application_pattern_form_substrate.m",
+        "bad ((x:xs) y) = y\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success");
+    };
+    assert_eq!(payload.definitions.len(), 1);
+
+    let lambda_raw = payload.definitions[0].body;
+    assert_eq!(heap[lambda_raw].tag, Tag::Lambda);
+    let application_raw = heap[lambda_raw].head;
+    assert_eq!(heap[application_raw].tag, Tag::Ap);
+    let malformed_head_raw = heap[application_raw].head;
+    assert_eq!(heap[malformed_head_raw].tag, Tag::Cons);
+    let tail_identifier = IdentifierRecordRef::from_ref(heap[application_raw].tail);
+    assert_eq!(tail_identifier.get_name(&heap), "y");
+}
+
+#[test]
+fn parser_strips_repeated_name_wrapper_from_application_head() {
+    let (heap, result) = run_parser(
+        "repeated_name_application_head_pattern_form_substrate.m",
+        "bad (x, (x y)) = y\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success");
+    };
+    assert_eq!(payload.definitions.len(), 1);
+
+    let lambda_raw = payload.definitions[0].body;
+    assert_eq!(heap[lambda_raw].tag, Tag::Lambda);
+    let tuple_raw = heap[lambda_raw].head;
+    assert_eq!(heap[tuple_raw].tag, Tag::Pair);
+
+    let repeated_head_application_raw = heap[tuple_raw].tail;
+    assert_eq!(heap[repeated_head_application_raw].tag, Tag::Ap);
+    let head_raw = heap[repeated_head_application_raw].head;
+    assert_eq!(heap[head_raw].tag, Tag::Id);
+    let head_identifier = IdentifierRecordRef::from_ref(head_raw);
+    assert_eq!(head_identifier.get_name(&heap), "x");
+}
+
+#[test]
 fn parser_records_constructor_field_metadata_in_payloads() {
     let (_heap, result) = run_parser(
         "constructor_field_payloads.m",

@@ -471,8 +471,14 @@ top_level_pattern_list:
     ;
 
 top_level_pattern_application:
-    ConstructorName top_level_pattern_atom { $$ = self.heap.apply_ref($1, $2); }
-    | top_level_pattern_application top_level_pattern_atom { $$ = self.heap.apply_ref($1, $2); }
+    top_level_pattern_atom top_level_pattern_atom {
+        let head = self.top_level_application_head($1);
+        $$ = self.heap.apply_ref(head, $2);
+      }
+    | top_level_pattern_application top_level_pattern_atom {
+        let head = self.top_level_application_head($1);
+        $$ = self.heap.apply_ref(head, $2);
+      }
     ;
 
 top_level_pattern_atom:
@@ -2609,9 +2615,31 @@ impl<'ctx /* 'fix quotes */> Parser<'ctx /* 'fix quotes */> {
       arity
     }
 
-    /// Returns the inner field type when a constructor field carries a strictness marker.
-    /// This exists so parser payload lowering can preserve strictness as metadata instead of leaking it into later declaration consumers as a wrapped type node.
-    /// The invariant is that successful results come only from the canonical `Strict field_type` application shape.
+    /// Returns the application head for one active top-level pattern application step. This exists so parser-visible
+    /// `v2 v3` activation can match Miranda's repeated-name head stripping without changing non-head wrapped-constant
+    /// behavior. The invariant is that only a leading wrapped repeated-name identifier is unwrapped; all other shapes
+    /// are returned unchanged.
+    fn top_level_application_head(&self, head: Value) -> Value {
+      let head_ref = match head {
+        Value::Reference(_) => RawValue::from(head),
+        _ => return head,
+      };
+      if self.heap[head_ref].tag != Tag::Cons
+        || self.heap[head_ref].head != RawValue::from(Value::Token(Token::Constant))
+      {
+        return head;
+      }
+
+      let inner = self.heap[head_ref].tail;
+      (inner >= ATOM_LIMIT && self.heap[inner].tag == Tag::Id)
+        .then_some(Value::from(inner))
+        .unwrap_or(head)
+    }
+
+    /// Returns the inner field type when a constructor field carries a strictness marker. This exists so parser payload
+    /// lowering can preserve strictness as metadata instead of leaking it into later declaration consumers as a wrapped
+    /// type node. The invariant is that successful results come only from the canonical `Strict field_type` application
+    /// shape.
     fn strict_constructor_field_type(&self, field: Value) -> Option<Value> {
       let field_ref = RawValue::from(field);
       if field_ref < ATOM_LIMIT || self.heap[field_ref].tag != Tag::Ap {
@@ -2624,9 +2652,9 @@ impl<'ctx /* 'fix quotes */> Parser<'ctx /* 'fix quotes */> {
       Some(self.heap[field_ref].tail.into())
     }
 
-    /// Converts one parsed constructor field node into parser-facing payload metadata.
-    /// This exists so all constructor-field lowering uses one owner for strictness extraction and stored type payload shape.
-    /// The invariant is that the returned payload preserves source-order field type plus a separate strictness flag.
+    /// Converts one parsed constructor field node into parser-facing payload metadata. This exists so all
+    /// constructor-field lowering uses one owner for strictness extraction and stored type payload shape. The invariant
+    /// is that the returned payload preserves source-order field type plus a separate strictness flag.
     fn constructor_field_payload(&self, field: Value) -> ParserConstructorFieldPayload {
       if let Some(type_expr) = self.strict_constructor_field_type(field) {
         ParserConstructorFieldPayload {
@@ -2641,9 +2669,10 @@ impl<'ctx /* 'fix quotes */> Parser<'ctx /* 'fix quotes */> {
       }
     }
 
-    /// Returns the constructor head and source-order field nodes for one parsed constructor declaration.
-    /// This exists so top-level algebraic declaration lowering can normalize both prefix and infix constructor forms through one application-spine view.
-    /// The invariant is that successful results contain an identifier constructor head and source-order field arguments.
+    /// Returns the constructor head and source-order field nodes for one parsed constructor declaration. This exists so
+    /// top-level algebraic declaration lowering can normalize both prefix and infix constructor forms through one
+    /// application-spine view. The invariant is that successful results contain an identifier constructor head and
+    /// source-order field arguments.
     fn constructor_declaration_spine(&self, declaration: Value) -> Option<(RawValue, Vec<Value>)> {
       let mut declaration_ref = RawValue::from(declaration);
       if declaration_ref < ATOM_LIMIT {
@@ -2667,9 +2696,10 @@ impl<'ctx /* 'fix quotes */> Parser<'ctx /* 'fix quotes */> {
       Some((declaration_ref, fields))
     }
 
-    /// Builds one parser-facing constructor payload from a parsed constructor declaration tree.
-    /// This exists so active top-level algebraic declaration lowering records explicit constructor arity and field metadata before VM commit.
-    /// The invariant is that payload arity equals the number of source-order field payloads captured from the declaration spine.
+    /// Builds one parser-facing constructor payload from a parsed constructor declaration tree. This exists so active
+    /// top-level algebraic declaration lowering records explicit constructor arity and field metadata before VM commit.
+    /// The invariant is that payload arity equals the number of source-order field payloads captured from the
+    /// declaration spine.
     fn constructor_payload_from_declaration(
       &mut self,
       declaration: Value,
