@@ -6,7 +6,7 @@ use crate::compiler::{
 };
 use crate::data::api::{
     ApNodeRef, DataPair, FreeFormalBindingRef, HeapObjectProxy, IdentifierValueTypeData,
-    IdentifierValueTypeKind, IdentifierValueTypeRef,
+    IdentifierValueTypeKind, IdentifierValueTypeRef, TypeExprRef,
 };
 use crate::vm::load::LoadScriptForm;
 use std::path::PathBuf;
@@ -458,9 +458,9 @@ fn load_file_accepts_declared_unary_constructor_application_in_formal() {
     assert_eq!(nothing_metadata.arity(&vm.heap), 0);
     assert_eq!(just_metadata.arity(&vm.heap), 1);
 
-    let just_type = just.get_type(&vm.heap);
-    assert!(vm.heap.is_arrow_type(just_type));
-    let outer_arrow = ApNodeRef::from_ref(just_type.into());
+    let just_type = just.get_type_expr(&vm.heap);
+    assert!(vm.heap.is_arrow_type(just_type.value()));
+    let outer_arrow = ApNodeRef::from_ref(just_type.value().into());
     let operator_application = outer_arrow
         .function_application(&vm.heap)
         .expect("expected binary arrow application");
@@ -521,12 +521,8 @@ fn load_file_commits_strict_constructor_field_metadata() {
 
     let first_field_type = first_field.type_expr(&vm.heap);
     let second_field_type = second_field.type_expr(&vm.heap);
-    let first_field_raw: RawValue = first_field_type.into();
-    let second_field_raw: RawValue = second_field_type.into();
-    assert_eq!(vm.heap[first_field_raw].tag, Tag::TypeVar);
-    assert_eq!(vm.heap[first_field_raw].tail, 1);
-    assert_eq!(vm.heap[second_field_raw].tag, Tag::TypeVar);
-    assert_eq!(vm.heap[second_field_raw].tail, 2);
+    assert_eq!(first_field_type.type_variable_ordinal(&vm.heap), Some(1));
+    assert_eq!(second_field_type.type_variable_ordinal(&vm.heap), Some(2));
 }
 
 #[test]
@@ -739,8 +735,7 @@ fn load_file_commits_narrow_spec_and_type_substrate_into_current_file() {
         .get_identifier("Nothing")
         .expect("expected Nothing constructor to exist");
 
-    let entry_type_raw: RawValue = entry.get_type(&vm.heap).into();
-    assert_eq!(entry_type_raw, Type::Type.into());
+    assert!(entry.get_type_expr(&vm.heap).is_builtin_type(Type::Type));
     assert_eq!(
         thing
             .get_value(&vm.heap)
@@ -755,8 +750,11 @@ fn load_file_commits_narrow_spec_and_type_substrate_into_current_file() {
             .typed_kind(&vm.heap),
         Some(IdentifierValueTypeKind::Algebraic)
     );
-    assert_eq!(just.get_type(&vm.heap), maybe.into());
-    assert_eq!(nothing.get_type(&vm.heap), maybe.into());
+    assert_eq!(just.get_type_expr(&vm.heap), TypeExprRef::new(maybe.into()));
+    assert_eq!(
+        nothing.get_type_expr(&vm.heap),
+        TypeExprRef::new(maybe.into())
+    );
 
     let current_file = vm.files.head(&vm.heap).expect("expected current file");
     assert_eq!(current_file.get_definienda(&vm.heap).len(&vm.heap), 5);
@@ -778,8 +776,8 @@ fn load_file_commits_multi_name_specification_payloads() {
 
     let f = vm.heap.get_identifier("f").expect("expected f identifier");
     let g = vm.heap.get_identifier("g").expect("expected g identifier");
-    assert!(vm.heap.is_arrow_type(f.get_type(&vm.heap)));
-    assert!(vm.heap.is_arrow_type(g.get_type(&vm.heap)));
+    assert!(vm.heap.is_arrow_type(f.get_type_expr(&vm.heap).value()));
+    assert!(vm.heap.is_arrow_type(g.get_type_expr(&vm.heap).value()));
 
     let current_file = vm.files.head(&vm.heap).expect("expected current file");
     assert_eq!(current_file.get_definienda(&vm.heap).len(&vm.heap), 2);
@@ -860,10 +858,10 @@ fn load_file_commits_algebraic_type_lhs_arity_with_nullary_constructors() {
         IdentifierValueTypeKind::Algebraic
     );
 
-    let none_type = none.get_type(&vm.heap);
-    let nil_opt_type = nil_opt.get_type(&vm.heap);
+    let none_type = none.get_type_expr(&vm.heap);
+    let nil_opt_type = nil_opt.get_type_expr(&vm.heap);
     for constructor_type in [none_type, nil_opt_type] {
-        let applied = ApNodeRef::from_ref(constructor_type.into());
+        let applied = ApNodeRef::from_ref(constructor_type.value().into());
         assert_eq!(Value::from(applied.function_raw(&vm.heap)), option.into());
         assert!(vm
             .heap
@@ -887,8 +885,7 @@ fn parse_source_text_commits_narrow_free_substrate_and_marks_file_unshareable() 
         .heap
         .get_identifier("x")
         .expect("expected free identifier to exist");
-    let x_type_raw: RawValue = x.get_type(&vm.heap).into();
-    assert_eq!(x_type_raw, RawValue::from(Type::Number));
+    assert!(x.get_type_expr(&vm.heap).is_builtin_type(Type::Number));
 
     assert_eq!(vm.free_identifiers.len(&vm.heap), 1);
     let free_binding = vm
@@ -896,10 +893,9 @@ fn parse_source_text_commits_narrow_free_substrate_and_marks_file_unshareable() 
         .head(&vm.heap)
         .expect("expected one free formal binding");
     assert_eq!(free_binding.identifier(&vm.heap), x);
-    assert_eq!(
-        RawValue::from(free_binding.type_expr(&vm.heap)),
-        RawValue::from(Type::Number)
-    );
+    assert!(free_binding
+        .type_expr(&vm.heap)
+        .is_builtin_type(Type::Number));
     let original_name = free_binding.original_name_metadata(&vm.heap);
     assert_eq!(original_name.right_value(&vm.heap), 0.into());
     let expected_original_name_ref = vm.heap.string(x.get_name(&vm.heap));
@@ -932,10 +928,10 @@ fn parse_source_text_commits_rich_specification_type_expr() {
         .heap
         .get_identifier("map")
         .expect("expected specification identifier");
-    let map_type = map.get_type(&vm.heap);
-    assert!(vm.heap.is_arrow_type(map_type));
+    let map_type = map.get_type_expr(&vm.heap);
+    assert!(vm.heap.is_arrow_type(map_type.value()));
 
-    let outer_arrow = ApNodeRef::from_ref(map_type.into());
+    let outer_arrow = ApNodeRef::from_ref(map_type.value().into());
     let operator_application = outer_arrow
         .function_application(&vm.heap)
         .expect("expected binary arrow application");
@@ -977,7 +973,7 @@ fn parse_source_text_commits_rich_synonym_rhs_type_expr() {
         IdentifierValueTypeKind::Synonym
     );
 
-    let synonym_rhs: Value = vm.heap[value_type.get_ref()].tail.into();
+    let synonym_rhs = value_type.synonym_rhs_type_expr(&vm.heap).value();
     assert!(vm.heap.is_comma_type(synonym_rhs));
 
     let outer_pair = ApNodeRef::from_ref(synonym_rhs.into());
@@ -1018,9 +1014,9 @@ fn parse_source_text_commits_rich_free_binding_type_expr() {
         .heap
         .get_identifier("xs")
         .expect("expected free identifier to exist");
-    let xs_type = xs.get_type(&vm.heap);
-    assert!(vm.heap.is_list_type(xs_type));
-    let list_arg = Value::from(ApNodeRef::from_ref(xs_type.into()).argument_raw(&vm.heap));
+    let xs_type = xs.get_type_expr(&vm.heap);
+    assert!(vm.heap.is_list_type(xs_type.value()));
+    let list_arg = Value::from(ApNodeRef::from_ref(xs_type.value().into()).argument_raw(&vm.heap));
     assert_eq!(RawValue::from(list_arg), RawValue::from(Type::Char));
 
     let current_file = result
@@ -2399,8 +2395,12 @@ fn fixexports_internalizes_nested_free_id_bindings() {
     let free_name = free_id.get_name(&vm.heap);
     let original_name_ref = vm.heap.string(free_name);
     let original_name = DataPair::new(&mut vm.heap, original_name_ref.into(), 0.into());
-    let free_binding =
-        FreeFormalBindingRef::new(&mut vm.heap, free_id, original_name, Type::Undefined.into());
+    let free_binding = FreeFormalBindingRef::new(
+        &mut vm.heap,
+        free_id,
+        original_name,
+        TypeExprRef::new(Type::Undefined.into()),
+    );
     vm.free_identifiers = ConsList::new(&mut vm.heap, free_binding);
 
     vm.exported_identifiers = NIL;
@@ -2456,19 +2456,23 @@ fn unload_unsets_identifiers_reached_through_free_formal_bindings() {
     let mut vm = VM::new_for_tests();
 
     let free_id = vm.heap.make_empty_identifier("free_param");
-    free_id.set_type(&mut vm.heap, Type::Type.into());
+    free_id.set_type_expr(&mut vm.heap, TypeExprRef::new(Type::Type.into()));
     let free_name = free_id.get_name(&vm.heap);
     let original_name_ref = vm.heap.string(free_name);
     let original_name = DataPair::new(&mut vm.heap, original_name_ref.into(), 0.into());
-    let free_binding =
-        FreeFormalBindingRef::new(&mut vm.heap, free_id, original_name, Type::Type.into());
+    let free_binding = FreeFormalBindingRef::new(
+        &mut vm.heap,
+        free_id,
+        original_name,
+        TypeExprRef::new(Type::Type.into()),
+    );
     vm.free_identifiers = ConsList::new(&mut vm.heap, free_binding);
 
     vm.unload();
 
     assert!(vm.free_identifiers.is_empty());
     assert_eq!(
-        RawValue::from(free_id.get_type(&vm.heap)),
+        RawValue::from(free_id.get_datatype(&vm.heap)),
         Type::Undefined.into()
     );
     assert_eq!(
@@ -2569,13 +2573,13 @@ fn bindparams_records_missing_and_extra_bindings_and_writes_matches() {
         &mut vm.heap,
         x,
         DataPair::from_ref(x_original.get_ref()),
-        Type::Undefined.into(),
+        TypeExprRef::new(Type::Undefined.into()),
     );
     let y_formal_binding = FreeFormalBindingRef::new(
         &mut vm.heap,
         y,
         DataPair::from_ref(y_original.get_ref()),
-        Type::Undefined.into(),
+        TypeExprRef::new(Type::Undefined.into()),
     );
 
     let mut formal_list: ConsList<FreeFormalBindingRef> = ConsList::EMPTY;
@@ -2637,7 +2641,7 @@ fn bindparams_records_wrong_arity_in_detritus_and_still_writes_formal_value() {
         &mut vm.heap,
         t,
         DataPair::from_ref(t_original.get_ref()),
-        Type::Type.into(),
+        TypeExprRef::new(Type::Type.into()),
     );
     let formal_list: ConsList<FreeFormalBindingRef> = ConsList::new(&mut vm.heap, formal_binding);
 

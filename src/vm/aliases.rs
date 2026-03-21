@@ -33,7 +33,7 @@ impl VM {
                 let old: IdentifierRecordRef = alias_entry.get_old_identifier_record(&self.heap);
                 let hold = IdentifierCoreRef::from_old_identifier(&mut self.heap, old);
 
-                old.set_type(&mut self.heap, Type::Alias.into());
+                old.set_datatype(&mut self.heap, Type::Alias.into());
                 // We make old an alias of new.
                 old.set_value(&mut self.heap, new_target);
 
@@ -43,7 +43,7 @@ impl VM {
                 //     if ((id_type(new) != undef_t || id_val(new) != UNDEF) && id_type(new) != alias_t)
                 //       CLASHES = add1(new, CLASHES);
                 if let Some(new_id) = alias_entry.get_new_identifier_record(&self.heap) {
-                    let new_datatype = new_id.get_type(&self.heap);
+                    let new_datatype = new_id.get_datatype(&self.heap);
                     let new_value_field = new_id.get_value_field(&self.heap);
                     if (new_datatype != Value::from(Type::Undefined)
                         || new_value_field != Combinator::Undef.into())
@@ -94,7 +94,7 @@ impl VM {
                 if self.heap[new_target].tag == Tag::Id {
                     let new_id = IdentifierRecordRef::from_ref(new_target);
                     if new_id.get_datatype(&self.heap) != Type::Alias.into() {
-                        new_id.set_type(&mut self.heap, Type::New.into());
+                        new_id.set_datatype(&mut self.heap, Type::New.into());
                     }
                 }
             } // FIX1
@@ -158,11 +158,11 @@ impl VM {
 
             if let Some(new_id) = alias_entry.get_new_identifier_record(&self.heap) {
                 // FIX1
-                if new_id.get_type(&self.heap) == Type::New.into() {
-                    new_id.set_type(&mut self.heap, Type::Undefined.into());
+                if new_id.get_datatype(&self.heap) == Type::New.into() {
+                    new_id.set_datatype(&mut self.heap, Type::Undefined.into());
                 }
 
-                if new_id.get_type(&self.heap) == Type::Undefined.into() {
+                if new_id.get_datatype(&self.heap) == Type::Undefined.into() {
                     missing_aliases.push(&mut self.heap, old_id.get_ref());
                 } else if !self.clashes.contains(&self.heap, new_id) {
                     let new_def: IdentifierDefinitionRef = new_id.get_definition(&self.heap);

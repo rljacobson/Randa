@@ -1,8 +1,10 @@
 /*!
-This module provides a high-level API for working with heap-resident objects. It defines
-lightweight wrapper types that implement HeapObjectProxy and provide lazy accessors along with
-utilities for manipulating the underlying object on the heap. Because a proxy does not retain
-a mutable reference to the heap, most methods take such a reference as an explicit parameter.
+This module provides a high-level API for working with heap-resident objects. Most exported wrapper
+types implement HeapObjectProxy and provide lazy accessors along with utilities for manipulating the
+underlying object on the heap. It also hosts narrowly scoped semantic wrappers, such as
+`TypeExprRef`, for recursive value domains that do not correspond to one heap-cell shape. Because a
+proxy does not retain a mutable reference to the heap, most methods take such a reference as an
+explicit parameter.
 
 A HeapObjectProxy is intended to behave like a pointer to a heap object, with its methods acting like
 object->accessor() calls in C++. Proxies must therefore be lightweight and implement Copy. In general,
@@ -35,8 +37,9 @@ mod identifier_record;
 mod open_file;
 mod private_name;
 mod str_cons;
+mod type_expr;
 
-// Implementors of HeapObjectProxy (defined below)
+// HeapObjectProxy implementors and related semantic wrappers.
 pub(crate) use algebraic_constructor::*;
 pub(crate) use alias_entry::AliasEntry;
 pub(crate) use ap_node::ApNodeRef;
@@ -52,6 +55,7 @@ pub(crate) use identifier_record::*;
 pub(crate) use open_file::OpenFile;
 pub(crate) use private_name::PrivateNameRef;
 pub(crate) use str_cons::StrConsRef;
+pub(crate) use type_expr::TypeExprRef;
 
 use crate::data::{RawValue, Value};
 

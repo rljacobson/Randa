@@ -779,7 +779,7 @@ impl VM {
                         .heap
                         .get_identifier(name.as_str())
                         .unwrap_or_else(|| self.heap.make_empty_identifier(name.as_str()));
-                    let id_type = id.get_type(&self.heap);
+                    let id_type = id.get_datatype(&self.heap);
 
                     if id_type == Type::New.into() {
                         // C FIX1 path: `new_t` marks a name-clash destination.
@@ -949,7 +949,7 @@ impl VM {
                             top_item = *item_stack.last().unwrap();
                             debug_assert_eq!(self.heap[top_item].tag, Tag::Id);
                             let new_id = IdentifierRecordRef::from_ref(top_item);
-                            let new_id_type = new_id.get_type(&self.heap);
+                            let new_id_type = new_id.get_datatype(&self.heap);
                             // The id's type will be an immediate value (not a reference) in the cases in the if condition below.
                             // Likewise for the id's value.
                             if new_id_type != Type::New.into()
@@ -1009,7 +1009,8 @@ impl VM {
                                     IdentifierDefinitionRef::from_ref(item_stack.pop().unwrap()),
                                 );
                                 // type
-                                new_id.set_type(&mut self.heap, item_stack.pop().unwrap().into());
+                                new_id
+                                    .set_datatype(&mut self.heap, item_stack.pop().unwrap().into());
                                 // value
                                 new_id.set_value(
                                     &mut self.heap,

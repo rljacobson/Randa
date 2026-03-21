@@ -50,7 +50,7 @@ See [Data Representation.md](Data%20Representation.md) for a diagram of how Iden
 
 use super::{
     AlgebraicConstructorMetadataRef, ConsList, DataPair, FileInfoRef, HeapObjectProxy, HeapString,
-    LineNumber, PrivateNameRef,
+    LineNumber, PrivateNameRef, TypeExprRef,
 };
 use crate::compiler::HereInfo;
 use crate::data::{Combinator, Heap, RawValue, Tag, Type, Value};
@@ -180,7 +180,7 @@ impl HeapObjectProxy for IdentifierCoreRef {
 /// - `who` -> `IdentifierDefinitionRef`
 /// - `value` -> `Option<IdentifierValueRef>`
 /// - `name` is decoded as `HeapString` (`get_name`)
-/// - identifier-level `type` is exposed as `Value` (`get_datatype`/`get_type`)
+/// - identifier-level `type` is exposed either as the raw `datatype` slot (`get_datatype`/`get_type`) or through `TypeExprRef` when the caller knows the slot holds a real type expression (`get_type_expr`)
 ///
 /// Corresponding value-semantics type: `IdentifierRecordData`.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
@@ -243,8 +243,9 @@ impl IdentifierRecordRef {
         IdentifierDefinitionRef::from_ref(strcons_cell.tail)
     }
 
-    /// Fetches the identifier's data type from the heap resident structure. Note: This is not the data type in the
-    /// value part of the identifier heap structure.
+    /// Fetches the identifier's raw datatype slot from the heap resident structure.
+    /// This exists as the full-domain accessor for identifier type-slot payloads, including bookkeeping sentinels such as `Undefined`, `Alias`, and `New`.
+    /// The invariant is that the returned value is exactly the tail payload of `cons(strcons(name, who), type)`.
     pub fn get_datatype(&self, heap: &Heap) -> Value {
         let id_cell = heap[self.reference];
         let cons_cell = heap[id_cell.head];
@@ -285,17 +286,40 @@ impl IdentifierRecordRef {
         heap[strcons_ref].tail = definition.get_ref();
     }
 
-    /// Sets the identifier's type (not the value type)
+    /// Fetches the identifier's raw datatype slot.
+    /// This exists as a historical convenience alias over `get_datatype()` for callers that still use `type` terminology.
+    /// The invariant is that this method returns the same raw payload as `get_datatype()`.
     pub fn get_type(&self, heap: &Heap) -> Value {
-        let id_head = heap[self.reference].head;
-        heap[id_head].tail.into()
+        self.get_datatype(heap)
     }
 
-    /// Sets the identifier's type (not the value type). Note that `new_type` is of type `Value`, because user defined
-    /// types do not have type `Type`.
-    pub fn set_type(&self, heap: &mut Heap, new_type: Value) {
+    /// Fetches the identifier datatype through the `TypeExprRef` semantic wrapper.
+    /// This exists for callers that know the identifier type slot currently holds a real type-expression root rather than alias/load bookkeeping sentinels.
+    /// The invariant is that the returned wrapper references the same slot payload returned by `get_datatype()`.
+    pub fn get_type_expr(&self, heap: &Heap) -> TypeExprRef {
+        TypeExprRef::new(self.get_datatype(heap))
+    }
+
+    /// Sets the identifier's raw datatype slot.
+    /// This exists as the full-domain write surface for identifier type-slot payloads, including bookkeeping sentinels and non-`Type` user type identifiers.
+    /// The invariant is that only the datatype payload changes and the surrounding identifier heap shape remains unchanged.
+    pub fn set_datatype(&self, heap: &mut Heap, datatype: Value) {
         let id_head = heap[self.reference].head;
-        heap[id_head].tail = new_type.into()
+        heap[id_head].tail = datatype.into()
+    }
+
+    /// Sets the identifier's raw datatype slot using historical `type` terminology.
+    /// This exists as a convenience alias over `set_datatype()` for callers that still speak in terms of identifier `type` rather than `datatype`.
+    /// The invariant is that this method writes the same raw payload as `set_datatype()`.
+    pub fn set_type(&self, heap: &mut Heap, new_type: Value) {
+        self.set_datatype(heap, new_type)
+    }
+
+    /// Sets the identifier datatype through the `TypeExprRef` semantic wrapper.
+    /// This exists for callers that are writing a true type-expression root into the identifier type slot and want a typed API boundary.
+    /// The invariant is that the written slot payload is exactly `type_expr.value()`.
+    pub fn set_type_expr(&self, heap: &mut Heap, type_expr: TypeExprRef) {
+        self.set_datatype(heap, type_expr.value())
     }
 
     pub fn get_core_data(&self, heap: &Heap) -> IdentifierCoreData {
@@ -308,7 +332,7 @@ impl IdentifierRecordRef {
 
     pub fn set_core_data(&self, heap: &mut Heap, data: IdentifierCoreData) {
         self.set_definition(heap, data.definition);
-        self.set_type(heap, data.datatype);
+        self.set_datatype(heap, data.datatype);
         match data.value {
             Some(value) => self.set_value(heap, value),
             None => self.set_value(heap, IdentifierValueRef::from_ref(Combinator::Nil.into())),
@@ -334,7 +358,7 @@ impl IdentifierRecordRef {
 
         self.set_value(heap, IdentifierValueRef::from_ref(Combinator::Undef.into()));
         self.set_definition(heap, IdentifierDefinitionRef::undefined());
-        self.set_type(heap, Type::Undefined.into());
+        self.set_datatype(heap, Type::Undefined.into());
     }
 }
 
@@ -699,9 +723,9 @@ impl HeapObjectProxy for IdentifierValueRef {
 
 /// The Department of Redundancy Department has been made redundant. The Ministry of Synonyms and Antonyms has taken
 /// over naming duties.
-// Todo: Introduce semantic wrappers for `constructors`, `source_type`, and `basis` payloads.
-//       Blocker: these payload domains are not yet stabilized as proxy candidates in the active plan.
-//       Migration target: post-tranche candidate revalidation and proxy additions in `src/data/api/*`.
+// Todo: Introduce semantic wrappers for the remaining raw `constructors` and `basis` payloads.
+//       Blocker: the value-semantics decode surface still lags the richer typed query seams.
+//       Migration target: post-tranche lift of the remaining raw payloads in `src/data/api/*`.
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 pub enum IdentifierValueTypeData {
     Algebraic {
@@ -751,7 +775,7 @@ pub enum IdentifierValueTypeKind {
 ///
 /// Component mapping:
 /// - `kind` -> `IdentifierValueTypeKind` (`get_identifier_value_type_kind`)
-/// - `info` is shape-dependent payload (constructors/source_type/basis/NIL)
+/// - `info` is shape-dependent payload accessed through kind-specific query seams
 ///
 /// Corresponding value-semantics type: `IdentifierValueTypeData`.
 pub struct IdentifierValueTypeRef {
@@ -806,7 +830,7 @@ impl IdentifierValueTypeRef {
             .expect("Identifier value type discriminant is not a valid IdentifierValueTypeKind.")
     }
 
-    /// Returns the committed constructor-metadata list for an algebraic type value.
+    /// Returns the constructor-metadata list for an algebraic type value.
     /// This exists so load/typecheck consumers can access algebraic constructor facts through one typed query seam.
     /// The invariant is that only algebraic typed values produce a list here; all other typed kinds return `None`.
     pub fn algebraic_constructor_metadata(
@@ -815,6 +839,18 @@ impl IdentifierValueTypeRef {
     ) -> Option<ConsList<AlgebraicConstructorMetadataRef>> {
         (self.get_identifier_value_type_kind(heap) == IdentifierValueTypeKind::Algebraic)
             .then(|| ConsList::from_ref(heap[self.reference].tail))
+    }
+
+    /// Returns the synonym RHS type-expression payload. This exists so VM-side synonym consumers
+    /// read the richer RHS through the shared `TypeExprRef` seam. The invariant is that callers use
+    /// this only for synonym typed values, and the returned wrapper references the `tail` payload
+    /// of the value-type cell.
+    pub fn synonym_rhs_type_expr(&self, heap: &Heap) -> TypeExprRef {
+        debug_assert_eq!(
+            self.get_identifier_value_type_kind(heap),
+            IdentifierValueTypeKind::Synonym
+        );
+        TypeExprRef::new(heap[self.reference].tail.into())
     }
 }
 

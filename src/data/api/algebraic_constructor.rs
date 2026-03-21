@@ -1,5 +1,5 @@
 /*!
-Typed proxies for committed algebraic constructor metadata.
+Typed proxies for algebraic constructor metadata.
 
 Algebraic type identifiers store declaration-side constructor information in two related heap
 shapes:
@@ -14,12 +14,12 @@ shapes:
 load/typecheck/codegen consume constructor declaration facts after parser-local trees are gone.
 */
 
-use super::{ConsList, HeapObjectProxy, IdentifierRecordRef};
-use crate::data::{Combinator, Heap, RawValue, Value};
+use super::{ConsList, HeapObjectProxy, IdentifierRecordRef, TypeExprRef};
+use crate::data::{Combinator, Heap, RawValue};
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub struct AlgebraicConstructorFieldParts {
-    pub type_expr: Value,
+    pub type_expr: TypeExprRef,
     pub is_strict: bool,
 }
 
@@ -31,19 +31,19 @@ pub struct AlgebraicConstructorMetadataParts {
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
-/// Reference-semantics view of one committed constructor-field metadata entry.
+/// Reference-semantics view of one constructor-field metadata entry.
 ///
 /// Heap shape mapped by this proxy:
 /// `cons(field_type, strict_flag)` where `strict_flag` is `True` or `False`.
 ///
-/// This proxy is used inside committed algebraic constructor metadata so later phases can inspect
-/// field types and strict-field markers without depending on parser-local declaration trees.
+/// This proxy is used inside algebraic constructor metadata so later phases can inspect field
+/// types and strict-field markers without depending on parser-local declaration trees.
 pub struct AlgebraicConstructorFieldRef {
     reference: RawValue,
 }
 
 impl AlgebraicConstructorFieldRef {
-    /// Constructs one committed algebraic constructor-field metadata cell.
+    /// Constructs one algebraic constructor-field metadata cell.
     /// This exists so declaration commit can encode field type/strictness facts through a typed proxy instead of open-coding cons pairs.
     /// The invariant is that the heap shape remains `cons(field_type, strict_flag)` where `strict_flag` is `True` or `False`.
     pub fn new(heap: &mut Heap, parts: AlgebraicConstructorFieldParts) -> Self {
@@ -52,26 +52,26 @@ impl AlgebraicConstructorFieldRef {
         } else {
             Combinator::False.into()
         };
-        let reference = heap.cons_ref(parts.type_expr, strict_flag).into();
+        let reference = heap.cons_ref(parts.type_expr.value(), strict_flag).into();
 
         Self { reference }
     }
 
-    /// Returns the committed field type expression.
-    /// This exists so constructor metadata consumers can read field type payloads through one typed seam.
-    /// The invariant is that the returned value is the `head` payload of the field metadata cell.
-    pub fn type_expr(&self, heap: &Heap) -> Value {
-        heap[self.reference].head.into()
+    /// Returns the field type expression.
+    /// This exists so constructor metadata consumers can read field type payloads through the shared `TypeExprRef` seam.
+    /// The invariant is that the returned wrapper references the exact `head` payload of the field metadata cell.
+    pub fn type_expr(&self, heap: &Heap) -> TypeExprRef {
+        TypeExprRef::new(heap[self.reference].head.into())
     }
 
-    /// Returns whether the committed field carries a strictness marker.
+    /// Returns whether the field carries a strictness marker.
     /// This exists so later declaration/typecheck/codegen consumers can query strict-field positions without re-parsing type shapes.
     /// The invariant is that only the canonical `True` strict flag decodes as strict here.
     pub fn is_strict(&self, heap: &Heap) -> bool {
         heap[self.reference].tail == RawValue::from(Combinator::True)
     }
 
-    /// Decodes the committed field metadata into value-semantics form.
+    /// Decodes the field metadata into value-semantics form.
     /// This exists so tests and higher-level consumers can read the full field payload through one proxy-owned helper.
     /// The invariant is that the decoded payload matches `type_expr()` plus `is_strict()` for the same heap cell.
     pub fn get_data(&self, heap: &Heap) -> AlgebraicConstructorFieldParts {
@@ -93,20 +93,20 @@ impl HeapObjectProxy for AlgebraicConstructorFieldRef {
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
-/// Reference-semantics view of one committed constructor metadata entry.
+/// Reference-semantics view of one constructor metadata entry.
 ///
 /// Heap shape mapped by this proxy:
 /// `cons(constructor_id, cons(arity, fields))` where `fields` is a source-order cons list of
 /// `AlgebraicConstructorFieldRef` cells.
 ///
 /// This proxy is used by algebraic type metadata consumers to recover constructor order, declared
-/// arity, and per-field declaration facts from committed state.
+/// arity, and per-field declaration facts from VM state.
 pub struct AlgebraicConstructorMetadataRef {
     reference: RawValue,
 }
 
 impl AlgebraicConstructorMetadataRef {
-    /// Constructs one committed algebraic constructor-metadata entry.
+    /// Constructs one algebraic constructor-metadata entry.
     /// This exists so algebraic type info can own constructor identifier, arity, and field metadata through one typed heap proxy.
     /// The invariant is that the heap shape remains `cons(constructor, cons(arity, fields))`.
     pub fn new(heap: &mut Heap, parts: AlgebraicConstructorMetadataParts) -> Self {
@@ -116,7 +116,7 @@ impl AlgebraicConstructorMetadataRef {
         Self { reference }
     }
 
-    /// Returns the constructor identifier for this committed metadata entry.
+    /// Returns the constructor identifier for this metadata entry.
     /// This exists so constructor-order and constructor-lookup consumers can recover the owning constructor without reopening heap shape details.
     /// The invariant is that the returned identifier is the `head` payload of the metadata cell.
     pub fn constructor(&self, heap: &Heap) -> IdentifierRecordRef {
@@ -124,14 +124,14 @@ impl AlgebraicConstructorMetadataRef {
     }
 
     /// Returns the declared arity for this constructor.
-    /// This exists so formal checking and later codegen can consume constructor arity from committed declaration metadata.
+    /// This exists so formal checking and later codegen can consume constructor arity from declaration metadata.
     /// The invariant is that the returned value is the `head` of the nested metadata pair.
     pub fn arity(&self, heap: &Heap) -> isize {
         let metadata_ref = heap[self.reference].tail;
         heap[metadata_ref].head
     }
 
-    /// Returns the committed source-order field metadata list for this constructor.
+    /// Returns the source-order field metadata list for this constructor.
     /// This exists so downstream consumers can traverse field payloads without depending on parser-local declaration trees.
     /// The invariant is that the returned value is the `tail` of the nested metadata pair.
     pub fn fields(&self, heap: &Heap) -> ConsList<AlgebraicConstructorFieldRef> {

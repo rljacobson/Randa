@@ -2,7 +2,7 @@ use super::*;
 use crate::compiler::Token;
 use crate::data::api::{
     AlgebraicConstructorMetadataRef, IdentifierRecordRef, IdentifierValueTypeKind,
-    IdentifierValueTypeRef,
+    IdentifierValueTypeRef, TypeExprRef,
 };
 use crate::data::heap::is_capitalized;
 use crate::data::{Heap, RawValue, Tag, Type, Value, ATOM_LIMIT};
@@ -59,7 +59,7 @@ pub(super) fn run_partial_typecheck(
             {
                 collect_type_expression_issues(
                     heap,
-                    identifier.get_type(heap),
+                    identifier.get_type_expr(heap),
                     &mut undefined_type_names,
                     &mut non_type_identifiers,
                     &mut arity_mismatch_type_names,
@@ -99,7 +99,7 @@ pub(super) fn run_partial_typecheck(
                         IdentifierValueTypeKind::Synonym => {
                             collect_type_expression_issues(
                                 heap,
-                                synonym_rhs_type_expr(heap, value_type),
+                                value_type.synonym_rhs_type_expr(heap),
                                 &mut undefined_type_names,
                                 &mut non_type_identifiers,
                                 &mut arity_mismatch_type_names,
@@ -438,28 +438,21 @@ fn collect_unresolved_identifier_references(
     }
 }
 
-/// Walks one committed type-expression subtree and records typename classification and arity issues.
+/// Walks one type-expression subtree and records typename classification and arity issues.
 /// This exists so the typecheck boundary owns spec/type meta-checking over the active source-fed substrate.
 /// The invariant is that typename leaves are classified and arity-checked from the canonical application spine view.
 fn collect_type_expression_issues(
     heap: &mut Heap,
-    type_expr: Value,
+    type_expr: TypeExprRef,
     undefined_type_names: &mut ConsList<IdentifierRecordRef>,
     non_type_identifiers: &mut ConsList<IdentifierRecordRef>,
     arity_mismatch_type_names: &mut ConsList<IdentifierRecordRef>,
 ) {
-    let raw_reference: RawValue = type_expr.into();
-    if raw_reference < ATOM_LIMIT {
-        return;
-    }
-
-    if let Some((identifier, applied_argument_count, arguments)) =
-        type_application_spine(heap, type_expr)
-    {
+    if let Some((identifier, arguments)) = type_expr.identifier_head_application_spine(heap) {
         match classify_type_identifier_reference(heap, identifier) {
             TypeIdentifierReferenceKind::ValidTypeName => {
                 if let Some(expected_arity) = type_identifier_arity(heap, identifier) {
-                    if expected_arity != applied_argument_count {
+                    if expected_arity != arguments.len() {
                         arity_mismatch_type_names.insert_ordered(heap, identifier);
                     }
                 }
@@ -484,34 +477,32 @@ fn collect_type_expression_issues(
         return;
     }
 
-    match heap[raw_reference].tag {
-        Tag::Id => {}
-        Tag::Cons | Tag::Pair | Tag::TCons => {
-            collect_type_expression_issues(
-                heap,
-                heap[raw_reference].head.into(),
-                undefined_type_names,
-                non_type_identifiers,
-                arity_mismatch_type_names,
-            );
-            collect_type_expression_issues(
-                heap,
-                heap[raw_reference].tail.into(),
-                undefined_type_names,
-                non_type_identifiers,
-                arity_mismatch_type_names,
-            );
-        }
-        Tag::Label | Tag::Show | Tag::Share => {
-            collect_type_expression_issues(
-                heap,
-                heap[raw_reference].tail.into(),
-                undefined_type_names,
-                non_type_identifiers,
-                arity_mismatch_type_names,
-            );
-        }
-        _ => {}
+    if let Some((head, tail)) = type_expr.binary_children(heap) {
+        collect_type_expression_issues(
+            heap,
+            head,
+            undefined_type_names,
+            non_type_identifiers,
+            arity_mismatch_type_names,
+        );
+        collect_type_expression_issues(
+            heap,
+            tail,
+            undefined_type_names,
+            non_type_identifiers,
+            arity_mismatch_type_names,
+        );
+        return;
+    }
+
+    if let Some(tail) = type_expr.tail_child(heap) {
+        collect_type_expression_issues(
+            heap,
+            tail,
+            undefined_type_names,
+            non_type_identifiers,
+            arity_mismatch_type_names,
+        );
     }
 }
 
@@ -704,32 +695,21 @@ fn committed_constructor_metadata(
     None
 }
 
-/// Returns the parent algebraic type identifier implied by a constructor's committed type.
+/// Returns the parent algebraic type identifier implied by a constructor's type.
 /// This exists so constructor metadata lookup can recover the parent declaration owner without depending on parser-local side tables.
 /// The invariant is that the returned identifier is the head of the constructor result-type application spine after stripping declared field arrows.
 fn constructor_parent_type_identifier(
     heap: &Heap,
     constructor: IdentifierRecordRef,
 ) -> Option<IdentifierRecordRef> {
-    let mut result_type = constructor.get_type(heap);
-    let mut result_type_ref: RawValue = result_type.into();
-    while result_type_ref >= ATOM_LIMIT && heap.is_arrow_type(result_type) {
-        result_type = heap[result_type_ref].tail.into();
-        result_type_ref = result_type.into();
+    let mut result_type = constructor.get_type_expr(heap);
+    while let Some(next_result_type) = result_type.arrow_result_type(heap) {
+        result_type = next_result_type;
     }
 
-    type_application_spine(heap, result_type).map(|(identifier, _, _)| identifier)
-}
-
-/// Projects the committed synonym RHS type-expression payload from a typed type-identifier value.
-/// This exists so synonym meta-checking reads the parser-committed RHS payload through one subsystem-owned seam.
-/// The invariant is that the returned value is the `tail` payload of the `value_type` node for synonym type identifiers.
-fn synonym_rhs_type_expr(heap: &Heap, value_type: IdentifierValueTypeRef) -> Value {
-    debug_assert_eq!(
-        value_type.get_identifier_value_type_kind(heap),
-        IdentifierValueTypeKind::Synonym
-    );
-    heap[value_type.get_ref()].tail.into()
+    result_type
+        .identifier_head_application_spine(heap)
+        .map(|(identifier, _)| identifier)
 }
 
 /// Projects the committed basis payload from a typed abstract type-identifier value.
@@ -757,9 +737,9 @@ enum ExpressionIdentifierReferenceKind {
     TypeNameUsedAsIdentifier,
 }
 
-/// Classifies one identifier leaf in a committed type expression.
+/// Classifies one identifier leaf in a type expression.
 /// This exists so the partial typecheck boundary uses one owner for undefined-typename vs wrong-kind diagnostics.
-/// The invariant is that only identifiers whose committed type slot is `type_t` are accepted as legal typename leaves.
+/// The invariant is that only identifiers whose type slot is `type_t` are accepted as legal typename leaves.
 fn classify_type_identifier_reference(
     heap: &Heap,
     identifier: IdentifierRecordRef,
@@ -797,39 +777,6 @@ fn classify_expression_identifier_reference(
     } else {
         ExpressionIdentifierReferenceKind::ValidRuntimeIdentifier
     }
-}
-
-/// Returns the canonical application-spine view for a type-expression rooted at an identifier head.
-/// This exists so typename classification and arity checking use one normalized representation.
-/// The invariant is that returned `applied_argument_count` equals `arguments.len()` and counts only explicit applied arguments.
-fn type_application_spine(
-    heap: &Heap,
-    type_expr: Value,
-) -> Option<(IdentifierRecordRef, usize, Vec<Value>)> {
-    let mut raw_reference: RawValue = type_expr.into();
-    if raw_reference < ATOM_LIMIT {
-        return None;
-    }
-
-    let mut arguments = Vec::new();
-    while heap[raw_reference].tag == Tag::Ap {
-        arguments.push(heap[raw_reference].tail.into());
-        raw_reference = heap[raw_reference].head;
-        if raw_reference < ATOM_LIMIT {
-            return None;
-        }
-    }
-
-    if heap[raw_reference].tag != Tag::Id {
-        return None;
-    }
-
-    arguments.reverse();
-    Some((
-        IdentifierRecordRef::from_ref(raw_reference),
-        arguments.len(),
-        arguments,
-    ))
 }
 
 /// Returns the declared arity for a legal typename identifier when available.

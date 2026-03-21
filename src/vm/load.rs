@@ -11,7 +11,7 @@ use crate::compiler::{token::ParserLookahead, Token};
 use crate::data::api::{
     AlgebraicConstructorFieldParts, AlgebraicConstructorFieldRef,
     AlgebraicConstructorMetadataParts, AlgebraicConstructorMetadataRef, ConsList,
-    IdentifierValueTypeKind,
+    IdentifierValueTypeKind, TypeExprRef,
 };
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -837,7 +837,7 @@ impl VM {
         //   cons(datapair(source_name, 0), here_info)
         // instead of bare `here_info`.
         let definition = identifier.get_definition(&self.heap);
-        if RawValue::from(identifier.get_type(&self.heap)) == RawValue::from(Type::Type)
+        if RawValue::from(identifier.get_datatype(&self.heap)) == RawValue::from(Type::Type)
             && !definition.is_undefined()
         {
             let definition_ref = definition.get_ref();
@@ -1270,7 +1270,7 @@ impl VM {
         let definition_metadata = self.definition_metadata_from_anchor(definition.anchor);
 
         identifier.set_definition(&mut self.heap, definition_metadata);
-        identifier.set_type(&mut self.heap, Type::Undefined.into());
+        identifier.set_datatype(&mut self.heap, Type::Undefined.into());
         identifier.set_value_from_data(
             &mut self.heap,
             IdentifierValueData::Arbitrary(definition.body.into()),
@@ -1285,7 +1285,8 @@ impl VM {
         specification: &ParserSpecificationPayload,
     ) {
         let identifier = IdentifierRecordRef::from_ref(specification.identifier);
-        identifier.set_type(&mut self.heap, specification.type_expr);
+        let type_expr = TypeExprRef::new(specification.type_expr);
+        identifier.set_type_expr(&mut self.heap, type_expr);
 
         self.push_definiendum_once(current_file, specification.identifier);
     }
@@ -1299,7 +1300,7 @@ impl VM {
         let type_identifier = IdentifierRecordRef::from_ref(type_declaration.type_identifier);
         let definition_metadata = self.definition_metadata_from_anchor(type_declaration.anchor);
         type_identifier.set_definition(&mut self.heap, definition_metadata);
-        type_identifier.set_type(&mut self.heap, Type::Type.into());
+        type_identifier.set_type_expr(&mut self.heap, TypeExprRef::new(Type::Type.into()));
         let info = if type_declaration.kind == IdentifierValueTypeKind::Algebraic {
             self.commit_algebraic_type_constructor_info(
                 type_declaration.type_identifier,
@@ -1332,7 +1333,7 @@ impl VM {
         let definition_metadata = self.definition_metadata_from_anchor(constructor_payload.anchor);
         constructor.set_definition(&mut self.heap, definition_metadata);
         let constructor_type = self.build_declared_constructor_type(constructor_payload);
-        constructor.set_type(&mut self.heap, constructor_type);
+        constructor.set_type_expr(&mut self.heap, TypeExprRef::new(constructor_type));
         let constructor_index = self.constructor_ordinal_in_parent_type(parent_type, constructor);
         let constructor_value =
             ConstructorRef::new(&mut self.heap, constructor_index, constructor.into());
@@ -1403,7 +1404,7 @@ impl VM {
                         let field_ref = AlgebraicConstructorFieldRef::new(
                             &mut self.heap,
                             AlgebraicConstructorFieldParts {
-                                type_expr: field.type_expr,
+                                type_expr: TypeExprRef::new(field.type_expr),
                                 is_strict: field.is_strict,
                             },
                         );
@@ -1457,8 +1458,9 @@ impl VM {
                 constructor_payload.parent_type_arity,
             ),
             |result_type, field| {
+                let field_type = TypeExprRef::new(field.type_expr);
                 self.heap
-                    .apply2(Type::Arrow.into(), field.type_expr, result_type)
+                    .apply2(Type::Arrow.into(), field_type.value(), result_type)
             },
         )
     }
@@ -1473,10 +1475,11 @@ impl VM {
         for free_binding in free_bindings {
             let identifier = IdentifierRecordRef::from_ref(free_binding.identifier);
             let definition_metadata = self.definition_metadata_from_anchor(free_binding.anchor);
+            let type_expr = TypeExprRef::new(free_binding.type_expr);
             identifier.set_definition(&mut self.heap, definition_metadata);
-            identifier.set_type(&mut self.heap, free_binding.type_expr);
+            identifier.set_type_expr(&mut self.heap, type_expr);
 
-            if RawValue::from(free_binding.type_expr) == RawValue::from(Type::Type) {
+            if type_expr.is_builtin_type(Type::Type) {
                 let free_type = IdentifierValueRef::from_type_identifier_parts(
                     &mut self.heap,
                     TypeIdentifierValueParts {
@@ -1491,12 +1494,8 @@ impl VM {
 
             let original_name_ref = self.heap.string(identifier.get_name(&self.heap));
             let original_name = DataPair::new(&mut self.heap, original_name_ref.into(), 0.into());
-            let formal_binding = FreeFormalBindingRef::new(
-                &mut self.heap,
-                identifier,
-                original_name,
-                free_binding.type_expr,
-            );
+            let formal_binding =
+                FreeFormalBindingRef::new(&mut self.heap, identifier, original_name, type_expr);
             formal_bindings.push(&mut self.heap, formal_binding);
             self.push_definiendum_once(current_file, free_binding.identifier);
         }

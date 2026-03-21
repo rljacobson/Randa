@@ -1,6 +1,6 @@
-use crate::data::{Heap, RawValue, Tag, Value};
+use crate::data::{Heap, RawValue, Tag};
 
-use super::{DataPair, HeapObjectProxy, IdentifierRecordRef};
+use super::{DataPair, HeapObjectProxy, IdentifierRecordRef, TypeExprRef};
 
 /// A proxy for `%free` formal-binding entries stored as `cons(id, cons(datapair(original_name, 0), type))`.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
@@ -16,9 +16,9 @@ impl FreeFormalBindingRef {
         heap: &mut Heap,
         identifier: IdentifierRecordRef,
         original_name_metadata: DataPair,
-        type_expr: Value,
+        type_expr: TypeExprRef,
     ) -> Self {
-        let payload = heap.cons_ref(original_name_metadata.into(), type_expr);
+        let payload = heap.cons_ref(original_name_metadata.into(), type_expr.value());
         FreeFormalBindingRef {
             reference: heap.cons_ref(identifier.into(), payload).into(),
         }
@@ -44,13 +44,13 @@ impl FreeFormalBindingRef {
     }
 
     /// Returns the type payload for this `%free` formal-binding entry.
-    /// This exists so `%free` consumers can project the binding type without repeating nested-cons indexing.
-    /// The invariant is that the returned value is the tail of the inner cons cell.
-    pub fn type_expr(&self, heap: &Heap) -> Value {
+    /// This exists so `%free` consumers can project the binding type through the shared `TypeExprRef` seam without repeating nested-cons indexing.
+    /// The invariant is that the returned wrapper references the tail payload of the inner cons cell.
+    pub fn type_expr(&self, heap: &Heap) -> TypeExprRef {
         let payload_ref = heap[self.reference].tail;
         debug_assert_eq!(heap[self.reference].tag, Tag::Cons);
         debug_assert_eq!(heap[payload_ref].tag, Tag::Cons);
-        heap[payload_ref].tail.into()
+        TypeExprRef::new(heap[payload_ref].tail.into())
     }
 }
 
