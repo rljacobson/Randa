@@ -77,6 +77,19 @@ pub enum ExportValidationError {
     BlockedByUndefinedNames,
 }
 
+/// Reports `%include` materialization and modifier-application failures from `src/vm/load.rs`.
+#[derive(Debug, Error)]
+pub enum IncludeDirectiveError {
+    #[error("Included source contains syntax errors: {path}")]
+    SyntaxErrorsPresent { path: String },
+    #[error("Include modifier references a name not defined in included file: {name}")]
+    ModifierTargetNotFound { name: String },
+    #[error("Include rename target already defined: {name}")]
+    RenameDestinationClash { name: String },
+    #[error("Constructor renaming in %include modifiers is not yet supported: {name}")]
+    UnsupportedConstructorRename { name: String },
+}
+
 /// Reports semantic and type failures from the typecheck boundary in `src/vm/typecheck.rs`.
 #[derive(Debug, Error)]
 pub enum TypecheckError {
@@ -146,6 +159,8 @@ pub enum LoadFileError {
     SourceInput(#[from] SourceInputError),
     #[error(transparent)]
     Parse(#[from] SourceParseError),
+    #[error(transparent)]
+    IncludeDirective(#[from] IncludeDirectiveError),
     #[error(transparent)]
     ExportValidation(#[from] ExportValidationError),
     #[error(transparent)]

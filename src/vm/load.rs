@@ -3,9 +3,10 @@ use super::*;
 use crate::compiler::{
     parser::Parser, HereInfo, Lexer, ParserActivation, ParserConstructorPayload,
     ParserDeferredState, ParserDefinitionPayload, ParserEntryMode, ParserFreeBindingPayload,
-    ParserIncludeBindingPayload, ParserRunDiagnostics, ParserRunResult, ParserSessionState,
-    ParserSpecificationPayload, ParserSupportError, ParserTopLevelDirectivePayload,
-    ParserTopLevelScriptPayload, ParserTypeDeclarationPayload, ParserVmContext,
+    ParserIncludeBindingPayload, ParserIncludeModifierPayload, ParserRunDiagnostics,
+    ParserRunResult, ParserSessionState, ParserSpecificationPayload, ParserSupportError,
+    ParserTopLevelDirectivePayload, ParserTopLevelScriptPayload, ParserTypeDeclarationPayload,
+    ParserVmContext,
 };
 use crate::compiler::{token::ParserLookahead, Token};
 use crate::data::api::{
@@ -15,6 +16,7 @@ use crate::data::api::{
 };
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use crate::data::ATOM_LIMIT;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(super) enum LoadScriptForm {
@@ -495,14 +497,17 @@ impl VM {
     /// from `loadfile`.
     /// Current concrete behavior:
     /// - appends currently tracked `included_files` into `files` in list order,
+    /// - for parser-fed include requests, reads and parses include source into real include file records,
+    /// - applies the active rename/suppress modifier subset over materialized include definienda before commit,
+    /// - commits includees only after the whole request set succeeds,
     /// - clears `included_files` after append,
     /// - clears `include_rollback_files` bookkeeping for interrupted include loads.
     ///
-    /// Real `%include` discovery/compilation remains deferred to parser/typecheck integration.
+    /// Fuller recursive include compilation/load parity and deeper imported-definition semantics remain deferred.
     pub(super) fn run_mkincludes_phase(
         &mut self,
         directive_payload: Option<&ParserTopLevelDirectivePayload>,
-    ) -> Result<ConsList<FileRecord>, SourceInputError> {
+    ) -> Result<ConsList<FileRecord>, LoadFileError> {
         let Some(directive_payload) = directive_payload else {
             if self.included_files.is_empty() {
                 self.include_rollback_files = ConsList::EMPTY;
@@ -548,9 +553,107 @@ impl VM {
                 }
             })?;
             let modified_time = metadata.modified().unwrap_or_else(|_| SystemTime::now());
-            let includee =
-                FileRecord::new(&mut self.heap, path, modified_time, false, ConsList::EMPTY);
-            materialized_includees.append(&mut self.heap, includee);
+            let source_text = std::fs::read_to_string(&path).map_err(|source| {
+                SourceInputError::UnreadableFile {
+                    path: path.clone(),
+                    source,
+                }
+            })?;
+            let parse_outcome = self.parse_source_text(&path, &source_text, modified_time, false)?;
+            if parse_outcome.status == ParsePhaseStatus::SyntaxError {
+                return Err(IncludeDirectiveError::SyntaxErrorsPresent { path }.into());
+            }
+
+            let mut parsed_includees = parse_outcome.files;
+            while let Some(includee) = parsed_includees.pop(&self.heap) {
+                let mut definienda = includee.get_definienda(&self.heap);
+                let mut rewritten_definienda: Vec<IdentifierRecordRef> = Vec::new();
+                while let Some(definiendum) = definienda.pop(&self.heap) {
+                    rewritten_definienda.push(definiendum);
+                }
+
+                if include_request.modifiers.is_empty() {
+                    materialized_includees.append(&mut self.heap, includee);
+                    continue;
+                }
+
+                for modifier in &include_request.modifiers {
+                    match modifier {
+                        ParserIncludeModifierPayload::Suppress { identifier } => {
+                            let suppressed_name =
+                                IdentifierRecordRef::from_ref(*identifier).get_name(&self.heap);
+                            let matching_index = rewritten_definienda.iter().position(|definiendum| {
+                                definiendum.get_name(&self.heap) == suppressed_name
+                            });
+                            let Some(matching_index) = matching_index else {
+                                return Err(IncludeDirectiveError::ModifierTargetNotFound {
+                                    name: suppressed_name,
+                                }
+                                .into());
+                            };
+                            rewritten_definienda.remove(matching_index);
+                        }
+                        ParserIncludeModifierPayload::Rename {
+                            source,
+                            destination,
+                        } => {
+                            let original_name =
+                                IdentifierRecordRef::from_ref(*source).get_name(&self.heap);
+                            let renamed_name = IdentifierRecordRef::from_ref(*destination)
+                                .get_name(&self.heap);
+                            let matching_index = rewritten_definienda.iter().position(|definiendum| {
+                                definiendum.get_name(&self.heap) == original_name
+                            });
+                            let Some(matching_index) = matching_index else {
+                                return Err(IncludeDirectiveError::ModifierTargetNotFound {
+                                    name: original_name,
+                                }
+                                .into());
+                            };
+
+                            let original_identifier = rewritten_definienda[matching_index];
+                            let original_value_field = original_identifier.get_value_field(&self.heap);
+                            let original_value_raw: RawValue = original_value_field.into();
+                            if original_value_raw >= ATOM_LIMIT
+                                && self.heap[original_value_raw].tag == Tag::Constructor
+                            {
+                                return Err(
+                                    IncludeDirectiveError::UnsupportedConstructorRename {
+                                        name: original_identifier.get_name(&self.heap),
+                                    }
+                                    .into(),
+                                );
+                            }
+
+                            if rewritten_definienda.iter().enumerate().any(|(index, definiendum)| {
+                                index != matching_index
+                                    && definiendum.get_name(&self.heap) == renamed_name
+                            }) {
+                                return Err(IncludeDirectiveError::RenameDestinationClash {
+                                    name: renamed_name,
+                                }
+                                .into());
+                            }
+
+                            let renamed_identifier = self.intern_identifier(renamed_name.as_str());
+
+                            let original_definition = original_identifier.get_definition(&self.heap);
+                            let original_datatype = original_identifier.get_datatype(&self.heap);
+                            renamed_identifier
+                                .set_definition(&mut self.heap, original_definition);
+                            renamed_identifier.set_datatype(&mut self.heap, original_datatype);
+                            self.heap[renamed_identifier.get_ref()].tail = original_value_raw;
+                            rewritten_definienda[matching_index] = renamed_identifier;
+                        }
+                    }
+                }
+
+                includee.clear_definienda(&mut self.heap);
+                for definiendum in rewritten_definienda.into_iter().rev() {
+                    includee.push_item_onto_definienda(&mut self.heap, definiendum);
+                }
+                materialized_includees.append(&mut self.heap, includee);
+            }
         }
 
         let mut includees_to_append = materialized_includees;
@@ -1736,11 +1839,8 @@ impl VM {
         //   Tag::StrCons
         //   head = private_symbol_index
         //   tail = value
-        let restored_public_ref = match Value::from(self.heap[internal_id_ref].tail) {
-            Value::Reference(reference) => reference,
-            _ => return None,
-        };
-        if self.heap[restored_public_ref].tag != Tag::StrCons {
+        let restored_public_ref = self.heap[internal_id_ref].tail;
+        if restored_public_ref < ATOM_LIMIT || self.heap[restored_public_ref].tag != Tag::StrCons {
             return None;
         }
 
@@ -1761,13 +1861,10 @@ impl VM {
         //   restored_value_ref = ap(x, y)
         //   hd[restored_value_ref] has Tag::DataPair
         let restored_value_ref = self.heap[restored_public_ref].tail;
-        if let Value::Reference(application_ref) = Value::from(restored_value_ref) {
-            if self.heap[application_ref].tag == Tag::Ap {
-                if let Value::Reference(head_ref) = Value::from(self.heap[application_ref].head) {
-                    if self.heap[head_ref].tag == Tag::DataPair {
-                        self.heap[restored_public_ref].tail = Combinator::Undef.into();
-                    }
-                }
+        if restored_value_ref >= ATOM_LIMIT && self.heap[restored_value_ref].tag == Tag::Ap {
+            let head_ref = self.heap[restored_value_ref].head;
+            if head_ref >= ATOM_LIMIT && self.heap[head_ref].tag == Tag::DataPair {
+                self.heap[restored_public_ref].tail = Combinator::Undef.into();
             }
         }
 

@@ -1463,7 +1463,7 @@ fn load_file_include_and_exportfile_success_commits_after_validation() {
     vm.initializing = false;
 
     let include_path = unique_test_path("committed_include_target.m");
-    std::fs::write(&include_path, "+\n").expect("failed to write include source test file");
+    std::fs::write(&include_path, "1").expect("failed to write include source test file");
     let include_path_str = include_path.to_string_lossy().to_string();
 
     let source_path = unique_test_path("directive_commit_success.m");
@@ -1503,6 +1503,133 @@ fn load_file_include_and_exportfile_success_commits_after_validation() {
         include_path_str
     );
     assert!(!vm.loading);
+}
+
+#[test]
+fn load_file_materializes_included_source_definienda() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let include_path = unique_test_path("materialized_include_target.m");
+    std::fs::write(&include_path, "foo = 1\nbar = 2\n")
+        .expect("failed to write include source test file");
+    let include_path_str = include_path.to_string_lossy().to_string();
+
+    let source_path = unique_test_path("materialized_include_driver.m");
+    std::fs::write(&source_path, format!("%include \"{}\"\n", include_path_str))
+        .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+    let included_files = vm.files.rest(&vm.heap).expect("expected included file list tail");
+    let includee = included_files.head(&vm.heap).expect("expected included file");
+    assert_eq!(includee.get_file_name(&vm.heap), include_path_str);
+
+    let mut definienda = includee.get_definienda(&vm.heap);
+    let mut names = Vec::new();
+    while let Some(definiendum) = definienda.pop(&vm.heap) {
+        names.push(vm.identifier_name(definiendum));
+    }
+    names.sort();
+    assert_eq!(names, vec!["bar", "foo"]);
+}
+
+#[test]
+fn load_file_applies_include_rename_modifier_to_materialized_definienda() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let include_path = unique_test_path("rename_include_target.m");
+    std::fs::write(&include_path, "foo = 1\n")
+        .expect("failed to write include source test file");
+    let include_path_str = include_path.to_string_lossy().to_string();
+
+    let source_path = unique_test_path("rename_include_driver.m");
+    std::fs::write(
+        &source_path,
+        format!("%include \"{}\" renamed / foo\n", include_path_str),
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+    let included_files = vm.files.rest(&vm.heap).expect("expected included file list tail");
+    let includee = included_files.head(&vm.heap).expect("expected included file");
+
+    let mut definienda = includee.get_definienda(&vm.heap);
+    let mut names = Vec::new();
+    while let Some(definiendum) = definienda.pop(&vm.heap) {
+        names.push(vm.identifier_name(definiendum));
+    }
+    assert_eq!(names, vec!["renamed"]);
+}
+
+#[test]
+fn load_file_applies_include_suppress_modifier_to_materialized_definienda() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let include_path = unique_test_path("suppress_include_target.m");
+    std::fs::write(&include_path, "foo = 1\nbar = 2\n")
+        .expect("failed to write include source test file");
+    let include_path_str = include_path.to_string_lossy().to_string();
+
+    let source_path = unique_test_path("suppress_include_driver.m");
+    std::fs::write(
+        &source_path,
+        format!("%include \"{}\" -foo\n", include_path_str),
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+    let included_files = vm.files.rest(&vm.heap).expect("expected included file list tail");
+    let includee = included_files.head(&vm.heap).expect("expected included file");
+
+    let mut definienda = includee.get_definienda(&vm.heap);
+    let mut names = Vec::new();
+    while let Some(definiendum) = definienda.pop(&vm.heap) {
+        names.push(vm.identifier_name(definiendum));
+    }
+    assert_eq!(names, vec!["bar"]);
+}
+
+#[test]
+fn load_file_include_modifier_failure_leaves_no_authoritative_commit() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let include_path = unique_test_path("missing_modifier_target_include.m");
+    std::fs::write(&include_path, "foo = 1\n")
+        .expect("failed to write include source test file");
+    let include_path_str = include_path.to_string_lossy().to_string();
+
+    let source_path = unique_test_path("missing_modifier_target_driver.m");
+    std::fs::write(
+        &source_path,
+        format!("%include \"{}\" -missing\n", include_path_str),
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::IncludeDirective(
+            IncludeDirectiveError::ModifierTargetNotFound { name }
+        )) if name == "missing"
+    ));
+    assert_eq!(vm.files.len(&vm.heap), 1);
+    assert_eq!(vm.exported_identifiers, NIL);
+    assert_eq!(vm.export_paths, NIL);
+    assert_eq!(vm.export_embargoes, NIL);
 }
 
 #[test]
@@ -1938,10 +2065,10 @@ fn include_expansion_phase_appends_includees_and_clears_bookkeeping() {
     vm.files = ConsList::new(&mut vm.heap, main_file);
 
     let include_a_path = unique_test_path("include_a.m");
-    std::fs::write(&include_a_path, "+\n").expect("failed to write include_a test file");
+    std::fs::write(&include_a_path, "1").expect("failed to write include_a test file");
     let include_a_path = include_a_path.to_string_lossy().to_string();
     let include_b_path = unique_test_path("include_b.m");
-    std::fs::write(&include_b_path, "+\n").expect("failed to write include_b test file");
+    std::fs::write(&include_b_path, "1").expect("failed to write include_b test file");
     let include_b_path = include_b_path.to_string_lossy().to_string();
     let payload = ParserTopLevelDirectivePayload {
         include_requests: vec![
@@ -1953,7 +2080,7 @@ fn include_expansion_phase_appends_includees_and_clears_bookkeeping() {
 
     let result = vm.run_mkincludes_phase(Some(&payload));
 
-    assert!(result.is_ok());
+    assert!(result.is_ok(), "result={result:?}");
     assert!(vm.included_files.is_empty());
     assert!(vm.include_rollback_files.is_empty());
     assert_eq!(vm.files.len(&vm.heap), 3);
@@ -2183,6 +2310,82 @@ fn typecheck_phase_rejects_repeated_name_application_head_in_value_head_bucket()
 }
 
 #[test]
+fn typecheck_phase_non_identifier_application_head_still_binds_interior_names() {
+    let mut vm = VM::new_for_tests();
+
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("non_identifier_application_binding.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        ConsList::EMPTY,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+
+    let f = vm.heap.make_empty_identifier("f");
+    let x = vm.heap.make_empty_identifier("x");
+    let xs = vm.heap.make_empty_identifier("xs");
+    let y = vm.heap.make_empty_identifier("y");
+    let malformed_head = vm.heap.cons_ref(x.into(), xs.into());
+    let malformed_pattern = vm.heap.apply_ref(malformed_head.into(), y.into());
+    let lambda_body = vm.heap.lambda_ref(malformed_pattern.into(), y.into());
+    f.set_value_from_data(
+        &mut vm.heap,
+        IdentifierValueData::Arbitrary(lambda_body.into()),
+    );
+    current_file.push_item_onto_definienda(&mut vm.heap, f);
+
+    let inputs = typecheck::TypecheckBoundaryInputs::from_vm(&vm);
+    let result = typecheck::run_partial_typecheck(&mut vm.heap, inputs);
+
+    assert!(matches!(
+        &result.failure,
+        Some(TypecheckError::NonIdentifierApplicationHeadsInFormals { count: 1 })
+    ));
+    assert!(result.undefined_names.is_empty());
+}
+
+#[test]
+fn typecheck_phase_non_identifier_application_head_still_binds_head_subtree_names() {
+    let mut vm = VM::new_for_tests();
+
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("non_identifier_application_head_binding.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        ConsList::EMPTY,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+
+    let f = vm.heap.make_empty_identifier("f");
+    let x = vm.heap.make_empty_identifier("x");
+    let xs = vm.heap.make_empty_identifier("xs");
+    let y = vm.heap.make_empty_identifier("y");
+    let malformed_head = vm.heap.cons_ref(x.into(), xs.into());
+    let malformed_pattern = vm.heap.apply_ref(malformed_head.into(), y.into());
+    let lambda_body = vm.heap.lambda_ref(malformed_pattern.into(), xs.into());
+    f.set_value_from_data(
+        &mut vm.heap,
+        IdentifierValueData::Arbitrary(lambda_body.into()),
+    );
+    current_file.push_item_onto_definienda(&mut vm.heap, f);
+
+    let inputs = typecheck::TypecheckBoundaryInputs::from_vm(&vm);
+    let result = typecheck::run_partial_typecheck(&mut vm.heap, inputs);
+
+    assert!(matches!(
+        &result.failure,
+        Some(TypecheckError::NonIdentifierApplicationHeadsInFormals { count: 1 })
+    ));
+    assert!(result.undefined_names.is_empty());
+}
+
+#[test]
 fn typecheck_phase_rejects_infix_name_application_in_value_head_bucket() {
     let mut vm = VM::new_for_tests();
 
@@ -2218,12 +2421,12 @@ fn typecheck_phase_rejects_infix_name_application_in_value_head_bucket() {
 }
 
 #[test]
-fn typecheck_phase_invalid_application_formal_does_not_bind_interior_names() {
+fn typecheck_phase_invalid_application_formal_still_binds_interior_names() {
     let mut vm = VM::new_for_tests();
 
     let current_file = FileRecord::new(
         &mut vm.heap,
-        unique_test_path("invalid_application_nonbinding.m")
+        unique_test_path("invalid_application_binding.m")
             .to_string_lossy()
             .to_string(),
         UNIX_EPOCH,
@@ -2250,21 +2453,52 @@ fn typecheck_phase_invalid_application_formal_does_not_bind_interior_names() {
         &result.failure,
         Some(TypecheckError::ValueHeadApplicationsInFormals { count: 1 })
     ));
-    let mut undefined_names = result.undefined_names;
-    assert_eq!(undefined_names.len(&vm.heap), 1);
-    let identifier = undefined_names
-        .pop(&mut vm.heap)
-        .expect("expected one undefined name from invalid formal interior");
-    assert_eq!(vm.identifier_name(identifier), "x");
+    assert!(result.undefined_names.is_empty());
 }
 
 #[test]
-fn typecheck_phase_repeated_name_application_head_does_not_bind_interior_names() {
+fn typecheck_phase_invalid_application_formal_still_binds_head_name() {
     let mut vm = VM::new_for_tests();
 
     let current_file = FileRecord::new(
         &mut vm.heap,
-        unique_test_path("repeated_name_application_nonbinding.m")
+        unique_test_path("invalid_application_head_binding.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        ConsList::EMPTY,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+
+    let f = vm.heap.make_empty_identifier("f");
+    let g = vm.heap.make_empty_identifier("g");
+    let x = vm.heap.make_empty_identifier("x");
+    let malformed_pattern = vm.heap.apply_ref(g.into(), x.into());
+    let lambda_body = vm.heap.lambda_ref(malformed_pattern.into(), g.into());
+    f.set_value_from_data(
+        &mut vm.heap,
+        IdentifierValueData::Arbitrary(lambda_body.into()),
+    );
+    current_file.push_item_onto_definienda(&mut vm.heap, f);
+
+    let inputs = typecheck::TypecheckBoundaryInputs::from_vm(&vm);
+    let result = typecheck::run_partial_typecheck(&mut vm.heap, inputs);
+
+    assert!(matches!(
+        &result.failure,
+        Some(TypecheckError::ValueHeadApplicationsInFormals { count: 1 })
+    ));
+    assert!(result.undefined_names.is_empty());
+}
+
+#[test]
+fn typecheck_phase_repeated_name_application_head_still_binds_argument_names() {
+    let mut vm = VM::new_for_tests();
+
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("repeated_name_application_binding.m")
             .to_string_lossy()
             .to_string(),
         UNIX_EPOCH,
@@ -2292,12 +2526,7 @@ fn typecheck_phase_repeated_name_application_head_does_not_bind_interior_names()
         &result.failure,
         Some(TypecheckError::ValueHeadApplicationsInFormals { count: 1 })
     ));
-    let mut undefined_names = result.undefined_names;
-    assert_eq!(undefined_names.len(&vm.heap), 1);
-    let identifier = undefined_names
-        .pop(&mut vm.heap)
-        .expect("expected one undefined name from repeated-name formal interior");
-    assert_eq!(vm.identifier_name(identifier), "y");
+    assert!(result.undefined_names.is_empty());
 }
 
 #[test]
@@ -2410,12 +2639,12 @@ fn typecheck_phase_rejects_unsupported_arithmetic_pattern_in_formal() {
 }
 
 #[test]
-fn typecheck_phase_unsupported_arithmetic_pattern_does_not_bind_interior_names() {
+fn typecheck_phase_unsupported_arithmetic_pattern_still_binds_interior_names() {
     let mut vm = VM::new_for_tests();
 
     let current_file = FileRecord::new(
         &mut vm.heap,
-        unique_test_path("unsupported_arithmetic_nonbinding.m")
+        unique_test_path("unsupported_arithmetic_binding.m")
             .to_string_lossy()
             .to_string(),
         UNIX_EPOCH,
@@ -2444,12 +2673,7 @@ fn typecheck_phase_unsupported_arithmetic_pattern_does_not_bind_interior_names()
         &result.failure,
         Some(TypecheckError::UnsupportedArithmeticPatternsInFormals { count: 1 })
     ));
-    let mut undefined_names = result.undefined_names;
-    assert_eq!(undefined_names.len(&vm.heap), 1);
-    let identifier = undefined_names
-        .pop(&mut vm.heap)
-        .expect("expected one undefined name from unsupported arithmetic formal interior");
-    assert_eq!(vm.identifier_name(identifier), "x");
+    assert!(result.undefined_names.is_empty());
 }
 
 #[test]
@@ -2486,12 +2710,12 @@ fn typecheck_phase_rejects_unsupported_minus_pattern_in_formal() {
 }
 
 #[test]
-fn typecheck_phase_unsupported_minus_pattern_does_not_bind_interior_names() {
+fn typecheck_phase_unsupported_minus_pattern_still_binds_interior_names() {
     let mut vm = VM::new_for_tests();
 
     let current_file = FileRecord::new(
         &mut vm.heap,
-        unique_test_path("unsupported_minus_nonbinding.m")
+        unique_test_path("unsupported_minus_binding.m")
             .to_string_lossy()
             .to_string(),
         UNIX_EPOCH,
@@ -2517,12 +2741,7 @@ fn typecheck_phase_unsupported_minus_pattern_does_not_bind_interior_names() {
         &result.failure,
         Some(TypecheckError::UnsupportedArithmeticPatternsInFormals { count: 1 })
     ));
-    let mut undefined_names = result.undefined_names;
-    assert_eq!(undefined_names.len(&vm.heap), 1);
-    let identifier = undefined_names
-        .pop(&mut vm.heap)
-        .expect("expected one undefined name from unsupported minus formal interior");
-    assert_eq!(vm.identifier_name(identifier), "x");
+    assert!(result.undefined_names.is_empty());
 }
 
 #[test]

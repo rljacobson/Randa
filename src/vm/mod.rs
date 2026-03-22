@@ -46,8 +46,8 @@ use crate::{
     },
     errors::{
         fatal_error, AliasInstallError, BytecodeDecodeError, CodegenError, DumpWriteError,
-        ExportValidationError, LoadFileError, LoadScriptError, SourceInputError, SourceParseError,
-        StartupLoadError, TypecheckError,
+        ExportValidationError, IncludeDirectiveError, LoadFileError, LoadScriptError,
+        SourceInputError, SourceParseError, StartupLoadError, TypecheckError,
     },
     options::{make_version_string, setup_argument_parser, Options},
 };

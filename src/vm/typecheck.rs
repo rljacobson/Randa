@@ -538,9 +538,11 @@ fn collect_type_expression_issues(
     }
 }
 
-/// Collects identifiers bound by a pattern node into the active local-binding scope.
-/// This exists so lambda-bound names are excluded from undefined-name diagnostics in the body they bind.
-/// The invariant is that constructor heads, literal forms, canonical successor offsets, deferred arithmetic forms, and invalid application shapes do not add local bindings.
+/// Collects identifiers bound by a pattern node into the active local-binding scope. This exists so
+/// lambda-bound names are excluded from undefined-name diagnostics in the body they bind. The
+/// invariant is that constructor heads and wrapped constant/repeated-name leaves stay non-binding,
+/// while malformed active-subset applications and unsupported arithmetic forms still recurse
+/// through their interior pattern subtrees the way Miranda's pattern walkers do.
 fn collect_pattern_bound_identifiers(
     heap: &Heap,
     pattern: Value,
@@ -564,11 +566,29 @@ fn collect_pattern_bound_identifiers(
         CommittedFormalPattern::SuccessorPattern { inner, .. } => {
             collect_pattern_bound_identifiers(heap, inner, bound_identifiers);
         }
-        CommittedFormalPattern::UnsupportedPlusPattern { .. }
-        | CommittedFormalPattern::UnsupportedMinusPattern { .. }
-        | CommittedFormalPattern::ValueHeadApplication { .. }
-        | CommittedFormalPattern::RepeatedNameHeadApplication { .. }
-        | CommittedFormalPattern::NonIdentifierHeadApplication { .. } => {}
+        CommittedFormalPattern::UnsupportedPlusPattern { arguments }
+        | CommittedFormalPattern::UnsupportedMinusPattern { arguments } => {
+            for argument in arguments {
+                collect_pattern_bound_identifiers(heap, argument, bound_identifiers);
+            }
+        }
+        CommittedFormalPattern::ValueHeadApplication { head, arguments } => {
+            collect_pattern_bound_identifiers(heap, head.into(), bound_identifiers);
+            for argument in arguments {
+                collect_pattern_bound_identifiers(heap, argument, bound_identifiers);
+            }
+        }
+        CommittedFormalPattern::RepeatedNameHeadApplication { arguments, .. } => {
+            for argument in arguments {
+                collect_pattern_bound_identifiers(heap, argument, bound_identifiers);
+            }
+        }
+        CommittedFormalPattern::NonIdentifierHeadApplication { head, arguments } => {
+            collect_pattern_bound_identifiers(heap, head, bound_identifiers);
+            for argument in arguments {
+                collect_pattern_bound_identifiers(heap, argument, bound_identifiers);
+            }
+        }
         CommittedFormalPattern::StructuralCons { head, tail }
         | CommittedFormalPattern::StructuralTuple { head, tail } => {
             collect_pattern_bound_identifiers(heap, head, bound_identifiers);
