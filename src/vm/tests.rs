@@ -2148,6 +2148,76 @@ fn typecheck_phase_rejects_non_identifier_application_head_in_formal() {
 }
 
 #[test]
+fn typecheck_phase_rejects_repeated_name_application_head_in_value_head_bucket() {
+    let mut vm = VM::new_for_tests();
+
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("repeated_name_formal_head.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        ConsList::EMPTY,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+
+    let f = vm.heap.make_empty_identifier("f");
+    let x = vm.heap.make_empty_identifier("x");
+    let y = vm.heap.make_empty_identifier("y");
+    let repeated_head = vm.heap.cons_ref(Token::Constant.into(), x.into());
+    let malformed_pattern = vm.heap.apply_ref(repeated_head.into(), y.into());
+    let lambda_body = vm.heap.lambda_ref(malformed_pattern.into(), y.into());
+    f.set_value_from_data(
+        &mut vm.heap,
+        IdentifierValueData::Arbitrary(lambda_body.into()),
+    );
+    current_file.push_item_onto_definienda(&mut vm.heap, f);
+
+    let result = vm.run_checktypes_phase();
+
+    assert!(matches!(
+        result,
+        Err(TypecheckError::ValueHeadApplicationsInFormals { count: 1 })
+    ));
+}
+
+#[test]
+fn typecheck_phase_rejects_infix_name_application_in_value_head_bucket() {
+    let mut vm = VM::new_for_tests();
+
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("infix_name_formal_head.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        ConsList::EMPTY,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+
+    let f = vm.heap.make_empty_identifier("f");
+    let merge = vm.heap.make_empty_identifier("merge");
+    let x = vm.heap.make_empty_identifier("x");
+    let y = vm.heap.make_empty_identifier("y");
+    let malformed_pattern = vm.heap.apply2(merge.into(), x.into(), y.into());
+    let lambda_body = vm.heap.lambda_ref(malformed_pattern.into(), x.into());
+    f.set_value_from_data(
+        &mut vm.heap,
+        IdentifierValueData::Arbitrary(lambda_body.into()),
+    );
+    current_file.push_item_onto_definienda(&mut vm.heap, f);
+
+    let result = vm.run_checktypes_phase();
+
+    assert!(matches!(
+        result,
+        Err(TypecheckError::ValueHeadApplicationsInFormals { count: 1 })
+    ));
+}
+
+#[test]
 fn typecheck_phase_invalid_application_formal_does_not_bind_interior_names() {
     let mut vm = VM::new_for_tests();
 
@@ -2186,6 +2256,48 @@ fn typecheck_phase_invalid_application_formal_does_not_bind_interior_names() {
         .pop(&mut vm.heap)
         .expect("expected one undefined name from invalid formal interior");
     assert_eq!(vm.identifier_name(identifier), "x");
+}
+
+#[test]
+fn typecheck_phase_repeated_name_application_head_does_not_bind_interior_names() {
+    let mut vm = VM::new_for_tests();
+
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("repeated_name_application_nonbinding.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        ConsList::EMPTY,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+
+    let f = vm.heap.make_empty_identifier("f");
+    let x = vm.heap.make_empty_identifier("x");
+    let y = vm.heap.make_empty_identifier("y");
+    let repeated_head = vm.heap.cons_ref(Token::Constant.into(), x.into());
+    let malformed_pattern = vm.heap.apply_ref(repeated_head.into(), y.into());
+    let lambda_body = vm.heap.lambda_ref(malformed_pattern.into(), y.into());
+    f.set_value_from_data(
+        &mut vm.heap,
+        IdentifierValueData::Arbitrary(lambda_body.into()),
+    );
+    current_file.push_item_onto_definienda(&mut vm.heap, f);
+
+    let inputs = typecheck::TypecheckBoundaryInputs::from_vm(&vm);
+    let result = typecheck::run_partial_typecheck(&mut vm.heap, inputs);
+
+    assert!(matches!(
+        &result.failure,
+        Some(TypecheckError::ValueHeadApplicationsInFormals { count: 1 })
+    ));
+    let mut undefined_names = result.undefined_names;
+    assert_eq!(undefined_names.len(&vm.heap), 1);
+    let identifier = undefined_names
+        .pop(&mut vm.heap)
+        .expect("expected one undefined name from repeated-name formal interior");
+    assert_eq!(vm.identifier_name(identifier), "y");
 }
 
 #[test]
@@ -2337,6 +2449,79 @@ fn typecheck_phase_unsupported_arithmetic_pattern_does_not_bind_interior_names()
     let identifier = undefined_names
         .pop(&mut vm.heap)
         .expect("expected one undefined name from unsupported arithmetic formal interior");
+    assert_eq!(vm.identifier_name(identifier), "x");
+}
+
+#[test]
+fn typecheck_phase_rejects_unsupported_minus_pattern_in_formal() {
+    let mut vm = VM::new_for_tests();
+
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("unsupported_minus_formal.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        ConsList::EMPTY,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+
+    let f = vm.heap.make_empty_identifier("f");
+    let x = vm.heap.make_empty_identifier("x");
+    let arithmetic_pattern = vm.heap.apply_ref(Combinator::Minus.into(), x.into());
+    let lambda_body = vm.heap.lambda_ref(arithmetic_pattern.into(), x.into());
+    f.set_value_from_data(
+        &mut vm.heap,
+        IdentifierValueData::Arbitrary(lambda_body.into()),
+    );
+    current_file.push_item_onto_definienda(&mut vm.heap, f);
+
+    let result = vm.run_checktypes_phase();
+
+    assert!(matches!(
+        result,
+        Err(TypecheckError::UnsupportedArithmeticPatternsInFormals { count: 1 })
+    ));
+}
+
+#[test]
+fn typecheck_phase_unsupported_minus_pattern_does_not_bind_interior_names() {
+    let mut vm = VM::new_for_tests();
+
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("unsupported_minus_nonbinding.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        ConsList::EMPTY,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+
+    let f = vm.heap.make_empty_identifier("f");
+    let x = vm.heap.make_empty_identifier("x");
+    let arithmetic_pattern = vm.heap.apply_ref(Combinator::Minus.into(), x.into());
+    let lambda_body = vm.heap.lambda_ref(arithmetic_pattern.into(), x.into());
+    f.set_value_from_data(
+        &mut vm.heap,
+        IdentifierValueData::Arbitrary(lambda_body.into()),
+    );
+    current_file.push_item_onto_definienda(&mut vm.heap, f);
+
+    let inputs = typecheck::TypecheckBoundaryInputs::from_vm(&vm);
+    let result = typecheck::run_partial_typecheck(&mut vm.heap, inputs);
+
+    assert!(matches!(
+        &result.failure,
+        Some(TypecheckError::UnsupportedArithmeticPatternsInFormals { count: 1 })
+    ));
+    let mut undefined_names = result.undefined_names;
+    assert_eq!(undefined_names.len(&vm.heap), 1);
+    let identifier = undefined_names
+        .pop(&mut vm.heap)
+        .expect("expected one undefined name from unsupported minus formal interior");
     assert_eq!(vm.identifier_name(identifier), "x");
 }
 

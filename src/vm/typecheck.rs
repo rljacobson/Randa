@@ -342,10 +342,12 @@ fn collect_formal_pattern_issues_in_pattern(
                 non_identifier_application_heads_in_formals,
             );
         }
-        CommittedFormalPattern::UnsupportedArithmeticPattern { .. } => {
+        CommittedFormalPattern::UnsupportedPlusPattern { .. }
+        | CommittedFormalPattern::UnsupportedMinusPattern { .. } => {
             *unsupported_arithmetic_patterns_in_formals += 1;
         }
-        CommittedFormalPattern::ValueHeadApplication { .. } => {
+        CommittedFormalPattern::ValueHeadApplication { .. }
+        | CommittedFormalPattern::RepeatedNameHeadApplication { .. } => {
             *value_head_applications_in_formals += 1;
         }
         CommittedFormalPattern::NonIdentifierHeadApplication { .. } => {
@@ -562,8 +564,10 @@ fn collect_pattern_bound_identifiers(
         CommittedFormalPattern::SuccessorPattern { inner, .. } => {
             collect_pattern_bound_identifiers(heap, inner, bound_identifiers);
         }
-        CommittedFormalPattern::UnsupportedArithmeticPattern { .. }
+        CommittedFormalPattern::UnsupportedPlusPattern { .. }
+        | CommittedFormalPattern::UnsupportedMinusPattern { .. }
         | CommittedFormalPattern::ValueHeadApplication { .. }
+        | CommittedFormalPattern::RepeatedNameHeadApplication { .. }
         | CommittedFormalPattern::NonIdentifierHeadApplication { .. } => {}
         CommittedFormalPattern::StructuralCons { head, tail }
         | CommittedFormalPattern::StructuralTuple { head, tail } => {
@@ -585,11 +589,17 @@ enum CommittedFormalPattern {
         offset: Value,
         inner: Value,
     },
-    UnsupportedArithmeticPattern {
-        operator: Value,
+    UnsupportedPlusPattern {
+        arguments: Vec<Value>,
+    },
+    UnsupportedMinusPattern {
         arguments: Vec<Value>,
     },
     ValueHeadApplication {
+        head: IdentifierRecordRef,
+        arguments: Vec<Value>,
+    },
+    RepeatedNameHeadApplication {
         head: IdentifierRecordRef,
         arguments: Vec<Value>,
     },
@@ -630,35 +640,30 @@ fn classify_committed_formal_pattern(heap: &Heap, pattern: Value) -> CommittedFo
         }
         Tag::Ap => {
             let (head_raw, arguments) = pattern_application_spine(heap, pattern);
-            if head_raw >= ATOM_LIMIT && heap[head_raw].tag == Tag::Id {
-                let identifier = IdentifierRecordRef::from_ref(head_raw);
-                if identifier_has_constructor_intent(heap, identifier) {
+            match classify_formal_application_head(heap, head_raw) {
+                FormalApplicationHead::ConstructorIdentifier(identifier) => {
                     CommittedFormalPattern::ConstructorApplication {
                         head: identifier,
                         arguments,
                     }
-                } else {
+                }
+                FormalApplicationHead::ValueIdentifier(identifier) => {
                     CommittedFormalPattern::ValueHeadApplication {
                         head: identifier,
                         arguments,
                     }
                 }
-            } else {
-                let head = Value::from(head_raw);
-                match head {
-                    Value::Combinator(Combinator::Plus | Combinator::Minus) => {
-                        if let Some((offset, inner)) =
-                            canonical_successor_pattern(heap, head, &arguments)
-                        {
-                            CommittedFormalPattern::SuccessorPattern { offset, inner }
-                        } else {
-                            CommittedFormalPattern::UnsupportedArithmeticPattern {
-                                operator: head,
-                                arguments,
-                            }
-                        }
+                FormalApplicationHead::RepeatedNameIdentifier(identifier) => {
+                    CommittedFormalPattern::RepeatedNameHeadApplication {
+                        head: identifier,
+                        arguments,
                     }
-                    _ => CommittedFormalPattern::NonIdentifierHeadApplication { head, arguments },
+                }
+                FormalApplicationHead::ArithmeticOperator(head) => {
+                    classify_remaining_arithmetic_formal_pattern(heap, head, arguments)
+                }
+                FormalApplicationHead::Other(head) => {
+                    CommittedFormalPattern::NonIdentifierHeadApplication { head, arguments }
                 }
             }
         }
@@ -691,6 +696,54 @@ fn classify_committed_formal_pattern(heap: &Heap, pattern: Value) -> CommittedFo
 
 fn identifier_has_constructor_intent(heap: &Heap, identifier: IdentifierRecordRef) -> bool {
     is_capitalized(identifier.get_name(heap).as_str())
+}
+
+enum FormalApplicationHead {
+    ConstructorIdentifier(IdentifierRecordRef),
+    ValueIdentifier(IdentifierRecordRef),
+    RepeatedNameIdentifier(IdentifierRecordRef),
+    ArithmeticOperator(Value),
+    Other(Value),
+}
+
+fn classify_formal_application_head(heap: &Heap, head_raw: RawValue) -> FormalApplicationHead {
+    if head_raw < ATOM_LIMIT {
+        let head = Value::from(head_raw);
+        return match head {
+            Value::Combinator(Combinator::Plus | Combinator::Minus) => {
+                FormalApplicationHead::ArithmeticOperator(head)
+            }
+            _ => FormalApplicationHead::Other(head),
+        };
+    }
+
+    match heap[head_raw].tag {
+        Tag::Id => {
+            let identifier = IdentifierRecordRef::from_ref(head_raw);
+            if identifier_has_constructor_intent(heap, identifier) {
+                FormalApplicationHead::ConstructorIdentifier(identifier)
+            } else {
+                FormalApplicationHead::ValueIdentifier(identifier)
+            }
+        }
+        Tag::Cons => {
+            let constant_tag = RawValue::from(Value::Token(Token::Constant));
+            if heap[head_raw].head == constant_tag {
+                let wrapped: Value = heap[head_raw].tail.into();
+                let wrapped_raw: RawValue = wrapped.into();
+                if wrapped_raw >= ATOM_LIMIT && heap[wrapped_raw].tag == Tag::Id {
+                    FormalApplicationHead::RepeatedNameIdentifier(IdentifierRecordRef::from_ref(
+                        wrapped_raw,
+                    ))
+                } else {
+                    FormalApplicationHead::Other(wrapped)
+                }
+            } else {
+                FormalApplicationHead::Other(head_raw.into())
+            }
+        }
+        _ => FormalApplicationHead::Other(head_raw.into()),
+    }
 }
 
 /// Returns the head value plus source-order arguments for one committed pattern-application spine.
@@ -733,6 +786,26 @@ fn canonical_successor_pattern(
     }
 
     ((heap[offset_raw].head & SIGN_BIT_MASK) == 0).then_some((offset, inner))
+}
+
+fn classify_remaining_arithmetic_formal_pattern(
+    heap: &Heap,
+    head: Value,
+    arguments: Vec<Value>,
+) -> CommittedFormalPattern {
+    if let Some((offset, inner)) = canonical_successor_pattern(heap, head, &arguments) {
+        return CommittedFormalPattern::SuccessorPattern { offset, inner };
+    }
+
+    match head {
+        Value::Combinator(Combinator::Plus) => {
+            CommittedFormalPattern::UnsupportedPlusPattern { arguments }
+        }
+        Value::Combinator(Combinator::Minus) => {
+            CommittedFormalPattern::UnsupportedMinusPattern { arguments }
+        }
+        _ => unreachable!("arithmetic formal classifier requires plus/minus head"),
+    }
 }
 
 /// Returns whether an identifier currently denotes a constructor-valued binding.
