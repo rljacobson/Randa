@@ -821,7 +821,7 @@ impl VM {
     /// - otherwise succeed.
     pub(super) fn run_codegen_phase(&mut self) -> Result<(), CodegenError> {
         let inputs = super::codegen::CodegenBoundaryInputs::from_vm(self);
-        let result = super::codegen::run_partial_codegen(&self.heap, inputs);
+        let result = super::codegen::run_partial_codegen(&mut self.heap, inputs);
         if let Some(failure) = result.failure {
             return Err(failure);
         }

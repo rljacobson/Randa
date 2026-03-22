@@ -2895,6 +2895,81 @@ fn codegen_phase_succeeds_with_loaded_files_and_no_init_errors() {
 }
 
 #[test]
+fn codegen_phase_rewrites_plain_top_level_label_wrapped_body() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let value_id = vm.heap.make_empty_identifier("value_id");
+    let one = IntegerRef::from_i64(&mut vm.heap, 1);
+    let anchor = test_anchor(&mut vm, "codegen_plain_label_body.m", 1);
+    let labeled_body = vm.heap.label_ref(anchor.into(), one.into());
+    value_id.set_value_from_data(
+        &mut vm.heap,
+        IdentifierValueData::Arbitrary(labeled_body),
+    );
+
+    let definienda = ConsList::new(&mut vm.heap, value_id);
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("codegen_plain_label_body.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        definienda,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+    vm.undefined_names = ConsList::EMPTY;
+
+    let result = vm.run_codegen_phase();
+
+    assert!(result.is_ok());
+    assert_eq!(
+        value_id
+            .get_value(&vm.heap)
+            .expect("expected rewritten value")
+            .get_data(&vm.heap),
+        IdentifierValueData::Arbitrary(one.into())
+    );
+}
+
+#[test]
+fn codegen_phase_rewrites_lambda_headed_function_body() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let xs = vm.heap.make_empty_identifier("xs");
+    let keep = vm.heap.make_empty_identifier("keep");
+    let anchor = test_anchor(&mut vm, "codegen_lambda_label_body.m", 1);
+    let labeled_body = vm.heap.label_ref(anchor.into(), xs.into());
+    let lambda = vm.heap.lambda_ref(xs.into(), labeled_body);
+    let original_lambda = lambda;
+    keep.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(lambda));
+
+    let definienda = ConsList::new(&mut vm.heap, keep);
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("codegen_lambda_label_body.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        definienda,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+    vm.undefined_names = ConsList::EMPTY;
+
+    let result = vm.run_codegen_phase();
+
+    assert!(result.is_ok());
+    let body = keep
+        .get_value(&vm.heap)
+        .expect("expected keep value")
+        .get_data(&vm.heap);
+    assert_ne!(body, IdentifierValueData::Arbitrary(original_lambda));
+}
+
+#[test]
 fn dump_visibility_phase_runs_for_normal_m_source() {
     let mut vm = VM::new_for_tests();
     vm.initializing = false;
