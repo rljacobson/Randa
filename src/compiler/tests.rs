@@ -2,7 +2,7 @@ use super::*;
 
 use crate::big_num::SIGN_BIT_MASK;
 use crate::data::{
-    api::{ConsList, FileInfoRef, HeapObjectProxy, IdentifierRecordRef},
+    api::{ConsList, HeapObjectProxy, IdentifierRecordRef},
     Combinator, Heap, RawValue, Tag, Type, Value,
 };
 
@@ -166,19 +166,10 @@ fn parser_parses_multi_entry_free_block() {
 
     let first = &payload.free_bindings[0];
     let second = &payload.free_bindings[1];
-    assert_eq!(
-        IdentifierRecordRef::from_ref(first.identifier).get_name(&heap),
-        "x"
-    );
-    assert_eq!(
-        RawValue::from(first.type_expr),
-        RawValue::from(Type::Number)
-    );
-    assert_eq!(
-        IdentifierRecordRef::from_ref(second.identifier).get_name(&heap),
-        "xs"
-    );
-    assert!(heap.is_list_type(second.type_expr));
+    assert_eq!(first.identifier.get_name(&heap), "x");
+    assert_eq!(RawValue::from(first.type_expr.value()), RawValue::from(Type::Number));
+    assert_eq!(second.identifier.get_name(&heap), "xs");
+    assert!(heap.is_list_type(second.type_expr.value()));
 }
 
 #[test]
@@ -189,20 +180,14 @@ fn parser_parses_multi_name_free_spec() {
         panic!("expected top-level parse success");
     };
     assert_eq!(payload.free_bindings.len(), 2);
+    assert_eq!(payload.free_bindings[0].identifier.get_name(&heap), "f");
+    assert_eq!(payload.free_bindings[1].identifier.get_name(&heap), "g");
     assert_eq!(
-        IdentifierRecordRef::from_ref(payload.free_bindings[0].identifier).get_name(&heap),
-        "f"
-    );
-    assert_eq!(
-        IdentifierRecordRef::from_ref(payload.free_bindings[1].identifier).get_name(&heap),
-        "g"
-    );
-    assert_eq!(
-        RawValue::from(payload.free_bindings[0].type_expr),
+        RawValue::from(payload.free_bindings[0].type_expr.value()),
         RawValue::from(Type::Number)
     );
     assert_eq!(
-        RawValue::from(payload.free_bindings[1].type_expr),
+        RawValue::from(payload.free_bindings[1].type_expr.value()),
         RawValue::from(Type::Number)
     );
 }
@@ -221,20 +206,14 @@ fn parser_parses_mixed_free_type_and_value_specs() {
 
     let type_binding = &payload.free_bindings[0];
     let value_binding = &payload.free_bindings[1];
+    assert_eq!(type_binding.identifier.get_name(&heap), "t");
     assert_eq!(
-        IdentifierRecordRef::from_ref(type_binding.identifier).get_name(&heap),
-        "t"
-    );
-    assert_eq!(
-        RawValue::from(type_binding.type_expr),
+        RawValue::from(type_binding.type_expr.value()),
         RawValue::from(Type::Type)
     );
+    assert_eq!(value_binding.identifier.get_name(&heap), "f");
     assert_eq!(
-        IdentifierRecordRef::from_ref(value_binding.identifier).get_name(&heap),
-        "f"
-    );
-    assert_eq!(
-        IdentifierRecordRef::from_ref(value_binding.type_expr.into()).get_name(&heap),
+        IdentifierRecordRef::from_ref(value_binding.type_expr.value().into()).get_name(&heap),
         "t"
     );
 }
@@ -273,14 +252,8 @@ fn parser_parses_nullary_constructor_pattern_form() {
     };
     assert_eq!(payload.definitions.len(), 2);
     assert_eq!(payload.constructor_declarations.len(), 2);
-    assert_eq!(
-        IdentifierRecordRef::from_ref(payload.definitions[0].identifier).get_name(&heap),
-        "isJust"
-    );
-    assert_eq!(
-        IdentifierRecordRef::from_ref(payload.definitions[1].identifier).get_name(&heap),
-        "isJust"
-    );
+    assert_eq!(payload.definitions[0].identifier.get_name(&heap), "isJust");
+    assert_eq!(payload.definitions[1].identifier.get_name(&heap), "isJust");
 }
 
 #[test]
@@ -487,26 +460,14 @@ fn parser_returns_provisional_payload_for_include_export_directives() {
             .expect("include target should be a heap string"),
         "inc.m"
     );
-    let Value::Reference(include_anchor_ref) = Value::from(include_request.anchor) else {
-        panic!("expected include anchor reference");
-    };
-    assert_eq!(
-        FileInfoRef::from_ref(include_anchor_ref).line_number(&heap),
-        1
-    );
+    assert_eq!(include_request.anchor.line_number(&heap), 1);
 
     let export = payload
         .directives
         .export
         .as_ref()
         .expect("expected export payload");
-    let Value::Reference(export_anchor_ref) = Value::from(export.anchor) else {
-        panic!("expected export anchor reference");
-    };
-    assert_eq!(
-        FileInfoRef::from_ref(export_anchor_ref).line_number(&heap),
-        2
-    );
+    assert_eq!(export.anchor.line_number(&heap), 2);
     assert_eq!(
         heap.resolve_string(
             ConsList::<Value>::from_ref(export.pathname_requests)
@@ -539,10 +500,7 @@ fn parser_parses_include_value_binding_payload() {
     else {
         panic!("expected value include binding payload");
     };
-    assert_eq!(
-        IdentifierRecordRef::from_ref(*identifier).get_name(&heap),
-        "x"
-    );
+    assert_eq!(identifier.get_name(&heap), "x");
     assert_eq!(heap[RawValue::from(*body)].tag, Tag::Int);
 }
 
@@ -566,10 +524,7 @@ fn parser_parses_include_type_binding_payload() {
     else {
         panic!("expected type include binding payload");
     };
-    assert_eq!(
-        IdentifierRecordRef::from_ref(*identifier).get_name(&heap),
-        "t"
-    );
+    assert_eq!(identifier.get_name(&heap), "t");
     assert!(matches!(
         type_value.get_data(&heap),
         crate::data::api::IdentifierValueData::Typed { .. }
@@ -619,23 +574,14 @@ fn parser_parses_include_modifier_payloads() {
     else {
         panic!("expected rename modifier payload");
     };
-    assert_eq!(
-        IdentifierRecordRef::from_ref(*source).get_name(&heap),
-        "bar"
-    );
-    assert_eq!(
-        IdentifierRecordRef::from_ref(*destination).get_name(&heap),
-        "foo"
-    );
+    assert_eq!(source.get_name(&heap), "bar");
+    assert_eq!(destination.get_name(&heap), "foo");
 
     let ParserIncludeModifierPayload::Suppress { identifier } = &include_request.modifiers[1]
     else {
         panic!("expected suppression modifier payload");
     };
-    assert_eq!(
-        IdentifierRecordRef::from_ref(*identifier).get_name(&heap),
-        "baz"
-    );
+    assert_eq!(identifier.get_name(&heap), "baz");
 }
 
 #[test]

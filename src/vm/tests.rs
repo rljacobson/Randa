@@ -23,11 +23,8 @@ fn unique_test_path(file_name: &str) -> PathBuf {
     base
 }
 
-fn test_anchor(vm: &mut VM, source_path: &str, line_number: isize) -> RawValue {
-    Value::Reference(
-        FileInfoRef::from_script_file(&mut vm.heap, source_path.to_string(), line_number).get_ref(),
-    )
-    .into()
+fn test_anchor(vm: &mut VM, source_path: &str, line_number: isize) -> FileInfoRef {
+    FileInfoRef::from_script_file(&mut vm.heap, source_path.to_string(), line_number)
 }
 
 fn include_request_payload(

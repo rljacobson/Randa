@@ -155,7 +155,58 @@ where
     pub fn insert_ordered(&mut self, heap: &mut Heap, item: T) {
         let item: Value = item.into();
         let item_address: RawValue = item.into();
+        self.insert_ordered_raw(heap, item_address, item);
+    }
 
+    /// Merges this ordered-set list with `other` using Miranda `add1` insertion semantics and returns the merged list.
+    /// This exists so parser-facing code can keep ordered-set union ownership on `ConsList` instead of open-coding raw list merges.
+    /// The invariant is that the returned list preserves ascending raw-address order and suppresses duplicates exactly like repeated `add1`.
+    pub fn union(&self, heap: &mut Heap, other: Self) -> Self {
+        let mut merged = *self;
+        let mut cursor = other;
+        while let Some(item) = cursor.pop_raw(heap) {
+            merged.insert_ordered_raw(heap, item, item.into());
+        }
+        merged
+    }
+
+    /// Returns the members of this ordered-set list whose raw identities are not present in `other`.
+    /// This exists so parser-facing code can perform `setdiff`-style list subtraction through `ConsList` instead of raw helper calls.
+    /// The invariant is that the result contains exactly the left-side members missing from `other`, with ascending raw-address order and duplicate suppression preserved.
+    pub fn difference(&self, heap: &mut Heap, other: Self) -> Self {
+        let mut difference = Self::EMPTY;
+        let mut cursor = *self;
+        while let Some(item) = cursor.pop_raw(heap) {
+            if !other.contains_raw(heap, item) {
+                difference.insert_ordered_raw(heap, item, item.into());
+            }
+        }
+        difference
+    }
+
+    /// Returns a shallow copy of the `ConsList` with items in reverse order.
+    pub fn reversed(&self, heap: &mut Heap) -> Self {
+        let mut new_list = Self::EMPTY;
+        let mut cursor: ConsList<T> = *self;
+        while let Some(hd) = cursor.raw_head(heap) {
+            new_list.push_raw(heap, hd);
+            cursor = cursor.rest_unchecked(heap);
+        }
+
+        new_list
+    }
+
+    fn contains_raw(&self, heap: &Heap, item: RawValue) -> bool {
+        let mut cursor = *self;
+        while let Some(next) = cursor.pop_raw(heap) {
+            if next == item {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn insert_ordered_raw(&mut self, heap: &mut Heap, item_address: RawValue, item: Value) {
         // If the list is empty, then `self == NIL`.
         if self.is_empty() || item_address < self.raw_head_unchecked(heap) {
             let new_cons = heap.cons_ref(item, self.reference.into());
@@ -170,8 +221,6 @@ where
         }
 
         // Henceforth the invariant is item_address > cursor.head().
-
-        // Move forward until we're at the last (nonempty) cons or at the position at which `item` should be inserted.
         let mut cursor = *self;
         while !cursor.rest_unchecked(heap).is_empty()
             && item_address > cursor.rest_unchecked(heap).raw_head_unchecked(heap)
@@ -181,27 +230,11 @@ where
 
         if cursor.rest_unchecked(heap).is_empty() {
             let new_cons = heap.cons_ref(item, Combinator::NIL);
-            // `item` goes on the end
             heap[cursor.reference].tail = new_cons.into();
         } else if item_address != cursor.rest_unchecked(heap).raw_head_unchecked(heap) {
-            // Item is not already in the list.
             let new_cons = heap.cons_ref(item, cursor.rest_unchecked(heap).into());
             heap[cursor.reference].tail = new_cons.into();
         }
-        // The remaining case is `item_address != cursor.rest_unchecked(heap).raw_head_unchecked(heap).into()`, which is a noop,
-        // because no duplicates are allowed.
-    }
-
-    /// Returns a shallow copy of the `ConsList` with items in reverse order.
-    pub fn reversed(&self, heap: &mut Heap) -> Self {
-        let mut new_list = Self::EMPTY;
-        let mut cursor: ConsList<T> = *self;
-        while let Some(hd) = cursor.raw_head(heap) {
-            new_list.push_raw(heap, hd);
-            cursor = cursor.rest_unchecked(heap);
-        }
-
-        new_list
     }
 
     /// If `self = cons(head, rest)`, returns `head` and modifies the internal reference to point to `rest`.
@@ -352,5 +385,48 @@ mod tests {
         assert_eq!(list.pop_value(&heap), Some(beta.into()));
         assert_eq!(list.pop_value(&heap), Some(gamma.into()));
         assert_eq!(list.pop_value(&heap), None);
+    }
+
+    #[test]
+    fn value_list_union_merges_ordered_sets_without_duplicates() {
+        let mut heap = Heap::new();
+        let alpha = heap.make_empty_identifier("alpha");
+        let beta = heap.make_empty_identifier("beta");
+        let gamma = heap.make_empty_identifier("gamma");
+
+        let mut left: ConsList<Value> = ConsList::EMPTY;
+        left.insert_ordered(&mut heap, alpha.into());
+        left.insert_ordered(&mut heap, gamma.into());
+
+        let mut right = ConsList::EMPTY;
+        right.insert_ordered(&mut heap, beta.into());
+        right.insert_ordered(&mut heap, gamma.into());
+
+        let mut merged = left.union(&mut heap, right);
+        assert_eq!(merged.pop_value(&heap), Some(alpha.into()));
+        assert_eq!(merged.pop_value(&heap), Some(beta.into()));
+        assert_eq!(merged.pop_value(&heap), Some(gamma.into()));
+        assert_eq!(merged.pop_value(&heap), None);
+    }
+
+    #[test]
+    fn value_list_difference_removes_right_members_from_left_set() {
+        let mut heap = Heap::new();
+        let alpha = heap.make_empty_identifier("alpha");
+        let beta = heap.make_empty_identifier("beta");
+        let gamma = heap.make_empty_identifier("gamma");
+
+        let mut left: ConsList<Value> = ConsList::EMPTY;
+        left.insert_ordered(&mut heap, alpha.into());
+        left.insert_ordered(&mut heap, beta.into());
+        left.insert_ordered(&mut heap, gamma.into());
+
+        let mut right = ConsList::EMPTY;
+        right.insert_ordered(&mut heap, beta.into());
+
+        let mut difference = left.difference(&mut heap, right);
+        assert_eq!(difference.pop_value(&heap), Some(alpha.into()));
+        assert_eq!(difference.pop_value(&heap), Some(gamma.into()));
+        assert_eq!(difference.pop_value(&heap), None);
     }
 }

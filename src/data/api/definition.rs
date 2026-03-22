@@ -78,6 +78,7 @@ impl HeapObjectProxy for DefinitionRef {
 
 #[cfg(test)]
 mod tests {
+    use crate::data::Combinator;
     use super::*;
 
     #[test]
@@ -85,22 +86,22 @@ mod tests {
         let mut heap = Heap::new();
         let definition = DefinitionRef::new(
             &mut heap,
-            crate::data::Combinator::Plus.into(),
-            crate::data::Combinator::Minus.into(),
-            crate::data::Combinator::Times.into(),
+            Combinator::Plus.into(),
+            Combinator::Minus.into(),
+            Combinator::Times.into(),
         );
 
         assert_eq!(
             definition.lhs_value(&heap),
-            crate::data::Combinator::Plus.into()
+            Combinator::Plus.into()
         );
         assert_eq!(
             definition.type_raw(&heap),
-            crate::data::Combinator::Minus.into()
+            Combinator::Minus.into()
         );
         assert_eq!(
             definition.body_value(&heap),
-            crate::data::Combinator::Times.into()
+            Combinator::Times.into()
         );
     }
 
@@ -109,16 +110,16 @@ mod tests {
         let mut heap = Heap::new();
         let definition = DefinitionRef::new(
             &mut heap,
-            crate::data::Combinator::Plus.into(),
-            crate::data::Combinator::Minus.into(),
-            crate::data::Combinator::Times.into(),
+            Combinator::Plus.into(),
+            Combinator::Minus.into(),
+            Combinator::Times.into(),
         );
 
-        definition.set_body_value(&mut heap, crate::data::Combinator::DivideInteger.into());
+        definition.set_body_value(&mut heap, Combinator::DivideInteger.into());
 
         assert_eq!(
             definition.body_value(&heap),
-            crate::data::Combinator::DivideInteger.into()
+            Combinator::DivideInteger.into()
         );
         assert_eq!(heap[definition.get_ref()].tag, Tag::Cons);
         assert_eq!(heap[heap[definition.get_ref()].tail].tag, Tag::Cons);

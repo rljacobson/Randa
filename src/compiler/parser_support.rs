@@ -1,6 +1,8 @@
 use thiserror::Error;
 
-use crate::data::api::{IdentifierValueRef, IdentifierValueTypeKind};
+use crate::data::api::{
+    FileInfoRef, IdentifierRecordRef, IdentifierValueRef, IdentifierValueTypeKind, TypeExprRef,
+};
 use crate::data::{RawValue, Value};
 
 use super::ParserDiagnostic;
@@ -29,11 +31,11 @@ impl ParserRunDiagnostics {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParserIncludeBindingPayload {
     Value {
-        identifier: RawValue,
+        identifier: IdentifierRecordRef,
         body: Value,
     },
     Type {
-        identifier: RawValue,
+        identifier: IdentifierRecordRef,
         type_value: IdentifierValueRef,
     },
 }
@@ -41,17 +43,17 @@ pub enum ParserIncludeBindingPayload {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParserIncludeModifierPayload {
     Rename {
-        source: RawValue,
-        destination: RawValue,
+        source: IdentifierRecordRef,
+        destination: IdentifierRecordRef,
     },
     Suppress {
-        identifier: RawValue,
+        identifier: IdentifierRecordRef,
     },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParserIncludeDirectivePayload {
-    pub anchor: RawValue,
+    pub anchor: FileInfoRef,
     pub target_path: RawValue,
     pub modifiers: Vec<ParserIncludeModifierPayload>,
     pub bindings: Vec<ParserIncludeBindingPayload>,
@@ -59,7 +61,7 @@ pub struct ParserIncludeDirectivePayload {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParserExportDirectivePayload {
-    pub anchor: RawValue,
+    pub anchor: FileInfoRef,
     pub exported_ids: RawValue,
     pub pathname_requests: RawValue,
     pub embargoes: RawValue,
@@ -67,25 +69,25 @@ pub struct ParserExportDirectivePayload {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParserDefinitionPayload {
-    pub identifier: RawValue,
+    pub identifier: IdentifierRecordRef,
     pub body: RawValue,
-    pub anchor: RawValue,
+    pub anchor: FileInfoRef,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParserSpecificationPayload {
-    pub identifier: RawValue,
-    pub type_expr: Value,
-    pub anchor: RawValue,
+    pub identifier: IdentifierRecordRef,
+    pub type_expr: TypeExprRef,
+    pub anchor: FileInfoRef,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParserTypeDeclarationPayload {
-    pub type_identifier: RawValue,
+    pub type_identifier: IdentifierRecordRef,
     pub arity: isize,
     pub kind: IdentifierValueTypeKind,
     pub info: Value,
-    pub anchor: RawValue,
+    pub anchor: FileInfoRef,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -114,19 +116,19 @@ impl ParserConstructorFieldPayload {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParserConstructorPayload {
-    pub constructor: RawValue,
-    pub parent_type: RawValue,
+    pub constructor: IdentifierRecordRef,
+    pub parent_type: IdentifierRecordRef,
     pub parent_type_arity: isize,
     pub arity: isize,
     pub fields: Vec<ParserConstructorFieldPayload>,
-    pub anchor: RawValue,
+    pub anchor: FileInfoRef,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParserFreeBindingPayload {
-    pub identifier: RawValue,
-    pub type_expr: Value,
-    pub anchor: RawValue,
+    pub identifier: IdentifierRecordRef,
+    pub type_expr: TypeExprRef,
+    pub anchor: FileInfoRef,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

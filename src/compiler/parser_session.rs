@@ -1,17 +1,20 @@
-use crate::data::{Combinator, RawValue};
+use crate::data::{
+    api::{ConsList, FileInfoRef, IdentifierRecordRef},
+    Combinator, RawValue, Value,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParserSessionState {
-    pub lex_states: RawValue,
-    pub used_identifiers: RawValue,
-    pub lex_rule_definitions: RawValue,
+    pub lex_states: ConsList<Value>,
+    pub used_identifiers: ConsList<Value>,
+    pub lex_rule_definitions: ConsList<Value>,
     pub last_identifier: RawValue,
     pub inherited_attributes: RawValue,
-    pub nonterminals: RawValue,
-    pub empty_production_nonterminals: RawValue,
-    pub nonterminal_specification_map: RawValue,
+    pub nonterminals: ConsList<IdentifierRecordRef>,
+    pub empty_production_nonterminals: ConsList<IdentifierRecordRef>,
+    pub nonterminal_specification_map: ConsList<Value>,
     pub nonterminal_map: RawValue,
-    pub last_diagnostic_location: RawValue,
+    pub last_diagnostic_location: Option<FileInfoRef>,
     pub bnf_mode: u8,
     pub export_list_mode: bool,
     pub lex_mode: u8,
@@ -23,16 +26,16 @@ pub struct ParserSessionState {
 impl Default for ParserSessionState {
     fn default() -> Self {
         Self {
-            lex_states: Combinator::Nil.into(),
-            used_identifiers: Combinator::Nil.into(),
-            lex_rule_definitions: Combinator::Nil.into(),
+            lex_states: ConsList::EMPTY,
+            used_identifiers: ConsList::EMPTY,
+            lex_rule_definitions: ConsList::EMPTY,
             last_identifier: 0,
             inherited_attributes: 0,
-            nonterminals: Combinator::Nil.into(),
-            empty_production_nonterminals: Combinator::Nil.into(),
-            nonterminal_specification_map: Combinator::Nil.into(),
+            nonterminals: ConsList::EMPTY,
+            empty_production_nonterminals: ConsList::EMPTY,
+            nonterminal_specification_map: ConsList::EMPTY,
             nonterminal_map: Combinator::Nil.into(),
-            last_diagnostic_location: 0,
+            last_diagnostic_location: None,
             bnf_mode: 0,
             export_list_mode: false,
             lex_mode: 0,
@@ -54,9 +57,9 @@ impl ParserSessionState {
     /// Resets the expression-path tracking fields without disturbing unrelated parser-mode state.
     /// The invariant is that `used_identifiers`, `last_identifier`, `last_diagnostic_location`, `type_variable_scope`, `semantic_reduction_count`, and `open_bracket_count` return to their canonical empty-state values together.
     pub fn reset_expression_path_state(&mut self) {
-        self.used_identifiers = Combinator::Nil.into();
+        self.used_identifiers = ConsList::EMPTY;
         self.last_identifier = 0;
-        self.last_diagnostic_location = 0;
+        self.last_diagnostic_location = None;
         self.type_variable_scope = false;
         self.semantic_reduction_count = 0;
         self.open_bracket_count = 0;
@@ -66,8 +69,8 @@ impl ParserSessionState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParserDeferredState {
     pub exported_identifiers: RawValue,
-    pub export_path_requests: RawValue,
-    pub export_embargoes: RawValue,
+    pub export_path_requests: ConsList<Value>,
+    pub export_embargoes: ConsList<IdentifierRecordRef>,
     pub include_requests: RawValue,
     pub free_identifiers: RawValue,
 }
@@ -76,8 +79,8 @@ impl Default for ParserDeferredState {
     fn default() -> Self {
         Self {
             exported_identifiers: Combinator::Nil.into(),
-            export_path_requests: Combinator::Nil.into(),
-            export_embargoes: Combinator::Nil.into(),
+            export_path_requests: ConsList::EMPTY,
+            export_embargoes: ConsList::EMPTY,
             include_requests: Combinator::Nil.into(),
             free_identifiers: Combinator::Nil.into(),
         }
@@ -96,13 +99,14 @@ impl ParserDeferredState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::api::HeapObjectProxy;
 
     #[test]
     fn parser_session_state_reset_methods_restore_expected_defaults() {
         let mut state = ParserSessionState {
-            used_identifiers: 17,
+            used_identifiers: ConsList::from_ref(17),
             last_identifier: 9,
-            last_diagnostic_location: 13,
+            last_diagnostic_location: Some(FileInfoRef::from_ref(13)),
             type_variable_scope: true,
             semantic_reduction_count: 4,
             open_bracket_count: -2,
@@ -111,14 +115,14 @@ mod tests {
 
         state.reset_expression_path_state();
 
-        assert_eq!(state.used_identifiers, Combinator::Nil.into());
+        assert_eq!(state.used_identifiers, ConsList::EMPTY);
         assert_eq!(state.last_identifier, 0);
-        assert_eq!(state.last_diagnostic_location, 0);
+        assert_eq!(state.last_diagnostic_location, None);
         assert!(!state.type_variable_scope);
         assert_eq!(state.semantic_reduction_count, 0);
         assert_eq!(state.open_bracket_count, 0);
 
-        state.lex_rule_definitions = 88;
+        state.lex_rule_definitions = ConsList::from_ref(88);
         state.lex_mode = 2;
         state.reset_for_new_parse();
 
@@ -129,8 +133,8 @@ mod tests {
     fn parser_deferred_state_clear_restores_nil_backing() {
         let mut state = ParserDeferredState {
             exported_identifiers: 10,
-            export_path_requests: 11,
-            export_embargoes: 12,
+            export_path_requests: ConsList::from_ref(11),
+            export_embargoes: ConsList::from_ref(12),
             include_requests: 13,
             free_identifiers: 14,
         };

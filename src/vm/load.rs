@@ -580,8 +580,7 @@ impl VM {
                 for modifier in &include_request.modifiers {
                     match modifier {
                         ParserIncludeModifierPayload::Suppress { identifier } => {
-                            let suppressed_name =
-                                IdentifierRecordRef::from_ref(*identifier).get_name(&self.heap);
+                            let suppressed_name = identifier.get_name(&self.heap);
                             let matching_index = rewritten_definienda.iter().position(|definiendum| {
                                 definiendum.get_name(&self.heap) == suppressed_name
                             });
@@ -597,10 +596,8 @@ impl VM {
                             source,
                             destination,
                         } => {
-                            let original_name =
-                                IdentifierRecordRef::from_ref(*source).get_name(&self.heap);
-                            let renamed_name = IdentifierRecordRef::from_ref(*destination)
-                                .get_name(&self.heap);
+                            let original_name = source.get_name(&self.heap);
+                            let renamed_name = destination.get_name(&self.heap);
                             let matching_index = rewritten_definienda.iter().position(|definiendum| {
                                 definiendum.get_name(&self.heap) == original_name
                             });
@@ -1370,7 +1367,7 @@ impl VM {
         current_file: FileRecord,
         definition: &ParserDefinitionPayload,
     ) {
-        let identifier = IdentifierRecordRef::from_ref(definition.identifier);
+        let identifier = definition.identifier;
         let definition_metadata = self.definition_metadata_from_anchor(definition.anchor);
 
         identifier.set_definition(&mut self.heap, definition_metadata);
@@ -1388,8 +1385,8 @@ impl VM {
         current_file: FileRecord,
         specification: &ParserSpecificationPayload,
     ) {
-        let identifier = IdentifierRecordRef::from_ref(specification.identifier);
-        let type_expr = TypeExprRef::new(specification.type_expr);
+        let identifier = specification.identifier;
+        let type_expr = specification.type_expr;
         identifier.set_type_expr(&mut self.heap, type_expr);
 
         self.push_definiendum_once(current_file, specification.identifier);
@@ -1401,13 +1398,13 @@ impl VM {
         type_declaration: &ParserTypeDeclarationPayload,
         constructor_payloads: &[ParserConstructorPayload],
     ) {
-        let type_identifier = IdentifierRecordRef::from_ref(type_declaration.type_identifier);
+        let type_identifier = type_declaration.type_identifier;
         let definition_metadata = self.definition_metadata_from_anchor(type_declaration.anchor);
         type_identifier.set_definition(&mut self.heap, definition_metadata);
         type_identifier.set_type_expr(&mut self.heap, TypeExprRef::new(Type::Type.into()));
         let info = if type_declaration.kind == IdentifierValueTypeKind::Algebraic {
             self.commit_algebraic_type_constructor_info(
-                type_declaration.type_identifier,
+                type_declaration.type_identifier.get_ref(),
                 constructor_payloads,
             )
         } else {
@@ -1432,8 +1429,8 @@ impl VM {
         current_file: FileRecord,
         constructor_payload: &ParserConstructorPayload,
     ) {
-        let constructor = IdentifierRecordRef::from_ref(constructor_payload.constructor);
-        let parent_type = IdentifierRecordRef::from_ref(constructor_payload.parent_type);
+        let constructor = constructor_payload.constructor;
+        let parent_type = constructor_payload.parent_type;
         let definition_metadata = self.definition_metadata_from_anchor(constructor_payload.anchor);
         constructor.set_definition(&mut self.heap, definition_metadata);
         let constructor_type = self.build_declared_constructor_type(constructor_payload);
@@ -1495,7 +1492,7 @@ impl VM {
         let mut committed_metadata = NIL;
 
         for constructor_payload in constructor_payloads.iter().rev() {
-            if constructor_payload.parent_type != parent_type {
+            if constructor_payload.parent_type.get_ref() != parent_type {
                 continue;
             }
 
@@ -1519,7 +1516,7 @@ impl VM {
             let metadata_ref = AlgebraicConstructorMetadataRef::new(
                 &mut self.heap,
                 AlgebraicConstructorMetadataParts {
-                    constructor: IdentifierRecordRef::from_ref(constructor_payload.constructor),
+                    constructor: constructor_payload.constructor,
                     arity: constructor_payload.arity,
                     fields: committed_fields,
                 },
@@ -1558,7 +1555,7 @@ impl VM {
     ) -> Value {
         constructor_payload.fields.iter().rev().fold(
             self.build_declared_parent_type_application(
-                constructor_payload.parent_type,
+                constructor_payload.parent_type.get_ref(),
                 constructor_payload.parent_type_arity,
             ),
             |result_type, field| {
@@ -1577,9 +1574,9 @@ impl VM {
         let mut formal_bindings: ConsList<FreeFormalBindingRef> = ConsList::EMPTY;
 
         for free_binding in free_bindings {
-            let identifier = IdentifierRecordRef::from_ref(free_binding.identifier);
+            let identifier = free_binding.identifier;
             let definition_metadata = self.definition_metadata_from_anchor(free_binding.anchor);
-            let type_expr = TypeExprRef::new(free_binding.type_expr);
+            let type_expr = free_binding.type_expr;
             identifier.set_definition(&mut self.heap, definition_metadata);
             identifier.set_type_expr(&mut self.heap, type_expr);
 
@@ -1641,11 +1638,7 @@ impl VM {
         super::bytecode::hdsort_binding_list_ref(&mut self.heap, actual_bindings.get_ref()).into()
     }
 
-    fn definition_metadata_from_anchor(&mut self, anchor_raw: RawValue) -> IdentifierDefinitionRef {
-        let Value::Reference(anchor_ref) = Value::from(anchor_raw) else {
-            return IdentifierDefinitionRef::undefined();
-        };
-        let anchor = FileInfoRef::from_ref(anchor_ref);
+    fn definition_metadata_from_anchor(&mut self, anchor: FileInfoRef) -> IdentifierDefinitionRef {
         let script_file = anchor.script_file(&self.heap);
         let line_number = anchor.line_number(&self.heap);
         IdentifierDefinitionRef::new(
@@ -1658,9 +1651,8 @@ impl VM {
         )
     }
 
-    fn push_definiendum_once(&mut self, current_file: FileRecord, identifier_ref: RawValue) {
+    fn push_definiendum_once(&mut self, current_file: FileRecord, identifier: IdentifierRecordRef) {
         let mut definienda = current_file.get_definienda(&self.heap);
-        let identifier = IdentifierRecordRef::from_ref(identifier_ref);
         while let Some(existing) = definienda.pop(&self.heap) {
             if existing == identifier {
                 return;

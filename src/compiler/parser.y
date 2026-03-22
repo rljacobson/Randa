@@ -40,20 +40,30 @@ use super::{
   ParserVmContext,
 };
 
+#[allow(unused_imports)]
 use crate::{
-    big_num::IntegerRef,
-    big_num::SIGN_BIT_MASK,
+    big_num::{IntegerRef, SIGN_BIT_MASK},
     data::{
-        api::{ConsList, FileInfoRef, HeapObjectProxy, IdentifierRecordRef, IdentifierValueRef, IdentifierValueTypeKind, TypeIdentifierValueParts},
-        tag::Tag,
-        values::{
-            Value,
-            RawValue
+        api::{
+            ApNodeRef,
+            ConsList,
+            DataPair,
+            DefinitionRef,
+            FileInfoRef,
+            FreeFormalBindingRef,
+            HeapObjectProxy,
+            IdentifierRecordRef,
+            IdentifierValueRef,
+            IdentifierValueTypeKind,
+            TypeExprRef,
+            TypeIdentifierValueParts
         },
+        ATOM_LIMIT,
         combinator::Combinator,
         Heap,
+        tag::Tag,
         Type,
-        ATOM_LIMIT,
+        values::{Value, RawValue},
     }
 };
 
@@ -78,16 +88,16 @@ use crate::{
   constructor_payloads: Vec<ParserConstructorPayload>,
   free_binding_payloads: Vec<ParserFreeBindingPayload>,
 
-  lex_states: RawValue,
-  used_identifiers: RawValue,
-  lex_rule_definitions: RawValue,
+  lex_states: ConsList<Value>,
+  used_identifiers: ConsList<Value>,
+  lex_rule_definitions: ConsList<Value>,
   last_identifier: RawValue,
   inherited_attributes: RawValue,
-  nonterminals: RawValue,
-  empty_production_nonterminals: RawValue,
-  nonterminal_specification_map: RawValue,
+  nonterminals: ConsList<IdentifierRecordRef>,
+  empty_production_nonterminals: ConsList<IdentifierRecordRef>,
+  nonterminal_specification_map: ConsList<Value>,
   nonterminal_map: RawValue,
-  last_diagnostic_location: RawValue,
+  last_diagnostic_location: Option<FileInfoRef>,
 
   bnf_mode: u8,   // 0=false, 1=true, 2=something about offside rule
   export_list_mode: bool,
@@ -98,8 +108,8 @@ use crate::{
   open_bracket_count: i16,
 
   exported_identifiers: RawValue,
-  export_path_requests: RawValue,
-  export_embargoes: RawValue,
+  export_path_requests: ConsList<Value>,
+  export_embargoes: ConsList<IdentifierRecordRef>,
   include_requests: RawValue,
   free_identifiers: RawValue,
 
@@ -294,7 +304,7 @@ top_level_definition_anchor:
           here_info.script_file,
           here_info.line_number,
         );
-        $$ = Value::Reference(anchor.get_ref());
+        $$ = anchor.into();
       }
     ;
 
@@ -369,12 +379,12 @@ top_level_free_item:
           }
           while source_order_specs != NIL_RAW {
             let free_spec = self.heap[source_order_specs].head;
-            let identifier = self.heap[free_spec].head;
+            let identifier = IdentifierRecordRef::from_ref(self.heap[free_spec].head);
             let free_spec_tail = self.heap[free_spec].tail;
             self.free_binding_payloads.push(ParserFreeBindingPayload {
               identifier,
-              anchor: self.heap[free_spec_tail].head,
-              type_expr: self.heap[free_spec_tail].tail.into(),
+              anchor: FileInfoRef::from_ref(self.heap[free_spec_tail].head),
+              type_expr: TypeExprRef::new(self.heap[free_spec_tail].tail.into()),
             });
             source_order_specs = self.heap[source_order_specs].tail;
           }
@@ -390,18 +400,18 @@ include_export_item:
 
 top_level_definition_item:
     Name top_level_definition_anchor Equal exp directive_terminators {
-        let identifier = $1;
+        let identifier = IdentifierRecordRef::from_ref($1.into());
         self.definition_payloads.push(ParserDefinitionPayload {
-          identifier: identifier.into(),
+          identifier,
           body: $4.into(),
-          anchor: $2.into(),
+          anchor: FileInfoRef::from_ref($2.into()),
         });
-        self.last_identifier = identifier.into();
+        self.last_identifier = identifier.get_ref();
         $$ = NIL;
       }
     | Name top_level_definition_parameters top_level_definition_anchor Equal exp directive_terminators {
-        let identifier = $1;
-        let anchor = $3;
+        let identifier = IdentifierRecordRef::from_ref($1.into());
+        let anchor = FileInfoRef::from_ref($3.into());
         let mut body = $5;
         let mut parameters: RawValue = $2.into();
         while parameters != NIL_RAW {
@@ -409,11 +419,11 @@ top_level_definition_item:
           parameters = self.heap[parameters].tail;
         }
         self.definition_payloads.push(ParserDefinitionPayload {
-          identifier: identifier.into(),
+          identifier,
           body: body.into(),
-          anchor: anchor.into(),
+          anchor,
         });
-        self.last_identifier = identifier.into();
+        self.last_identifier = identifier.get_ref();
         $$ = NIL;
       }
     ;
@@ -427,7 +437,7 @@ top_level_definition_parameters:
 
 top_level_definition_parameters_start:
     /* empty */ {
-        self.used_identifiers = NIL_RAW;
+        self.used_identifiers = ConsList::EMPTY;
         $$ = NIL;
       }
     ;
@@ -435,10 +445,10 @@ top_level_definition_parameters_start:
 top_level_definition_parameter:
     Name {
         let identifier = $1;
-        if ConsList::<Value>::from_ref(self.used_identifiers).contains(self.heap, identifier) {
+        if self.used_identifiers.contains(self.heap, identifier) {
           $$ = self.heap.cons_ref(Token::Constant.into(), identifier);
         } else {
-          self.used_identifiers = self.heap.cons_ref(identifier, self.used_identifiers.into()).into();
+          self.used_identifiers.push(self.heap, identifier);
           $$ = identifier;
         }
       }
@@ -546,10 +556,10 @@ top_level_pattern_application:
 top_level_pattern_atom:
     Name {
         let identifier = $1;
-        if ConsList::<Value>::from_ref(self.used_identifiers).contains(self.heap, identifier) {
+        if self.used_identifiers.contains(self.heap, identifier) {
           $$ = self.heap.cons_ref(Token::Constant.into(), identifier);
         } else {
-          self.used_identifiers = self.heap.cons_ref(identifier, self.used_identifiers.into()).into();
+          self.used_identifiers.push(self.heap, identifier);
           $$ = identifier;
         }
       }
@@ -578,13 +588,13 @@ top_level_pattern_atom:
 top_level_specification_item:
     namelist top_level_definition_anchor ColonColon top_level_type_expr directive_terminators {
         let mut names: RawValue = $1.into();
-        let anchor = $2;
-        let type_expr = $4;
+        let anchor = FileInfoRef::from_ref($2.into());
+        let type_expr = TypeExprRef::new($4);
         while names != NIL_RAW {
           self.specification_payloads.push(ParserSpecificationPayload {
-            identifier: self.heap[names].head,
+            identifier: IdentifierRecordRef::from_ref(self.heap[names].head),
             type_expr,
-            anchor: anchor.into(),
+            anchor,
           });
           names = self.heap[names].tail;
         }
@@ -611,17 +621,17 @@ top_level_type_lhs_typevars:
 
 top_level_synonym_type_item:
     Name top_level_type_lhs_typevars top_level_definition_anchor EqualEqual top_level_type_expr directive_terminators {
-        let type_identifier = $1;
+        let type_identifier = IdentifierRecordRef::from_ref($1.into());
         let typevars = $2;
         let arity = ConsList::<Value>::from_ref(typevars.into()).len(&self.heap) as isize;
-        let anchor = $3;
+        let anchor = FileInfoRef::from_ref($3.into());
         let info = $5;
         self.type_declaration_payloads.push(ParserTypeDeclarationPayload {
-          type_identifier: type_identifier.into(),
+          type_identifier,
           arity,
           kind: IdentifierValueTypeKind::Synonym,
           info,
-          anchor: anchor.into(),
+          anchor,
         });
         $$ = NIL;
       }
@@ -633,10 +643,10 @@ top_level_synonym_type_item:
 
 top_level_algebraic_type_item:
     Name top_level_type_lhs_typevars top_level_definition_anchor Colon2Equal top_level_constructor_list directive_terminators {
-        let type_identifier = $1;
+        let type_identifier = IdentifierRecordRef::from_ref($1.into());
         let typevars = $2;
         let arity = ConsList::<Value>::from_ref(typevars.into()).len(&self.heap) as isize;
-        let anchor = $3;
+        let anchor = FileInfoRef::from_ref($3.into());
         let mut constructor_list: RawValue = $5.into();
         let mut source_order_constructors = NIL_RAW;
         while constructor_list != NIL_RAW {
@@ -650,12 +660,10 @@ top_level_algebraic_type_item:
           if declaration >= ATOM_LIMIT {
             let mut declaration_ref = declaration;
             let mut fields = Vec::new();
-            while self.heap[declaration_ref].tag == Tag::Ap {
-              fields.push(self.heap[declaration_ref].tail.into());
-              declaration_ref = self.heap[declaration_ref].head;
-              if declaration_ref < ATOM_LIMIT {
-                break;
-              }
+            while declaration_ref >= ATOM_LIMIT && self.heap[declaration_ref].tag == Tag::Ap {
+              let application = ApNodeRef::from_ref(declaration_ref);
+              fields.push(application.argument_raw(&self.heap).into());
+              declaration_ref = application.function_raw(&self.heap);
             }
 
             if declaration_ref >= ATOM_LIMIT && self.heap[declaration_ref].tag == Tag::Id {
@@ -664,12 +672,12 @@ top_level_algebraic_type_item:
                 ParserConstructorFieldPayload::from_field_type(field, self.strict_constructor_field_type(field))
               }).collect::<Vec<_>>();
               let payload = ParserConstructorPayload {
-                constructor: declaration_ref,
-                parent_type: type_identifier.into(),
+                constructor: IdentifierRecordRef::from_ref(declaration_ref),
+                parent_type: type_identifier,
                 parent_type_arity: arity,
                 arity: field_payloads.len() as isize,
                 fields: field_payloads,
-                anchor: anchor.into(),
+                anchor,
               };
               constructor_identifiers.push(payload.constructor);
               self.constructor_payloads.push(payload);
@@ -681,11 +689,11 @@ top_level_algebraic_type_item:
           self.heap.cons_ref((*constructor).into(), list)
         });
         self.type_declaration_payloads.push(ParserTypeDeclarationPayload {
-          type_identifier: type_identifier.into(),
+          type_identifier,
           arity,
           kind: IdentifierValueTypeKind::Algebraic,
           info: source_order_constructor_list,
-          anchor: anchor.into(),
+          anchor,
         });
         $$ = NIL;
       }
@@ -708,7 +716,7 @@ export_anchor:
           here_info.script_file,
           here_info.line_number,
         );
-        $$ = Value::Reference(anchor.get_ref());
+        $$ = anchor.into();
       }
     ;
 
@@ -719,8 +727,8 @@ export_directive:
         if self.exported_identifiers != NIL_RAW {
           self.syntax("multiple %export statements are illegal\n");
         } else {
-          if export_parts == NIL && self.export_path_requests == NIL_RAW && self.export_embargoes != NIL_RAW {
-            self.export_path_requests = self.heap.cons_ref(Combinator::Plus.into(), NIL).into();
+          if export_parts == NIL && self.export_path_requests.is_empty() && !self.export_embargoes.is_empty() {
+            self.export_path_requests.push(self.heap, Combinator::Plus.into());
           }
           self.exported_identifiers = self.heap.cons_ref($1, export_parts).into();
         }
@@ -732,28 +740,28 @@ export_items:
     export_items Name { $$ = self.heap.cons_ref($2, $1); }
     | export_items Minus Name {
         $$ = $1;
-        self.export_embargoes = self.heap.cons_ref($3, self.export_embargoes.into()).into();
+        self.export_embargoes.push(self.heap, IdentifierRecordRef::from_ref($3.into()));
       }
     | export_items StringLiteral {
         $$ = $1;
-        self.export_path_requests = self.heap.cons_ref($2, self.export_path_requests.into()).into();
+        self.export_path_requests.push(self.heap, $2);
       }
     | export_items Plus {
         $$ = $1;
-        self.export_path_requests = self.heap.cons_ref(Combinator::Plus.into(), self.export_path_requests.into()).into();
+        self.export_path_requests.push(self.heap, Combinator::Plus.into());
       }
     | Name { $$ = self.heap.cons_ref($1, NIL); }
     | Minus Name {
         $$ = NIL;
-        self.export_embargoes = self.heap.cons_ref($2, self.export_embargoes.into()).into();
+        self.export_embargoes.push(self.heap, IdentifierRecordRef::from_ref($2.into()));
       }
     | StringLiteral {
         $$ = NIL;
-        self.export_path_requests = self.heap.cons_ref($1, self.export_path_requests.into()).into();
+        self.export_path_requests.push(self.heap, $1);
       }
     | Plus {
         $$ = NIL;
-        self.export_path_requests = self.heap.cons_ref(Combinator::Plus.into(), self.export_path_requests.into()).into();
+        self.export_path_requests.push(self.heap, Combinator::Plus.into());
       }
     ;
 
@@ -773,7 +781,7 @@ include_directive:
         };
         self.check_include_modifier_conflicts(&modifiers);
         self.directive_include_requests.push(ParserIncludeDirectivePayload {
-          anchor,
+          anchor: FileInfoRef::from_ref(anchor),
           target_path,
           modifiers,
           bindings: {
@@ -802,7 +810,7 @@ include_target:
           here_info.script_file,
           here_info.line_number,
         );
-        $$ = self.heap.cons_ref($1, Value::Reference(anchor.get_ref()));
+        $$ = self.heap.cons_ref($1, anchor.into());
       }
     ;
 
@@ -833,23 +841,21 @@ include_binding_sequence:
 include_binding:
     Name Equal exp { $$ = self.heap.cons_ref($1, $3); }
     | typeform act1 EqualEqual type act2 {
-        let mut arity = 0;
-        let mut h: RawValue = $1.into();
-        while self.heap[h].tag == Tag::Ap {
-          arity += 1;
-          h = self.heap[h].head;
-        }
+        let typeform = TypeExprRef::new($1);
+        let Some((type_identifier, arguments)) = typeform.identifier_head_application_spine(&self.heap) else {
+          unreachable!("include type binding lhs should stay identifier-headed")
+        };
         let type_value = IdentifierValueRef::from_type_identifier_parts(
           self.heap,
           TypeIdentifierValueParts {
-            arity,
+            arity: arguments.len() as isize,
             show_function: None,
             kind: IdentifierValueTypeKind::Synonym,
             info: $4,
           }
         );
         $$ = self.heap.apply_ref(
-          h.into(),
+          type_identifier.into(),
           type_value.into()
         ).into();
       }
@@ -1096,12 +1102,16 @@ reln:
     | reln relop e2 {
         /* EFFICIENCY PROBLEM - subject gets re-evaluated (and
             retypechecked) - fix later */
-            let hd = self.heap[$1].head;
-        let subject = if self.heap[hd].head == Combinator::And.into() {
-          let reln_tail = self.heap[$1].tail;
-          self.heap[reln_tail].tail
+        let reln = ApNodeRef::from_ref($1.into());
+        let subject = if let Some(inner_application) = reln.function_application(&self.heap) {
+          if inner_application.function_raw(&self.heap) == RawValue::from(Combinator::And) {
+            let reln_tail = ApNodeRef::from_ref(reln.argument_raw(&self.heap));
+            reln_tail.argument_raw(&self.heap)
+          } else {
+            reln.argument_raw(&self.heap)
+          }
         } else {
-          self.heap[$1].tail
+          reln.argument_raw(&self.heap)
         };
         let rhs = self.heap.apply2($2, subject.into(), $3);
         $$ = self.heap.apply2(Combinator::And.into(), $1, rhs);
@@ -1115,12 +1125,16 @@ relsn:                     /* reln or presection */
         /* EFFICIENCY PROBLEM - subject gets re-evaluated (and
                     retypechecked) - fix later */
 
-        let reln_head = self.heap[$1].head;
-        let subject = if self.heap[reln_head].head == Combinator::And.into() {
-          let reln_tail = self.heap[$1].tail;
-          self.heap[reln_tail].tail
+        let reln = ApNodeRef::from_ref($1.into());
+        let subject = if let Some(inner_application) = reln.function_application(&self.heap) {
+          if inner_application.function_raw(&self.heap) == RawValue::from(Combinator::And) {
+            let reln_tail = ApNodeRef::from_ref(reln.argument_raw(&self.heap));
+            reln_tail.argument_raw(&self.heap)
+          } else {
+            reln.argument_raw(&self.heap)
+          }
         } else {
-          self.heap[$1].tail
+          reln.argument_raw(&self.heap)
         };
         let rhs = self.heap.apply2($2, subject.into(), $3);
         $$ = self.heap.apply2(Combinator::And.into(), $1, rhs);
@@ -1131,7 +1145,7 @@ arg:
     /* `%lex` parsing remains outside the current expression-only parser path. */
     /* empty */ {
       if !self.syntax_error_found {
-        self.lex_states = NIL_RAW;
+        self.lex_states = ConsList::EMPTY;
         self.lex_mode = 1;
       }
       $$ = NIL;
@@ -1192,9 +1206,17 @@ arg:
     | OpenParenthesis es1 CloseParenthesis      /* presection or parenthesised e1 */ { $$ = $2; }
     | OpenParenthesis diop1 e1 CloseParenthesis /* postsection */ {
         /* optimisation */
-        let hd = self.heap[$2].head;
-        $$ = if self.heap[$2].tag == Tag::Ap && hd == Combinator::C.into() {
-          self.heap.apply_ref(self.heap[$2].tail.into(), $3)
+        $$ = if let Value::Reference(section_ref) = $2 {
+          if self.heap[section_ref].tag == Tag::Ap {
+            let section = ApNodeRef::from_ref(RawValue::from($2));
+            if section.function_raw(&self.heap) == RawValue::from(Combinator::C) {
+              self.heap.apply_ref(section.argument_raw(&self.heap).into(), $3)
+            } else {
+              self.heap.apply2(Combinator::C.into(), $2, $3)
+            }
+          } else {
+            self.heap.apply2(Combinator::C.into(), $2, $3)
+          }
         } else {
           self.heap.apply2(Combinator::C.into(), $2, $3)
         };
@@ -1611,8 +1633,8 @@ def:
           errs = $2;
           syntax("multiple %export statements are illegal\n");
         } else {
-          if $4 == NIL && self.export_path_requests == NIL_RAW && self.export_embargoes != NIL_RAW {
-            self.export_path_requests = self.heap.cons_ref(Combinator::Plus.into(), NIL).into();
+          if $4 == NIL && self.export_path_requests.is_empty() && !self.export_embargoes.is_empty() {
+            self.export_path_requests.push(self.heap, Combinator::Plus.into());
           }
           self.exported_identifiers = self.heap.cons_ref($2, $4).into();  /* self.heap.cons(hereinfo, identifiers) */
         }
@@ -1640,15 +1662,20 @@ def:
           self.free_identifiers = alfasort(self.free_identifiers.into()).into();
           let mut freeid_cursor = self.free_identifiers;
           while freeid_cursor!=NIL {
-            /* each element of free_identifiers is of the form
-              self.heap.cons(id, self.heap.cons(original_name, type)) */
-            self.heap[freeid_cursor].head = self.heap.cons_ref(
-              self.heap[freeid_cursor].head,
-              self.heap.cons_ref(
-                datapair(get_id(self.heap[freeid_cursor].head), 0),
-                id_type(self.heap[freeid_cursor].head)
-              )
+            let identifier = IdentifierRecordRef::from_ref(self.heap[freeid_cursor].head);
+            let original_name_ref = self.heap.string(identifier.get_name(&self.heap));
+            let original_name = DataPair::new(
+              &mut self.heap,
+              original_name_ref.into(),
+              0.into(),
             );
+            let formal_binding = FreeFormalBindingRef::new(
+              &mut self.heap,
+              identifier,
+              original_name,
+              identifier.get_type_expr(&self.heap),
+            );
+            self.heap[freeid_cursor].head = formal_binding.get_ref();
             freeid_cursor = self.heap[freeid_cursor].tail;
           }
         }
@@ -1665,44 +1692,49 @@ def:
 
     | here BNF { startbnf(); self.bnf_mode = 1; } names outdent productions EndIR {
         /* fiddle - `indent' done by yylex() while processing directive */
-        let mut lhs = NIL;
+        let mut lhs = ConsList::EMPTY;
         let mut p = $6;
         let mut subjects = NIL;
         let mut body = NIL;
         let mut startswith = NIL;
-        let mut leftrecs = NIL;
+        let mut leftrecs = ConsList::EMPTY;
         self.inherited_attributes = 0;
         self.bnf_mode = 0;
-        self.nonterminals = UNION(self.nonterminals.into(), $4).into();
+        self.nonterminals = self.nonterminals.union(
+          self.heap,
+          ConsList::<IdentifierRecordRef>::from_ref($4.into()),
+        );
         while p!=NIL {
           if (dval(self.heap[p].head)==Combinator::Undef.into()) {
-            self.nonterminals = add1(dlhs(self.heap[p].head), self.nonterminals.into()).into();
+            self.nonterminals.insert_ordered(self.heap, IdentifierRecordRef::from_ref(dlhs(self.heap[p].head)));
           }
           else{
-            lhs = add1(dlhs(self.heap[p].head), lhs);
+            lhs.insert_ordered(self.heap, IdentifierRecordRef::from_ref(dlhs(self.heap[p].head)));
           }
           p = self.heap[p].tail;
         }
-        self.nonterminals = setdiff(self.nonterminals.into(), lhs).into();
-        if self.nonterminals != NIL_RAW {
+        self.nonterminals = self.nonterminals.difference(self.heap, lhs);
+        if !self.nonterminals.is_empty() {
           errs = $1;
-          member($4, self.heap[self.nonterminals].head); /*||findnt(self.heap[self.nonterminals].head)*/
           printf("%sfatal error in grammar, ", if echoing {"\n"} else {""});
           printf(
             "undefined nonterminal%s: ",
-            if self.heap[self.nonterminals].tail==NIL_RAW {""} else {"s"}
+            if self.nonterminals.rest(self.heap).is_none() {""} else {"s"}
           );
-          printlist("", self.nonterminals.into());
+          printlist("", self.nonterminals.get_ref().into());
           acterror();
         } else { /* compute list of nonterminals admitting empty prodn */
-          self.empty_production_nonterminals = NIL_RAW;
+          self.empty_production_nonterminals = ConsList::EMPTY;
           let mut changed = true;
           while changed {
             changed = false;
             p = $6;
             while p!=NIL {
-              if(!member(self.empty_production_nonterminals.into(), dlhs(self.heap[p].head)) && eprod(dval(self.heap[p].head))) {
-                self.empty_production_nonterminals = self.heap.cons_ref(dlhs(self.heap[p].head), self.empty_production_nonterminals.into()).into();
+              let definition_lhs = IdentifierRecordRef::from_ref(dlhs(self.heap[p].head));
+              if !self.empty_production_nonterminals.contains(self.heap, definition_lhs)
+                && eprod(dval(self.heap[p].head))
+              {
+                self.empty_production_nonterminals.insert_ordered(self.heap, definition_lhs);
                 changed = true;
               }
               p = self.heap[p].tail;
@@ -1733,17 +1765,17 @@ def:
           startswith = tclos(sortrel(startswith));
           while startswith!=NIL {
             if (member(tl[hd[startswith]], hd[hd[startswith]])) {
-              leftrecs = add1(hd[hd[startswith]], leftrecs);
+              leftrecs.insert_ordered(self.heap, IdentifierRecordRef::from_ref(hd[hd[startswith]]));
             }
             startswith = self.heap[startswith].tail;
           }
-          if(leftrecs!=NIL){
-            errs = getloc(self.heap[leftrecs].head, $6);
+          if(!leftrecs.is_empty()){
+            errs = getloc(self.heap[leftrecs.get_ref()].head, $6);
             printf(
               "%sfatal error in grammar, ",
               if echoing {"\n"} else {""}
             );
-            printlist("irremovable left recursion: ", leftrecs);
+            printlist("irremovable left recursion: ", leftrecs.get_ref().into());
             acterror();
           }
           let mut start_symbols = $4;
@@ -1793,15 +1825,19 @@ binding:
     Name indent Equal exp outdent { $$ = self.heap.cons_ref($1, $4); }
     | typeform indent act1 EqualEqual type act2 outdent {
         let x = redtvars(self.heap.apply_ref($1, $5).into());
-        let mut arity = 0;
-        let mut h = self.heap[x].head;
-        while self.heap[h].tag == Tag::Ap {
-          arity += 1;
-          h = self.heap[h].head;
-        }
+        let typeform = TypeExprRef::new(self.heap[x].head.into());
+        let Some((type_identifier, arguments)) = typeform.identifier_head_application_spine(&self.heap) else {
+          unreachable!("binding type lhs should stay identifier-headed after redtvars")
+        };
         $$ = self.heap.apply_ref(
-          h.into(),
-          make_typ(arity, 0, IdentifierValueTypeKind::Synonym, self.heap[x].tail).into()
+          type_identifier.into(),
+          make_typ(
+            arguments.len() as isize,
+            0,
+            IdentifierValueTypeKind::Synonym,
+            self.heap[x].tail,
+          )
+          .into()
         ).into();
       }
     ;
@@ -1869,8 +1905,8 @@ here:
           here_info.script_file,
           here_info.line_number,
         );
-        self.last_diagnostic_location = anchor.get_ref();
-        $$ = Value::Reference(anchor.get_ref());
+        self.last_diagnostic_location = Some(anchor);
+        $$ = anchor.into();
       }
     ;
 
@@ -1880,7 +1916,7 @@ act1:
 act2:
     /* empty */ {
         self.type_variable_scope = false;
-        self.used_identifiers = NIL_RAW;
+        self.used_identifiers = ConsList::EMPTY;
         $$ = NIL;
       }
     ;
@@ -1888,34 +1924,54 @@ act2:
 ldefs:
     ldef {
         $$ = self.heap.cons_ref($1, NIL);
-        dval($1) = self.heap.tries_ref(dlhs($1), self.heap.cons_ref(dval($1), NIL));
-        if (!SYNERR && get_ids(dlhs($1))==NIL) {
-          errs = hd[hd[tl[dval($1)]]];
+        let definition = DefinitionRef::from_ref($1.into());
+        definition.set_body_value(
+          &mut self.heap,
+          self.heap.tries_ref(
+            definition.lhs_value(&self.heap),
+            self.heap.cons_ref(definition.body_value(&self.heap), NIL),
+          ),
+        );
+        let definition_body = definition.body_value(&self.heap);
+        if (!SYNERR && get_ids(definition.lhs_value(&self.heap).into())==NIL) {
+          errs = hd[hd[tl[definition_body.into()]]];
           syntax("illegal lhs for local definition\n");
         }
       }
     | ldefs ldef {
-        if(dlhs($2)==dlhs(self.heap[$1].head) /*&&dval(self.heap[$1].head)!=UNDEF*/) {
+        let new_definition = DefinitionRef::from_ref($2.into());
+        let head_definition = DefinitionRef::from_ref(self.heap[$1].head);
+        if(new_definition.lhs_value(&self.heap) == head_definition.lhs_value(&self.heap) /*&&dval(self.heap[$1].head)!=UNDEF*/) {
           $$ = $1;
-          if (!fallible(self.heap[self.heap[dval(hd[$1].head.tail)]])) {
-            errs = self.heap[dval($2)].head;
+          let head_body_raw: RawValue = head_definition.body_value(&self.heap).into();
+          if (!fallible(self.heap[self.heap[head_body_raw]])) {
+            errs = self.heap[new_definition.body_value(&self.heap).into()].head;
             printf(
               "%ssyntax error: unreachable case in defn of \"%s\"\n",
               if echoing {"\n"} else {""},
-              get_id(dlhs($2))
+              get_id(new_definition.lhs_value(&self.heap).into())
             );
             acterror();
           }
-          self.heap[dval(self.heap[$1].head.tail)] = self.heap.cons_ref(dval($2), self.heap[dval(self.heap[$1].head.tail)]);
+          self.heap[self.heap[head_body_raw].tail] = self.heap.cons_ref(
+            new_definition.body_value(&self.heap),
+            self.heap[self.heap[head_body_raw].tail],
+          );
         } else if (!SYNERR) {
-          let ns = get_ids(dlhs($2));
-          let hr = self.heap[dval($2)].head;
+          let ns = get_ids(new_definition.lhs_value(&self.heap).into());
+          let hr = self.heap[new_definition.body_value(&self.heap).into()].head;
           if(ns==NIL){
             errs = hr;
             syntax("illegal lhs for local definition\n");
           }
           $$ = self.heap.cons_ref($2, $1);
-          dval($2) = self.heap.tries_ref(dlhs($2), self.heap.cons_ref(dval($2), NIL));
+          new_definition.set_body_value(
+            &mut self.heap,
+            self.heap.tries_ref(
+              new_definition.lhs_value(&self.heap),
+              self.heap.cons_ref(new_definition.body_value(&self.heap), NIL),
+            ),
+          );
           while(ns!=NIL&&!SYNERR) { /* local nameclash check */
             nclashcheck(self.heap[ns].head, $1, hr);
             ns = self.heap[ns].tail;
@@ -1951,7 +2007,7 @@ ldef:
           }
         }
         r = self.heap.label_ref($5, r); /* to help locate type errors */
-        $$ = defn(l, Type::Undefined.into(), r);
+        $$ = DefinitionRef::new(&mut self.heap, l.into(), Type::Undefined.into(), r).into();
       }
     ;
 
@@ -2010,11 +2066,11 @@ v3:
           syntax("illegal use of $num symbol\n");
         }
         /* cannot use grammar variable in a binding position */
-        if (memb(self.used_identifiers.into(), $1)) {
+        if self.used_identifiers.contains(self.heap, $1) {
           $$ = self.heap.cons_ref(Token::Constant.into(), $1);
         } /* picks up repeated names in a template */
         else {
-          self.used_identifiers = self.heap.cons_ref($1, self.used_identifiers.into()).into();
+          self.used_identifiers.push(self.heap, $1);
         }
       }
     | ConstructorName
@@ -2090,7 +2146,7 @@ argtype:
            /* necessary while prelude not meta_tchecked (for prelude) */
     | typevar {
         if self.type_variable_scope
-          && !ConsList::<Value>::from_ref(self.used_identifiers).contains(self.heap, $1)
+          && !self.used_identifiers.contains(self.heap, $1)
         {
           self.syntax("unbound type variable\n");
         }
@@ -2129,22 +2185,22 @@ parts: /* returned in reverse order */
     parts Name { $$ = add1($2, $1); }
     | parts Minus Name {
         $$ = $1;
-        self.export_embargoes = add1($3, self.export_embargoes.into()).into();
+        self.export_embargoes.insert_ordered(self.heap, IdentifierRecordRef::from_ref($3.into()));
       }
     | parts PathName { $$ = $1; } /* the pathnames are placed on export_path_requests in yylex */
     | parts Plus {
         $$ = $1;
-        self.export_path_requests = self.heap.cons_ref(Combinator::Plus.into(), self.export_path_requests.into()).into();
+        self.export_path_requests.push(self.heap, Combinator::Plus.into());
       }
     | Name { $$ = add1($1, NIL); }
     | Minus Name {
         $$ = NIL;
-        self.export_embargoes = add1($2, self.export_embargoes.into()).into();
+        self.export_embargoes.insert_ordered(self.heap, IdentifierRecordRef::from_ref($2.into()));
       }
     | PathName { $$ = NIL; }
     | Plus {
         $$ = NIL;
-        self.export_path_requests = self.heap.cons_ref(Combinator::Plus.into(), self.export_path_requests.into()).into();
+        self.export_path_requests.push(self.heap, Combinator::Plus.into());
       }
     ;
 
@@ -2223,22 +2279,22 @@ typeform:
     | Name typevars   /* warning if typevar is repeated */ {
         $$ = $1;
         self.used_identifiers = match $2 {
-          Value::Reference(_) => RawValue::from($2),
-          Value::Combinator(Combinator::Nil) => NIL_RAW,
-          _ => NIL_RAW,
+          Value::Reference(_) => ConsList::from_ref(RawValue::from($2)),
+          Value::Combinator(Combinator::Nil) => ConsList::EMPTY,
+          _ => ConsList::EMPTY,
         };
         let mut typevars = self.used_identifiers;
-        while typevars != NIL_RAW {
-          $$ = self.heap.apply_ref($$, self.heap[typevars].head.into());
-          typevars = self.heap[typevars].tail;
+        while let Some(typevar) = typevars.pop_value(&self.heap) {
+          $$ = self.heap.apply_ref($$, typevar);
         }
       }
     | typevar InfixName typevar {
         if self.same_type_variable($1, $3) {
           self.syntax("repeated type variable in typeform\n");
         }
-        let tail = self.heap.cons_ref($3, NIL);
-        self.used_identifiers = self.heap.cons_ref($1, tail.into()).into();
+        let mut tail = ConsList::new(self.heap, $3);
+        tail.push(self.heap, $1);
+        self.used_identifiers = tail;
         $$ = self.heap.apply2($2, $1, $3);
       }
     | typevar InfixCName typevar {
@@ -2340,7 +2396,17 @@ productions:
         $$ = NIL;
         while (h!=NIL && !SYNERR) {
           self.nonterminal_specification_map = self.heap.cons_ref(self.heap.cons_ref(self.heap[h].head, hr), self.nonterminal_specification_map.into()).into();
-          $$ = add_prod(defn(self.heap[h].head, t, Combinator::Undef.into()), $$, hr);
+          $$ = add_prod(
+            DefinitionRef::new(
+              &mut self.heap,
+              self.heap[h].head.into(),
+              t.into(),
+              Combinator::Undef.into(),
+            )
+            .into(),
+            $$,
+            hr,
+          );
           h = self.heap[h].tail;
         }
       }
@@ -2353,17 +2419,30 @@ productions:
         $$=$1;
         while(h!=NIL&&!SYNERR){
           self.nonterminal_specification_map = self.heap.cons_ref(self.heap.cons_ref(self.heap[h].head, hr), self.nonterminal_specification_map.into()).into();
-          $$ = add_prod(defn(self.heap[h].head, t, Combinator::Undef.into()), $$, hr);
+          $$ = add_prod(
+            DefinitionRef::new(
+              &mut self.heap,
+              self.heap[h].head.into(),
+              t.into(),
+              Combinator::Undef.into(),
+            )
+            .into(),
+            $$,
+            hr,
+          );
           h = self.heap[h].tail;
         }
       }
-    | productions production { $$ = add_prod($2, $1, self.heap[dval($2)].head); }
+    | productions production {
+        let production = DefinitionRef::from_ref($2.into());
+        $$ = add_prod($2, $1, self.heap[production.body_value(&self.heap).into()].head);
+      }
     ;
 
 production:
     Name params Colon indent grhs outdent
       /* found by experiment that indent must follow Colon here */ {
-        $$ = defn($1, Type::Undefined.into(), $5);
+        $$ = DefinitionRef::new(&mut self.heap, $1, Type::Undefined.into(), $5).into();
       }
     ;
 
@@ -2762,11 +2841,13 @@ impl<'ctx /* 'fix quotes */> Parser<'ctx /* 'fix quotes */> {
       if field_ref < ATOM_LIMIT || self.heap[field_ref].tag != Tag::Ap {
         return None;
       }
-      if self.heap[field_ref].head != RawValue::from(Type::Strict) {
+
+      let field_application = ApNodeRef::from_ref(field_ref);
+      if field_application.function_raw(&self.heap) != RawValue::from(Type::Strict) {
         return None;
       }
 
-      Some(self.heap[field_ref].tail.into())
+      Some(field_application.argument_raw(&self.heap).into())
     }
 
     /// Decodes one raw include-binding heap node into its typed parser payload variant. This exists so parser-owned
@@ -2777,11 +2858,11 @@ impl<'ctx /* 'fix quotes */> Parser<'ctx /* 'fix quotes */> {
       debug_assert!(binding_ref >= ATOM_LIMIT);
       match self.heap[binding_ref].tag {
         Tag::Cons => ParserIncludeBindingPayload::Value {
-          identifier: self.heap[binding_ref].head,
+          identifier: IdentifierRecordRef::from_ref(self.heap[binding_ref].head),
           body: self.heap[binding_ref].tail.into(),
         },
         Tag::Ap => ParserIncludeBindingPayload::Type {
-          identifier: self.heap[binding_ref].head,
+          identifier: IdentifierRecordRef::from_ref(self.heap[binding_ref].head),
           type_value: IdentifierValueRef::from_ref(self.heap[binding_ref].tail),
         },
         _ => unreachable!("include binding should be a cons or application node"),
@@ -2797,11 +2878,11 @@ impl<'ctx /* 'fix quotes */> Parser<'ctx /* 'fix quotes */> {
       debug_assert!(modifier_ref >= ATOM_LIMIT);
       match self.heap[modifier_ref].tag {
         Tag::Cons => ParserIncludeModifierPayload::Rename {
-          source: self.heap[modifier_ref].tail,
-          destination: self.heap[modifier_ref].head,
+          source: IdentifierRecordRef::from_ref(self.heap[modifier_ref].tail),
+          destination: IdentifierRecordRef::from_ref(self.heap[modifier_ref].head),
         },
         Tag::Ap => ParserIncludeModifierPayload::Suppress {
-          identifier: self.heap[modifier_ref].tail,
+          identifier: IdentifierRecordRef::from_ref(self.heap[modifier_ref].tail),
         },
         _ => unreachable!("include modifier should be a cons or application node"),
       }
@@ -2842,7 +2923,7 @@ impl<'ctx /* 'fix quotes */> Parser<'ctx /* 'fix quotes */> {
           };
 
           if let Some(conflict_identifier) = conflict {
-            let name = IdentifierRecordRef::from_ref(conflict_identifier).get_name(&self.heap);
+            let name = conflict_identifier.get_name(&self.heap);
             self.syntax(&format!("conflicting aliases (\"{}\")\n", name));
             return;
           }
@@ -2872,8 +2953,8 @@ impl<'ctx /* 'fix quotes */> Parser<'ctx /* 'fix quotes */> {
 
         if self.top_level_script_parsed {
             let export = if self.exported_identifiers == NIL_RAW
-                && self.export_path_requests == NIL_RAW
-                && self.export_embargoes == NIL_RAW
+                && self.export_path_requests.is_empty()
+                && self.export_embargoes.is_empty()
             {
                 None
             } else {
@@ -2887,10 +2968,10 @@ impl<'ctx /* 'fix quotes */> Parser<'ctx /* 'fix quotes */> {
                 };
 
                 Some(ParserExportDirectivePayload {
-                    anchor,
+                    anchor: FileInfoRef::from_ref(anchor),
                     exported_ids,
-                    pathname_requests: self.export_path_requests,
-                    embargoes: self.export_embargoes,
+                    pathname_requests: self.export_path_requests.get_ref(),
+                    embargoes: self.export_embargoes.get_ref(),
                 })
             };
 
