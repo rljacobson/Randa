@@ -29,6 +29,7 @@ use super::{
   ParserFreeBindingPayload,
   ParserIncludeBindingPayload,
   ParserIncludeDirectivePayload,
+  ParserIncludeModifierPayload,
   ParserRunDiagnostics,
   ParserRunResult,
   ParserSpecificationPayload,
@@ -43,7 +44,7 @@ use crate::{
     big_num::IntegerRef,
     big_num::SIGN_BIT_MASK,
     data::{
-        api::{ConsList, FileInfoRef, HeapObjectProxy, IdentifierRecordRef, IdentifierValueRef, IdentifierValueTypeKind},
+        api::{ConsList, FileInfoRef, HeapObjectProxy, IdentifierRecordRef, IdentifierValueRef, IdentifierValueTypeKind, TypeIdentifierValueParts},
         tag::Tag,
         values::{
             Value,
@@ -645,14 +646,34 @@ top_level_algebraic_type_item:
         let mut constructor_identifiers = Vec::new();
         let mut constructors: RawValue = source_order_constructors;
         while constructors != NIL_RAW {
-          if let Some(payload) = self.constructor_payload_from_declaration(
-            self.heap[constructors].head.into(),
-            type_identifier.into(),
-            arity,
-            anchor.into(),
-          ) {
-            constructor_identifiers.push(payload.constructor);
-            self.constructor_payloads.push(payload);
+          let declaration = self.heap[constructors].head;
+          if declaration >= ATOM_LIMIT {
+            let mut declaration_ref = declaration;
+            let mut fields = Vec::new();
+            while self.heap[declaration_ref].tag == Tag::Ap {
+              fields.push(self.heap[declaration_ref].tail.into());
+              declaration_ref = self.heap[declaration_ref].head;
+              if declaration_ref < ATOM_LIMIT {
+                break;
+              }
+            }
+
+            if declaration_ref >= ATOM_LIMIT && self.heap[declaration_ref].tag == Tag::Id {
+              fields.reverse();
+              let field_payloads = fields.into_iter().map(|field| {
+                ParserConstructorFieldPayload::from_field_type(field, self.strict_constructor_field_type(field))
+              }).collect::<Vec<_>>();
+              let payload = ParserConstructorPayload {
+                constructor: declaration_ref,
+                parent_type: type_identifier.into(),
+                parent_type_arity: arity,
+                arity: field_payloads.len() as isize,
+                fields: field_payloads,
+                anchor: anchor.into(),
+              };
+              constructor_identifiers.push(payload.constructor);
+              self.constructor_payloads.push(payload);
+            }
           }
           constructors = self.heap[constructors].tail;
         }
@@ -737,15 +758,33 @@ export_items:
     ;
 
 include_directive:
-    Include include_target include_bindings include_modifiers {
+      Include include_target include_bindings include_modifiers {
         let target_ref: RawValue = $2.into();
         let target_path = self.heap[target_ref].head;
         let anchor = self.heap[target_ref].tail;
+        let modifiers = {
+          let mut payloads = Vec::new();
+          let mut cursor = ConsList::<Value>::from_ref($4.into());
+          while let Some(modifier) = cursor.pop_value(&self.heap) {
+            payloads.push(self.decode_include_modifier(modifier));
+          }
+          payloads.reverse();
+          payloads
+        };
+        self.check_include_modifier_conflicts(&modifiers);
         self.directive_include_requests.push(ParserIncludeDirectivePayload {
           anchor,
           target_path,
-          modifiers: $4.into(),
-          bindings: self.decode_include_bindings($3.into()),
+          modifiers,
+          bindings: {
+            let mut payloads = Vec::new();
+            let mut cursor = ConsList::<Value>::from_ref($3.into());
+            while let Some(binding) = cursor.pop_value(&self.heap) {
+              payloads.push(self.decode_include_binding(binding));
+            }
+            payloads.reverse();
+            payloads
+          },
         });
         $$ = NIL;
       }
@@ -793,6 +832,27 @@ include_binding_sequence:
 
 include_binding:
     Name Equal exp { $$ = self.heap.cons_ref($1, $3); }
+    | typeform act1 EqualEqual type act2 {
+        let mut arity = 0;
+        let mut h: RawValue = $1.into();
+        while self.heap[h].tag == Tag::Ap {
+          arity += 1;
+          h = self.heap[h].head;
+        }
+        let type_value = IdentifierValueRef::from_type_identifier_parts(
+          self.heap,
+          TypeIdentifierValueParts {
+            arity,
+            show_function: None,
+            kind: IdentifierValueTypeKind::Synonym,
+            info: $4,
+          }
+        );
+        $$ = self.heap.apply_ref(
+          h.into(),
+          type_value.into()
+        ).into();
+      }
     ;
 
 include_modifiers:
@@ -806,11 +866,11 @@ include_modifier_list:
     ;
 
 include_modifier:
-    Name Divide Name { $$ = self.heap.cons_ref($1, $3); }
-    | ConstructorName Divide ConstructorName { $$ = self.heap.cons_ref($1, $3); }
+    Name DivideFloat Name { $$ = self.heap.cons_ref($1, $3); }
+    | ConstructorName DivideFloat ConstructorName { $$ = self.heap.cons_ref($1, $3); }
     | Minus Name {
         let suppression_marker = self.heap.make_private_symbol_ref(Combinator::Undef.into());
-        $$ = self.heap.cons_ref(suppression_marker, $2);
+        $$ = self.heap.apply_ref(suppression_marker, $2).into();
       }
     ;
 
@@ -2161,7 +2221,17 @@ typeform:
         $$ = $1;
       }
     | Name typevars   /* warning if typevar is repeated */ {
-        $$ = self.typeform_name_with_typevars($1, $2);
+        $$ = $1;
+        self.used_identifiers = match $2 {
+          Value::Reference(_) => RawValue::from($2),
+          Value::Combinator(Combinator::Nil) => NIL_RAW,
+          _ => NIL_RAW,
+        };
+        let mut typevars = self.used_identifiers;
+        while typevars != NIL_RAW {
+          $$ = self.heap.apply_ref($$, self.heap[typevars].head.into());
+          typevars = self.heap[typevars].tail;
+        }
       }
     | typevar InfixName typevar {
         if self.same_type_variable($1, $3) {
@@ -2715,6 +2785,68 @@ impl<'ctx /* 'fix quotes */> Parser<'ctx /* 'fix quotes */> {
           type_value: IdentifierValueRef::from_ref(self.heap[binding_ref].tail),
         },
         _ => unreachable!("include binding should be a cons or application node"),
+      }
+    }
+
+    /// Decodes one raw include modifier node into its typed parser payload variant. This exists so parser-owned include
+    /// directive payload construction keeps raw rename and suppression modifier shapes in one heap-boundary seam. The
+    /// invariant is that rename modifiers preserve source and destination identifiers, while suppression modifiers
+    /// preserve the suppressed identifier.
+    fn decode_include_modifier(&self, modifier: Value) -> ParserIncludeModifierPayload {
+      let modifier_ref = RawValue::from(modifier);
+      debug_assert!(modifier_ref >= ATOM_LIMIT);
+      match self.heap[modifier_ref].tag {
+        Tag::Cons => ParserIncludeModifierPayload::Rename {
+          source: self.heap[modifier_ref].tail,
+          destination: self.heap[modifier_ref].head,
+        },
+        Tag::Ap => ParserIncludeModifierPayload::Suppress {
+          identifier: self.heap[modifier_ref].tail,
+        },
+        _ => unreachable!("include modifier should be a cons or application node"),
+      }
+    }
+
+    /// Checks typed include modifiers for C-shaped conflicting alias cases and records a parser diagnostic when found.
+    /// This exists so `%include` modifier legality stays centralized at the parser-owned request boundary before later
+    /// include compilation exists. The invariant is that conflicts are reported when two modifiers share a source or
+    /// two rename modifiers share a destination, matching the active C rule.
+    fn check_include_modifier_conflicts(&mut self, modifiers: &[ParserIncludeModifierPayload]) {
+      for (left_index, left) in modifiers.iter().enumerate() {
+        for right in modifiers.iter().skip(left_index + 1) {
+          let conflict = match (left, right) {
+            (
+              ParserIncludeModifierPayload::Rename { source: left_source, destination: left_destination },
+              ParserIncludeModifierPayload::Rename { source: right_source, destination: right_destination },
+            ) => {
+              if left_source == right_source {
+                Some(*left_source)
+              } else if left_destination == right_destination {
+                Some(*left_destination)
+              } else {
+                None
+              }
+            }
+            (
+              ParserIncludeModifierPayload::Rename { source: left_source, .. },
+              ParserIncludeModifierPayload::Suppress { identifier: right_identifier },
+            ) => (*left_source == *right_identifier).then_some(*left_source),
+            (
+              ParserIncludeModifierPayload::Suppress { identifier: left_identifier },
+              ParserIncludeModifierPayload::Rename { source: right_source, .. },
+            ) => (*left_identifier == *right_source).then_some(*left_identifier),
+            (
+              ParserIncludeModifierPayload::Suppress { identifier: left_identifier },
+              ParserIncludeModifierPayload::Suppress { identifier: right_identifier },
+            ) => (*left_identifier == *right_identifier).then_some(*left_identifier),
+          };
+
+          if let Some(conflict_identifier) = conflict {
+            let name = IdentifierRecordRef::from_ref(conflict_identifier).get_name(&self.heap);
+            self.syntax(&format!("conflicting aliases (\"{}\")\n", name));
+            return;
+          }
+        }
       }
     }
 

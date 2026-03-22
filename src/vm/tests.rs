@@ -1,8 +1,8 @@
 use super::*;
 use crate::big_num::IntegerRef;
 use crate::compiler::{
-    HereInfo, ParserExportDirectivePayload, ParserIncludeBindingPayload,
-    ParserIncludeDirectivePayload, ParserSupportError, ParserTopLevelDirectivePayload, Token,
+    HereInfo, ParserExportDirectivePayload, ParserIncludeDirectivePayload, ParserSupportError,
+    ParserTopLevelDirectivePayload, Token,
 };
 use crate::data::api::{
     ApNodeRef, DataPair, FreeFormalBindingRef, HeapObjectProxy, IdentifierValueTypeData,
@@ -39,7 +39,7 @@ fn include_request_payload(
     ParserIncludeDirectivePayload {
         anchor: test_anchor(vm, source_path, line_number),
         target_path: Value::Reference(vm.heap.string(target_path)).into(),
-        modifiers: NIL.into(),
+        modifiers: Vec::new(),
         bindings: Vec::new(),
     }
 }
@@ -3369,30 +3369,24 @@ fn bind_include_request_actuals_routes_parser_fed_value_and_type_bindings_throug
         super::bytecode::hdsort_binding_list_ref(&mut vm.heap, unsorted_formals.get_ref()),
     );
 
-    let include_type_value = IdentifierValueRef::from_type_identifier_parts(
-        &mut vm.heap,
-        TypeIdentifierValueParts {
-            arity: 0,
-            show_function: None,
-            kind: IdentifierValueTypeKind::Synonym,
-            info: Type::Number.into(),
-        },
-    );
-    let include_request = ParserIncludeDirectivePayload {
-        anchor: test_anchor(&mut vm, "parser_include_actuals.m", 1),
-        target_path: Value::Reference(vm.heap.string("inc.m")).into(),
-        modifiers: NIL.into(),
-        bindings: vec![
-            ParserIncludeBindingPayload::Value {
-                identifier: vm.heap.make_empty_identifier("x").get_ref(),
-                body: IntegerRef::from_i64(&mut vm.heap, 42).into(),
-            },
-            ParserIncludeBindingPayload::Type {
-                identifier: vm.heap.make_empty_identifier("t").get_ref(),
-                type_value: include_type_value,
-            },
-        ],
-    };
+    let source_path = unique_test_path("parser_include_actuals.m");
+    let source_path_str = source_path.to_string_lossy().to_string();
+    let parse_outcome = vm
+        .parse_source_text(
+            &source_path_str,
+            "%include \"inc.m\" { x = 42; t == num }\n",
+            UNIX_EPOCH,
+            false,
+        )
+        .expect("expected parser-fed include payload");
+    let top_level_payload = parse_outcome
+        .top_level_payload
+        .expect("expected top-level payload");
+    let include_request = top_level_payload
+        .directives
+        .include_requests
+        .first()
+        .expect("expected include request");
 
     let actuals = vm.lower_include_binding_actuals(&include_request.bindings);
     vm.bindparams(formal_list.get_ref().into(), actuals);

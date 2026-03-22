@@ -29,9 +29,9 @@ pub use parser_session::{ParserDeferredState, ParserSessionState};
 pub use parser_support::{
     ParserConstructorFieldPayload, ParserConstructorPayload, ParserDefinitionPayload,
     ParserExportDirectivePayload, ParserFreeBindingPayload, ParserIncludeBindingPayload,
-    ParserIncludeDirectivePayload, ParserRunDiagnostics, ParserRunResult,
-    ParserSpecificationPayload, ParserSupportError, ParserTopLevelDirectivePayload,
-    ParserTopLevelScriptPayload, ParserTypeDeclarationPayload,
+    ParserIncludeDirectivePayload, ParserIncludeModifierPayload, ParserRunDiagnostics,
+    ParserRunResult, ParserSpecificationPayload, ParserSupportError,
+    ParserTopLevelDirectivePayload, ParserTopLevelScriptPayload, ParserTypeDeclarationPayload,
 };
 pub use token::Token;
 

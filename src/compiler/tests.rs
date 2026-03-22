@@ -481,6 +481,7 @@ fn parser_returns_provisional_payload_for_include_export_directives() {
 
     let include_request = &payload.directives.include_requests[0];
     assert!(include_request.bindings.is_empty());
+    assert!(include_request.modifiers.is_empty());
     assert_eq!(
         heap.resolve_string(include_request.target_path.into())
             .expect("include target should be a heap string"),
@@ -543,6 +544,115 @@ fn parser_parses_include_value_binding_payload() {
         "x"
     );
     assert_eq!(heap[RawValue::from(*body)].tag, Tag::Int);
+}
+
+#[test]
+fn parser_parses_include_type_binding_payload() {
+    let (heap, result) = run_parser(
+        "include_type_binding.m",
+        "%include \"inc.m\" { t == num }\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success");
+    };
+    let include_request = &payload.directives.include_requests[0];
+    assert_eq!(include_request.bindings.len(), 1);
+
+    let ParserIncludeBindingPayload::Type {
+        identifier,
+        type_value,
+    } = &include_request.bindings[0]
+    else {
+        panic!("expected type include binding payload");
+    };
+    assert_eq!(
+        IdentifierRecordRef::from_ref(*identifier).get_name(&heap),
+        "t"
+    );
+    assert!(matches!(
+        type_value.get_data(&heap),
+        crate::data::api::IdentifierValueData::Typed { .. }
+    ));
+}
+
+#[test]
+fn parser_preserves_mixed_include_binding_source_order() {
+    let (_heap, result) = run_parser(
+        "include_mixed_bindings.m",
+        "%include \"inc.m\" { x = 1; t == num; y = 2 }\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success");
+    };
+    let include_request = &payload.directives.include_requests[0];
+    assert_eq!(include_request.bindings.len(), 3);
+    assert!(matches!(
+        include_request.bindings[0],
+        ParserIncludeBindingPayload::Value { .. }
+    ));
+    assert!(matches!(
+        include_request.bindings[1],
+        ParserIncludeBindingPayload::Type { .. }
+    ));
+    assert!(matches!(
+        include_request.bindings[2],
+        ParserIncludeBindingPayload::Value { .. }
+    ));
+}
+
+#[test]
+fn parser_parses_include_modifier_payloads() {
+    let (heap, result) = run_parser("include_modifiers.m", "%include \"inc.m\" foo / bar -baz\n");
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success");
+    };
+    let include_request = &payload.directives.include_requests[0];
+    assert_eq!(include_request.modifiers.len(), 2);
+
+    let ParserIncludeModifierPayload::Rename {
+        source,
+        destination,
+    } = &include_request.modifiers[0]
+    else {
+        panic!("expected rename modifier payload");
+    };
+    assert_eq!(
+        IdentifierRecordRef::from_ref(*source).get_name(&heap),
+        "bar"
+    );
+    assert_eq!(
+        IdentifierRecordRef::from_ref(*destination).get_name(&heap),
+        "foo"
+    );
+
+    let ParserIncludeModifierPayload::Suppress { identifier } = &include_request.modifiers[1]
+    else {
+        panic!("expected suppression modifier payload");
+    };
+    assert_eq!(
+        IdentifierRecordRef::from_ref(*identifier).get_name(&heap),
+        "baz"
+    );
+}
+
+#[test]
+fn parser_rejects_conflicting_include_modifiers() {
+    let (_heap, result) = run_parser(
+        "include_modifier_conflict.m",
+        "%include \"inc.m\" foo / bar -bar\n",
+    );
+
+    let ParserRunResult::SyntaxError(diagnostics) = result else {
+        panic!("expected syntax error result");
+    };
+    assert_eq!(diagnostics.diagnostics.len(), 1);
+    assert_eq!(
+        diagnostics.diagnostics[0].message,
+        "conflicting aliases (\"bar\")"
+    );
 }
 
 #[test]

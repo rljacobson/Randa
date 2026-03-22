@@ -39,10 +39,21 @@ pub enum ParserIncludeBindingPayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParserIncludeModifierPayload {
+    Rename {
+        source: RawValue,
+        destination: RawValue,
+    },
+    Suppress {
+        identifier: RawValue,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParserIncludeDirectivePayload {
     pub anchor: RawValue,
     pub target_path: RawValue,
-    pub modifiers: RawValue,
+    pub modifiers: Vec<ParserIncludeModifierPayload>,
     pub bindings: Vec<ParserIncludeBindingPayload>,
 }
 
