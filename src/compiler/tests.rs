@@ -558,6 +558,48 @@ fn parser_preserves_mixed_include_binding_source_order() {
 }
 
 #[test]
+fn parser_parses_top_level_infix_synonym_type_lhs() {
+    let (heap, result) = run_parser("infix_synonym_lhs.m", "* $pair ** == (*, [num])\n");
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success");
+    };
+    assert_eq!(payload.type_declarations.len(), 1);
+    let declaration = &payload.type_declarations[0];
+    assert_eq!(declaration.type_identifier.get_name(&heap), "pair");
+    assert_eq!(declaration.arity, 2);
+    assert_eq!(declaration.kind, crate::data::api::IdentifierValueTypeKind::Synonym);
+}
+
+#[test]
+fn parser_parses_top_level_infix_algebraic_type_lhs() {
+    let (heap, result) = run_parser("infix_algebraic_lhs.m", "* $pair ** ::= Pair * **\n");
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success");
+    };
+    assert_eq!(payload.type_declarations.len(), 1);
+    let declaration = &payload.type_declarations[0];
+    assert_eq!(declaration.type_identifier.get_name(&heap), "pair");
+    assert_eq!(declaration.arity, 2);
+    assert_eq!(declaration.kind, crate::data::api::IdentifierValueTypeKind::Algebraic);
+    assert_eq!(payload.constructor_declarations.len(), 1);
+    assert_eq!(payload.constructor_declarations[0].constructor.get_name(&heap), "Pair");
+}
+
+#[test]
+fn parser_rejects_infix_constructor_name_on_top_level_type_lhs() {
+    let (_heap, result) = run_parser("infix_constructor_type_lhs.m", "* $Pair ** == *\n");
+
+    let ParserRunResult::SyntaxError(diagnostics) = result else {
+        panic!("expected syntax error result");
+    };
+    assert!(diagnostics.diagnostics.iter().any(|diagnostic| diagnostic
+        .message
+        .contains("upper case identifier cannot be used as typename")));
+}
+
+#[test]
 fn parser_parses_include_modifier_payloads() {
     let (heap, result) = run_parser("include_modifiers.m", "%include \"inc.m\" foo / bar -baz\n");
 

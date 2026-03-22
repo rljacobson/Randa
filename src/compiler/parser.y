@@ -619,35 +619,75 @@ top_level_type_lhs_typevars:
       }
     ;
 
+top_level_typevar:
+    Times {
+        let typevar = self.heap.type_var_ref(Value::None, Value::Data(1));
+        self.used_identifiers.push(self.heap, typevar);
+        $$ = typevar;
+      }
+    | TypeVar {
+        self.used_identifiers.push(self.heap, $1);
+        $$ = $1;
+      }
+    ;
+
+top_level_typeform:
+    ConstructorName top_level_type_lhs_typevars {
+        self.syntax("upper case identifier out of context\n");
+        $$ = $1;
+      }
+    | Name top_level_type_lhs_typevars {
+        $$ = $1;
+        let mut typevars = ConsList::<Value>::from_ref($2.into());
+        while let Some(typevar) = typevars.pop_value(&self.heap) {
+          $$ = self.heap.apply_ref($$, typevar);
+        }
+      }
+    | top_level_typevar InfixName top_level_typevar {
+        let mut typevars = self.used_identifiers;
+        let right = typevars.pop_value(&self.heap).unwrap_or($3);
+        let left = typevars.pop_value(&self.heap).unwrap_or($1);
+        self.used_identifiers = ConsList::EMPTY;
+        if self.same_type_variable(left, right) {
+          self.syntax("repeated type variable in typeform\n");
+        }
+        $$ = self.heap.apply2($2, left, right);
+      }
+    | top_level_typevar InfixCName top_level_typevar {
+        self.used_identifiers = ConsList::EMPTY;
+        self.syntax("upper case identifier cannot be used as typename\n");
+        $$ = $2;
+      }
+    ;
+
 top_level_synonym_type_item:
-    Name top_level_type_lhs_typevars top_level_definition_anchor EqualEqual top_level_type_expr directive_terminators {
-        let type_identifier = IdentifierRecordRef::from_ref($1.into());
-        let typevars = $2;
-        let arity = ConsList::<Value>::from_ref(typevars.into()).len(&self.heap) as isize;
-        let anchor = FileInfoRef::from_ref($3.into());
-        let info = $5;
+    top_level_typeform top_level_definition_anchor EqualEqual top_level_type_expr directive_terminators {
+        let typeform = TypeExprRef::new($1);
+        let Some((type_identifier, arguments)) = typeform.identifier_head_application_spine(&self.heap) else {
+          unreachable!("top-level synonym lhs should stay identifier-headed")
+        };
+        let anchor = FileInfoRef::from_ref($2.into());
+        let info = $4;
         self.type_declaration_payloads.push(ParserTypeDeclarationPayload {
           type_identifier,
-          arity,
+          arity: arguments.len() as isize,
           kind: IdentifierValueTypeKind::Synonym,
           info,
           anchor,
         });
         $$ = NIL;
       }
-    | ConstructorName top_level_type_lhs_typevars top_level_definition_anchor EqualEqual top_level_type_expr directive_terminators {
-        self.syntax("upper case identifier out of context\n");
-        $$ = NIL;
-      }
     ;
 
 top_level_algebraic_type_item:
-    Name top_level_type_lhs_typevars top_level_definition_anchor Colon2Equal top_level_constructor_list directive_terminators {
-        let type_identifier = IdentifierRecordRef::from_ref($1.into());
-        let typevars = $2;
-        let arity = ConsList::<Value>::from_ref(typevars.into()).len(&self.heap) as isize;
-        let anchor = FileInfoRef::from_ref($3.into());
-        let mut constructor_list: RawValue = $5.into();
+    top_level_typeform top_level_definition_anchor Colon2Equal top_level_constructor_list directive_terminators {
+        let typeform = TypeExprRef::new($1);
+        let Some((type_identifier, arguments)) = typeform.identifier_head_application_spine(&self.heap) else {
+          unreachable!("top-level algebraic lhs should stay identifier-headed")
+        };
+        let arity = arguments.len() as isize;
+        let anchor = FileInfoRef::from_ref($2.into());
+        let mut constructor_list: RawValue = $4.into();
         let mut source_order_constructors = NIL_RAW;
         while constructor_list != NIL_RAW {
           source_order_constructors = self.heap.cons_ref(self.heap[constructor_list].head.into(), source_order_constructors.into()).into();
@@ -695,10 +735,6 @@ top_level_algebraic_type_item:
           info: source_order_constructor_list,
           anchor,
         });
-        $$ = NIL;
-      }
-    | ConstructorName top_level_type_lhs_typevars top_level_definition_anchor Colon2Equal top_level_constructor_list directive_terminators {
-        self.syntax("upper case identifier out of context\n");
         $$ = NIL;
       }
     ;

@@ -1709,10 +1709,9 @@ impl VM {
 
     /// Classifies a source file by the top-level form at its start.
     ///
-    /// `%include` and `%export` are accepted as top-level directives here.
-    /// The active top-level definition slice includes simple name-parameter function forms,
-    /// so classification scans the first physical line for a later `=` instead of only matching
-    /// a bare `Name = ...` prefix.
+    /// `%include` and `%export` are accepted as top-level directives here. The active top-level
+    /// definition slice includes simple name-parameter function forms, so classification scans the
+    /// first physical line for a later `=` instead of only matching a bare `Name = ...` prefix.
     /// Other top-level forms are left to the existing deferred integration path.
     pub(super) fn classify_load_script_form(
         &mut self,
@@ -1750,6 +1749,7 @@ impl VM {
             first,
             Some(Token::Identifier | Token::Name | Token::ConstructorName)
         );
+        let typeform_led = matches!(first, Some(Token::Times | Token::TypeVar));
         let has_equal = tokens.iter().skip(1).any(|token| *token == Token::Equal);
         let has_declaration_marker = tokens.iter().skip(1).any(|token| {
             matches!(
@@ -1769,6 +1769,7 @@ impl VM {
             | (Some(Token::Name), Some(Token::Colon2Equal))
             | (Some(Token::Free), _) => LoadScriptForm::TopLevelScript,
             _ if name_led && has_declaration_marker => LoadScriptForm::TopLevelScript,
+            _ if typeform_led && has_declaration_marker => LoadScriptForm::TopLevelScript,
             _ if name_led && has_equal => LoadScriptForm::TopLevelScript,
             (Some(Token::Lex), _)
             | (Some(Token::BNF), _)

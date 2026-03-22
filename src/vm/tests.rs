@@ -306,6 +306,16 @@ fn classify_load_script_form_distinguishes_supported_top_level_forms() {
         LoadScriptForm::TopLevelScript
     );
     assert_eq!(
+        vm.classify_load_script_form("slice.m", "* $pair ** == (*, [num])")
+            .expect("infix typeform synonym should classify"),
+        LoadScriptForm::TopLevelScript
+    );
+    assert_eq!(
+        vm.classify_load_script_form("slice.m", "* $pair ** ::= Pair * **")
+            .expect("infix typeform algebraic declaration should classify"),
+        LoadScriptForm::TopLevelScript
+    );
+    assert_eq!(
         vm.classify_load_script_form("slice.m", "%free { x :: num }")
             .expect("%free should classify"),
         LoadScriptForm::TopLevelScript
@@ -1042,6 +1052,108 @@ fn load_file_commits_algebraic_type_lhs_arity_with_nullary_constructors() {
             .heap
             .is_type_variable(Value::from(applied.argument_raw(&vm.heap))));
     }
+}
+
+#[test]
+fn load_file_commits_infix_synonym_type_lhs_arity() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("infix_synonym_type_lhs_arity.m");
+    std::fs::write(&source_path, "* $pair ** == (*, [num])\n")
+        .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+
+    let pair = vm
+        .heap
+        .get_identifier("pair")
+        .expect("expected pair type identifier");
+    let pair_value = pair
+        .get_value(&vm.heap)
+        .expect("expected typed synonym value");
+    let IdentifierValueData::Typed {
+        arity, value_type, ..
+    } = pair_value.get_data(&vm.heap)
+    else {
+        panic!("expected typed identifier value")
+    };
+    assert_eq!(arity, 2);
+    assert_eq!(
+        value_type.get_identifier_value_type_kind(&vm.heap),
+        IdentifierValueTypeKind::Synonym
+    );
+}
+
+#[test]
+fn load_file_commits_infix_algebraic_type_lhs_arity() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("infix_algebraic_type_lhs_arity.m");
+    std::fs::write(&source_path, "* $pair ** ::= Pair * **\n")
+        .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+
+    let pair = vm
+        .heap
+        .get_identifier("pair")
+        .expect("expected pair type identifier");
+    let constructor = vm
+        .heap
+        .get_identifier("Pair")
+        .expect("expected Pair constructor");
+    let pair_value = pair
+        .get_value(&vm.heap)
+        .expect("expected typed algebraic value");
+    let IdentifierValueData::Typed {
+        arity, value_type, ..
+    } = pair_value.get_data(&vm.heap)
+    else {
+        panic!("expected typed identifier value")
+    };
+    assert_eq!(arity, 2);
+    assert_eq!(
+        value_type.get_identifier_value_type_kind(&vm.heap),
+        IdentifierValueTypeKind::Algebraic
+    );
+
+    let constructor_type = constructor.get_type_expr(&vm.heap);
+    assert!(vm.heap.is_arrow_type(constructor_type.value()));
+    let outer_arrow = ApNodeRef::from_ref(constructor_type.value().into());
+    let outer_operator = outer_arrow
+        .function_application(&vm.heap)
+        .expect("expected outer arrow application");
+    assert!(vm
+        .heap
+        .is_type_variable(Value::from(outer_operator.argument_raw(&vm.heap))));
+
+    let result_type = TypeExprRef::new(Value::from(outer_arrow.argument_raw(&vm.heap)));
+    assert!(vm.heap.is_arrow_type(result_type.value()));
+    let inner_arrow = ApNodeRef::from_ref(result_type.value().into());
+    let inner_operator = inner_arrow
+        .function_application(&vm.heap)
+        .expect("expected inner arrow application");
+    assert!(vm
+        .heap
+        .is_type_variable(Value::from(inner_operator.argument_raw(&vm.heap))));
+
+    let parent_application = ApNodeRef::from_ref(inner_arrow.argument_raw(&vm.heap));
+    let parent_function = ApNodeRef::from_ref(parent_application.function_raw(&vm.heap));
+    assert_eq!(Value::from(parent_function.function_raw(&vm.heap)), pair.into());
+    assert!(vm
+        .heap
+        .is_type_variable(Value::from(parent_function.argument_raw(&vm.heap))));
+    assert!(vm
+        .heap
+        .is_type_variable(Value::from(parent_application.argument_raw(&vm.heap))));
 }
 
 #[test]
