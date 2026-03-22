@@ -133,7 +133,7 @@ pub struct VM {
     missing_parameter_bindings: ConsList<Value>,
     // Miranda's FBS, stack/list of formal-binding sets introduced by parameterized includes.
     // `bindparams` pushes formal-list references as heap values; include/type phases may later attach hereinfo.
-    free_binding_sets: ConsList<Value>,
+    free_binding_sets: ConsList<ConsList<FreeFormalBindingRef>>,
     internals: ConsList<IdentifierRecordRef>, // list of names not exported, used by fix/unfixexports
     used_identifiers: ConsList<IdentifierRecordRef>,
     clashes: ConsList<IdentifierRecordRef>,

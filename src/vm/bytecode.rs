@@ -61,19 +61,22 @@ pub(super) fn hdsort_binding_list_ref(heap: &mut Heap, mut list_ref: RawValue) -
         remaining = heap[remaining].tail;
     }
 
-    let merged_reversed_list: ConsList<FreeFormalBindingRef> = ConsList::from_ref(merged_reversed);
+    let merged_reversed_list: ConsList<Value> = ConsList::from_ref(merged_reversed);
     merged_reversed_list.reversed(heap).get_ref()
 }
 
 /// Returns the lexical sort key for one `%free` binding pair.
 ///
-/// `hdsort` compares `get_id(hd[hd[pair]])`; this helper projects the same key through
-/// `FreeFormalBindingRef` to keep C key semantics at the Rust boundary.
-/// Invariant: key identity matches the name of the pair-head identifier.
+/// `hdsort` compares the identifier at the head of each formal or actual binding entry. Formal
+/// entries are `cons(id, cons(datapair(...), type))`; actual entries are either `cons(id, value)`
+/// or `ap(id, typevalue)`. Invariant: key identity matches the name of the binding-head
+/// identifier across all three shapes.
 fn binding_name_for_hdsort(heap: &Heap, binding_pair_ref: RawValue) -> HeapString {
-    FreeFormalBindingRef::from_ref(binding_pair_ref)
-        .identifier(heap)
-        .get_name(heap)
+    let identifier_ref = match heap[binding_pair_ref].tag {
+        Tag::Cons | Tag::Ap => heap[binding_pair_ref].head,
+        _ => unreachable!("hdsort binding entries must be cons or application nodes"),
+    };
+    IdentifierRecordRef::from_ref(identifier_ref).get_name(heap)
 }
 
 impl VM {
@@ -211,7 +214,7 @@ impl VM {
     /// - `missing_parameter_bindings`: list of `datapair(original_name, 0)` values
     /// - `detritus_parameter_bindings`: list items are either `actual_name_id` values or
     ///   `cons(actual_name_id, datapair(formal_arity, actual_arity))` values
-    /// - `free_binding_sets`: stack/list of `formal` list-reference values
+    /// - `free_binding_sets`: stack/list of formal binding lists (`ConsList<FreeFormalBindingRef>`)
     ///
     /// Invariant: matched names always update formal value payloads; mismatch diagnostics are
     /// accumulated without aborting this phase.
@@ -227,7 +230,7 @@ impl VM {
         self.detritus_parameter_bindings = ConsList::EMPTY;
         self.missing_parameter_bindings = ConsList::EMPTY;
         self.free_binding_sets
-            .push(&mut self.heap, formal_cursor.into());
+            .push(&mut self.heap, ConsList::from_ref(formal_cursor));
 
         loop {
             // Advance through formals that have no matching actual yet.

@@ -27,6 +27,7 @@ use super::{
   ParserDefinitionPayload,
   ParserExportDirectivePayload,
   ParserFreeBindingPayload,
+  ParserIncludeBindingPayload,
   ParserIncludeDirectivePayload,
   ParserRunDiagnostics,
   ParserRunResult,
@@ -42,7 +43,7 @@ use crate::{
     big_num::IntegerRef,
     big_num::SIGN_BIT_MASK,
     data::{
-        api::{ConsList, FileInfoRef, HeapObjectProxy, IdentifierRecordRef, IdentifierValueTypeKind},
+        api::{ConsList, FileInfoRef, HeapObjectProxy, IdentifierRecordRef, IdentifierValueRef, IdentifierValueTypeKind},
         tag::Tag,
         values::{
             Value,
@@ -744,7 +745,7 @@ include_directive:
           anchor,
           target_path,
           modifiers: $4.into(),
-          bindings: $3.into(),
+          bindings: self.decode_include_bindings($3.into()),
         });
         $$ = NIL;
       }
@@ -768,11 +769,25 @@ include_target:
 
 include_bindings:
     /* empty */ { $$ = NIL; }
-    | OpenBrace include_binding_sequence CloseBrace { $$ = $2; }
+    | OpenBrace include_block_padding include_binding_sequence include_block_padding CloseBrace {
+        $$ = $3;
+      }
+    ;
+
+include_block_padding:
+    /* empty */ { $$ = NIL; }
+    | include_block_padding Newline { $$ = NIL; }
+    ;
+
+include_binding_separator:
+    Semicolon include_block_padding { $$ = NIL; }
+    | Newline include_block_padding { $$ = NIL; }
     ;
 
 include_binding_sequence:
-    include_binding_sequence include_binding { $$ = self.heap.cons_ref($2, $1); }
+    include_binding_sequence include_binding_separator include_binding {
+        $$ = self.heap.cons_ref($3, $1);
+      }
     | include_binding { $$ = self.heap.cons_ref($1, NIL); }
     ;
 
@@ -2146,17 +2161,7 @@ typeform:
         $$ = $1;
       }
     | Name typevars   /* warning if typevar is repeated */ {
-        $$ = $1;
-        self.used_identifiers = match $2 {
-          Value::Reference(_) => RawValue::from($2),
-          Value::Combinator(Combinator::Nil) => NIL_RAW,
-          _ => NIL_RAW,
-        };
-        let mut typevars = self.used_identifiers;
-        while typevars != NIL_RAW {
-          $$ = self.heap.apply_ref($$, self.heap[typevars].head.into());
-          typevars = self.heap[typevars].tail;
-        }
+        $$ = self.typeform_name_with_typevars($1, $2);
       }
     | typevar InfixName typevar {
         if self.same_type_variable($1, $3) {
@@ -2694,74 +2699,24 @@ impl<'ctx /* 'fix quotes */> Parser<'ctx /* 'fix quotes */> {
       Some(self.heap[field_ref].tail.into())
     }
 
-    /// Converts one parsed constructor field node into parser-facing payload metadata. This exists so all
-    /// constructor-field lowering uses one owner for strictness extraction and stored type payload shape. The invariant
-    /// is that the returned payload preserves source-order field type plus a separate strictness flag.
-    fn constructor_field_payload(&self, field: Value) -> ParserConstructorFieldPayload {
-      if let Some(type_expr) = self.strict_constructor_field_type(field) {
-        ParserConstructorFieldPayload {
-          type_expr,
-          is_strict: true,
-        }
-      } else {
-        ParserConstructorFieldPayload {
-          type_expr: field,
-          is_strict: false,
-        }
+    /// Decodes one raw include-binding heap node into its typed parser payload variant. This exists so parser-owned
+    /// include payload construction keeps raw `Cons` versus `Ap` binding-shape dispatch in one heap-boundary seam. The
+    /// invariant is that `cons(id, value)` stays a value binding and `ap(id, typevalue)` stays a type binding.
+    fn decode_include_binding(&self, binding: Value) -> ParserIncludeBindingPayload {
+      let binding_ref = RawValue::from(binding);
+      debug_assert!(binding_ref >= ATOM_LIMIT);
+      match self.heap[binding_ref].tag {
+        Tag::Cons => ParserIncludeBindingPayload::Value {
+          identifier: self.heap[binding_ref].head,
+          body: self.heap[binding_ref].tail.into(),
+        },
+        Tag::Ap => ParserIncludeBindingPayload::Type {
+          identifier: self.heap[binding_ref].head,
+          type_value: IdentifierValueRef::from_ref(self.heap[binding_ref].tail),
+        },
+        _ => unreachable!("include binding should be a cons or application node"),
       }
     }
-
-    /// Returns the constructor head and source-order field nodes for one parsed constructor declaration. This exists so
-    /// top-level algebraic declaration lowering can normalize both prefix and infix constructor forms through one
-    /// application-spine view. The invariant is that successful results contain an identifier constructor head and
-    /// source-order field arguments.
-    fn constructor_declaration_spine(&self, declaration: Value) -> Option<(RawValue, Vec<Value>)> {
-      let mut declaration_ref = RawValue::from(declaration);
-      if declaration_ref < ATOM_LIMIT {
-        return None;
-      }
-
-      let mut fields = Vec::new();
-      while self.heap[declaration_ref].tag == Tag::Ap {
-        fields.push(self.heap[declaration_ref].tail.into());
-        declaration_ref = self.heap[declaration_ref].head;
-        if declaration_ref < ATOM_LIMIT {
-          return None;
-        }
-      }
-
-      if self.heap[declaration_ref].tag != Tag::Id {
-        return None;
-      }
-
-      fields.reverse();
-      Some((declaration_ref, fields))
-    }
-
-    /// Builds one parser-facing constructor payload from a parsed constructor declaration tree. This exists so active
-    /// top-level algebraic declaration lowering records explicit constructor arity and field metadata before VM commit.
-    /// The invariant is that payload arity equals the number of source-order field payloads captured from the
-    /// declaration spine.
-    fn constructor_payload_from_declaration(
-      &mut self,
-      declaration: Value,
-      parent_type: RawValue,
-      parent_type_arity: isize,
-      anchor: RawValue,
-    ) -> Option<ParserConstructorPayload> {
-      let (constructor, fields) = self.constructor_declaration_spine(declaration)?;
-      let field_payloads = fields.into_iter().map(|field| self.constructor_field_payload(field)).collect::<Vec<_>>();
-
-      Some(ParserConstructorPayload {
-        constructor,
-        parent_type,
-        parent_type_arity,
-        arity: field_payloads.len() as isize,
-        fields: field_payloads,
-        anchor,
-      })
-    }
-     
 
     fn report_syntax_error(&mut self, _yystack: &YYStack, yytoken: &SymbolKind, yylloc: YYLoc) {
         let token_name = SymbolKind::yynames_[i32_to_usize(yytoken.code())];

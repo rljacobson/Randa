@@ -3,9 +3,9 @@ use super::*;
 use crate::compiler::{
     parser::Parser, HereInfo, Lexer, ParserActivation, ParserConstructorPayload,
     ParserDeferredState, ParserDefinitionPayload, ParserEntryMode, ParserFreeBindingPayload,
-    ParserRunDiagnostics, ParserRunResult, ParserSessionState, ParserSpecificationPayload,
-    ParserSupportError, ParserTopLevelDirectivePayload, ParserTopLevelScriptPayload,
-    ParserTypeDeclarationPayload, ParserVmContext,
+    ParserIncludeBindingPayload, ParserRunDiagnostics, ParserRunResult, ParserSessionState,
+    ParserSpecificationPayload, ParserSupportError, ParserTopLevelDirectivePayload,
+    ParserTopLevelScriptPayload, ParserTypeDeclarationPayload, ParserVmContext,
 };
 use crate::compiler::{token::ParserLookahead, Token};
 use crate::data::api::{
@@ -1506,6 +1506,36 @@ impl VM {
             formal_bindings.get_ref(),
         ));
         current_file.set_shareable(&mut self.heap, false);
+    }
+
+    // Todo: Promote to a typed include-actual binding API; blocker: `bindparams` still consumes raw
+    //       Miranda actual-binding heap shapes; migrate to `src/vm/bytecode.rs` once the `%free`
+    //       actual-binding ingress is typed.
+    /// Encodes parser-owned include binding payloads into the raw actual-binding stream consumed by
+    /// `bindparams`. This exists so load-owned include lowering keeps the typed payload to heap
+    /// shape conversion in one ingress seam for `%free` actual binding. The invariant is that value
+    /// and type bindings preserve their meaning and enter `bindparams` in identifier sort order.
+    pub(super) fn lower_include_binding_actuals(
+        &mut self,
+        bindings: &[ParserIncludeBindingPayload],
+    ) -> Value {
+        let mut actual_bindings: ConsList = ConsList::EMPTY;
+        for binding in bindings.iter().rev() {
+            let actual = match binding {
+                ParserIncludeBindingPayload::Value { identifier, body } => {
+                    self.heap.cons_ref((*identifier).into(), *body)
+                }
+                ParserIncludeBindingPayload::Type {
+                    identifier,
+                    type_value,
+                } => self
+                    .heap
+                    .apply_ref((*identifier).into(), (*type_value).into()),
+            };
+            actual_bindings.push(&mut self.heap, RawValue::from(actual));
+        }
+
+        super::bytecode::hdsort_binding_list_ref(&mut self.heap, actual_bindings.get_ref()).into()
     }
 
     fn definition_metadata_from_anchor(&mut self, anchor_raw: RawValue) -> IdentifierDefinitionRef {

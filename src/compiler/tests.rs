@@ -480,6 +480,7 @@ fn parser_returns_provisional_payload_for_include_export_directives() {
     assert_eq!(payload.directives.include_requests.len(), 1);
 
     let include_request = &payload.directives.include_requests[0];
+    assert!(include_request.bindings.is_empty());
     assert_eq!(
         heap.resolve_string(include_request.target_path.into())
             .expect("include target should be a heap string"),
@@ -521,6 +522,27 @@ fn parser_returns_provisional_payload_for_include_export_directives() {
             .get_name(&heap),
         "foo"
     );
+}
+
+#[test]
+fn parser_parses_include_value_binding_payload() {
+    let (heap, result) = run_parser("include_value_binding.m", "%include \"inc.m\" { x = 1 }\n");
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success");
+    };
+    let include_request = &payload.directives.include_requests[0];
+    assert_eq!(include_request.bindings.len(), 1);
+
+    let ParserIncludeBindingPayload::Value { identifier, body } = &include_request.bindings[0]
+    else {
+        panic!("expected value include binding payload");
+    };
+    assert_eq!(
+        IdentifierRecordRef::from_ref(*identifier).get_name(&heap),
+        "x"
+    );
+    assert_eq!(heap[RawValue::from(*body)].tag, Tag::Int);
 }
 
 #[test]

@@ -28,9 +28,10 @@ pub use parser_activation::{ParserActivation, ParserEntryMode, ParserVmContext};
 pub use parser_session::{ParserDeferredState, ParserSessionState};
 pub use parser_support::{
     ParserConstructorFieldPayload, ParserConstructorPayload, ParserDefinitionPayload,
-    ParserExportDirectivePayload, ParserFreeBindingPayload, ParserIncludeDirectivePayload,
-    ParserRunDiagnostics, ParserRunResult, ParserSpecificationPayload, ParserSupportError,
-    ParserTopLevelDirectivePayload, ParserTopLevelScriptPayload, ParserTypeDeclarationPayload,
+    ParserExportDirectivePayload, ParserFreeBindingPayload, ParserIncludeBindingPayload,
+    ParserIncludeDirectivePayload, ParserRunDiagnostics, ParserRunResult,
+    ParserSpecificationPayload, ParserSupportError, ParserTopLevelDirectivePayload,
+    ParserTopLevelScriptPayload, ParserTypeDeclarationPayload,
 };
 pub use token::Token;
 

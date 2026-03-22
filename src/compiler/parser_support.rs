@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::data::api::IdentifierValueTypeKind;
+use crate::data::api::{IdentifierValueRef, IdentifierValueTypeKind};
 use crate::data::{RawValue, Value};
 
 use super::ParserDiagnostic;
@@ -27,11 +27,23 @@ impl ParserRunDiagnostics {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParserIncludeBindingPayload {
+    Value {
+        identifier: RawValue,
+        body: Value,
+    },
+    Type {
+        identifier: RawValue,
+        type_value: IdentifierValueRef,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParserIncludeDirectivePayload {
     pub anchor: RawValue,
     pub target_path: RawValue,
     pub modifiers: RawValue,
-    pub bindings: RawValue,
+    pub bindings: Vec<ParserIncludeBindingPayload>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,6 +81,24 @@ pub struct ParserTypeDeclarationPayload {
 pub struct ParserConstructorFieldPayload {
     pub type_expr: Value,
     pub is_strict: bool,
+}
+
+impl ParserConstructorFieldPayload {
+    /// Constructs constructor-field payload metadata from the parsed field value and any decoded strict inner type.
+    /// This exists so constructor-field payload ownership keeps strictness normalization on the payload type instead of in parser-local assembly code.
+    /// The invariant is that strict fields store the decoded inner type with `is_strict = true`, while non-strict fields store the original field value with `is_strict = false`.
+    pub fn from_field_type(field: Value, strict_field_type: Option<Value>) -> Self {
+        match strict_field_type {
+            Some(type_expr) => Self {
+                type_expr,
+                is_strict: true,
+            },
+            None => Self {
+                type_expr: field,
+                is_strict: false,
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

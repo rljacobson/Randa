@@ -1,8 +1,8 @@
 use super::*;
 use crate::big_num::IntegerRef;
 use crate::compiler::{
-    HereInfo, ParserExportDirectivePayload, ParserIncludeDirectivePayload, ParserSupportError,
-    ParserTopLevelDirectivePayload, Token,
+    HereInfo, ParserExportDirectivePayload, ParserIncludeBindingPayload,
+    ParserIncludeDirectivePayload, ParserSupportError, ParserTopLevelDirectivePayload, Token,
 };
 use crate::data::api::{
     ApNodeRef, DataPair, FreeFormalBindingRef, HeapObjectProxy, IdentifierValueTypeData,
@@ -40,7 +40,7 @@ fn include_request_payload(
         anchor: test_anchor(vm, source_path, line_number),
         target_path: Value::Reference(vm.heap.string(target_path)).into(),
         modifiers: NIL.into(),
-        bindings: NIL.into(),
+        bindings: Vec::new(),
     }
 }
 
@@ -3258,8 +3258,10 @@ fn bindparams_records_missing_and_extra_bindings_and_writes_matches() {
 
     assert_eq!(vm.free_binding_sets.len(&vm.heap), 1);
     assert_eq!(
-        vm.free_binding_sets.value_head(&vm.heap),
-        Some(formal_list.get_ref().into())
+        vm.free_binding_sets
+            .head(&vm.heap)
+            .map(|binding_set| binding_set.get_ref()),
+        Some(formal_list.get_ref())
     );
 }
 
@@ -3324,4 +3326,104 @@ fn bindparams_records_wrong_arity_in_detritus_and_still_writes_formal_value() {
     assert_eq!(vm.heap[arity_pair_ref].tail, 3);
 
     assert_eq!(vm.heap[t.get_ref()].tail, vm.heap[actual_binding_ref].tail);
+}
+
+#[test]
+fn bind_include_request_actuals_routes_parser_fed_value_and_type_bindings_through_bindparams() {
+    let mut vm = VM::new_for_tests();
+
+    let x = vm.heap.make_empty_identifier("x");
+    let t = vm.heap.make_empty_identifier("t");
+    let x_original =
+        IdentifierDefinitionRef::alias_metadata_from_source_identifier(&mut vm.heap, x);
+    let t_original =
+        IdentifierDefinitionRef::alias_metadata_from_source_identifier(&mut vm.heap, t);
+
+    let free_type = IdentifierValueTypeRef::new(&mut vm.heap, IdentifierValueTypeData::Free);
+    t.set_value_from_data(
+        &mut vm.heap,
+        IdentifierValueData::Typed {
+            arity: 0,
+            show_function: Combinator::Nil.into(),
+            value_type: free_type,
+        },
+    );
+
+    let x_formal = FreeFormalBindingRef::new(
+        &mut vm.heap,
+        x,
+        DataPair::from_ref(x_original.get_ref()),
+        TypeExprRef::new(Type::Undefined.into()),
+    );
+    let t_formal = FreeFormalBindingRef::new(
+        &mut vm.heap,
+        t,
+        DataPair::from_ref(t_original.get_ref()),
+        TypeExprRef::new(Type::Type.into()),
+    );
+
+    let mut unsorted_formals: ConsList<FreeFormalBindingRef> = ConsList::EMPTY;
+    unsorted_formals.push(&mut vm.heap, x_formal);
+    unsorted_formals.push(&mut vm.heap, t_formal);
+    let formal_list = ConsList::<FreeFormalBindingRef>::from_ref(
+        super::bytecode::hdsort_binding_list_ref(&mut vm.heap, unsorted_formals.get_ref()),
+    );
+
+    let include_type_value = IdentifierValueRef::from_type_identifier_parts(
+        &mut vm.heap,
+        TypeIdentifierValueParts {
+            arity: 0,
+            show_function: None,
+            kind: IdentifierValueTypeKind::Synonym,
+            info: Type::Number.into(),
+        },
+    );
+    let include_request = ParserIncludeDirectivePayload {
+        anchor: test_anchor(&mut vm, "parser_include_actuals.m", 1),
+        target_path: Value::Reference(vm.heap.string("inc.m")).into(),
+        modifiers: NIL.into(),
+        bindings: vec![
+            ParserIncludeBindingPayload::Value {
+                identifier: vm.heap.make_empty_identifier("x").get_ref(),
+                body: IntegerRef::from_i64(&mut vm.heap, 42).into(),
+            },
+            ParserIncludeBindingPayload::Type {
+                identifier: vm.heap.make_empty_identifier("t").get_ref(),
+                type_value: include_type_value,
+            },
+        ],
+    };
+
+    let actuals = vm.lower_include_binding_actuals(&include_request.bindings);
+    vm.bindparams(formal_list.get_ref().into(), actuals);
+
+    assert_eq!(vm.missing_parameter_bindings.len(&vm.heap), 0);
+    assert_eq!(vm.detritus_parameter_bindings.len(&vm.heap), 0);
+    assert_eq!(
+        IntegerRef::from_ref(vm.heap[x.get_ref()].tail).to_i64_lossy(&vm.heap),
+        42
+    );
+
+    let actual_type_value = IdentifierValueRef::from_ref(vm.heap[t.get_ref()].tail);
+    let IdentifierValueData::Typed {
+        arity, value_type, ..
+    } = actual_type_value.get_data(&vm.heap)
+    else {
+        panic!("expected typed include-bound type value");
+    };
+    assert_eq!(arity, 0);
+    assert_eq!(
+        value_type.get_identifier_value_type_kind(&vm.heap),
+        IdentifierValueTypeKind::Synonym
+    );
+    assert_eq!(
+        RawValue::from(value_type.synonym_rhs_type_expr(&vm.heap).value()),
+        RawValue::from(Type::Number)
+    );
+
+    let recorded_binding_set = vm
+        .free_binding_sets
+        .head(&vm.heap)
+        .expect("expected free binding set");
+    assert_eq!(recorded_binding_set.get_ref(), formal_list.get_ref());
 }
