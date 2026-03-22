@@ -1206,6 +1206,97 @@ fn parse_source_text_commits_rich_free_binding_type_expr() {
 }
 
 #[test]
+fn parse_source_text_commits_multi_entry_free_block_in_source_order() {
+    let mut vm = VM::new_for_tests();
+
+    let source_path = unique_test_path("multi_entry_free_block.m");
+    let source_path_str = source_path.to_string_lossy().to_string();
+    let source_text = "%free { x :: num; xs :: [char] }\n";
+
+    let result = vm.parse_source_text(&source_path_str, source_text, UNIX_EPOCH, false);
+
+    assert!(result.is_ok());
+    assert_eq!(vm.free_identifiers.len(&vm.heap), 2);
+
+    let mut free_bindings = vm.free_identifiers;
+    let first = free_bindings
+        .pop(&vm.heap)
+        .expect("expected first free binding");
+    assert_eq!(vm.identifier_name(first.identifier(&vm.heap)), "x");
+    assert!(first.type_expr(&vm.heap).is_builtin_type(Type::Number));
+
+    let second = free_bindings
+        .pop(&vm.heap)
+        .expect("expected second free binding");
+    assert_eq!(vm.identifier_name(second.identifier(&vm.heap)), "xs");
+    assert!(vm.heap.is_list_type(second.type_expr(&vm.heap).value()));
+}
+
+#[test]
+fn parse_source_text_commits_multi_name_free_spec() {
+    let mut vm = VM::new_for_tests();
+
+    let source_path = unique_test_path("multi_name_free_spec.m");
+    let source_path_str = source_path.to_string_lossy().to_string();
+    let source_text = "%free { f, g :: num }\n";
+
+    let result = vm.parse_source_text(&source_path_str, source_text, UNIX_EPOCH, false);
+
+    assert!(result.is_ok());
+    assert_eq!(vm.free_identifiers.len(&vm.heap), 2);
+
+    let mut free_bindings = vm.free_identifiers;
+    let first = free_bindings
+        .pop(&vm.heap)
+        .expect("expected first free binding");
+    let second = free_bindings
+        .pop(&vm.heap)
+        .expect("expected second free binding");
+    assert_eq!(vm.identifier_name(first.identifier(&vm.heap)), "f");
+    assert_eq!(vm.identifier_name(second.identifier(&vm.heap)), "g");
+    assert!(first.type_expr(&vm.heap).is_builtin_type(Type::Number));
+    assert!(second.type_expr(&vm.heap).is_builtin_type(Type::Number));
+}
+
+#[test]
+fn parse_source_text_commits_mixed_free_type_and_value_specs() {
+    let mut vm = VM::new_for_tests();
+
+    let source_path = unique_test_path("mixed_free_type_and_value_specs.m");
+    let source_path_str = source_path.to_string_lossy().to_string();
+    let source_text = "%free { t :: type; f :: t }\n";
+
+    let result = vm.parse_source_text(&source_path_str, source_text, UNIX_EPOCH, false);
+
+    assert!(result.is_ok());
+
+    let t = vm
+        .heap
+        .get_identifier("t")
+        .expect("expected free typename to exist");
+    let f = vm
+        .heap
+        .get_identifier("f")
+        .expect("expected free value identifier to exist");
+    assert!(t.get_type_expr(&vm.heap).is_builtin_type(Type::Type));
+    assert_eq!(
+        RawValue::from(f.get_type_expr(&vm.heap).value()),
+        t.get_ref()
+    );
+
+    let t_value = t
+        .get_value(&vm.heap)
+        .expect("expected free typename payload");
+    let IdentifierValueData::Typed { value_type, .. } = t_value.get_data(&vm.heap) else {
+        panic!("expected typed free typename payload");
+    };
+    assert_eq!(
+        value_type.get_identifier_value_type_kind(&vm.heap),
+        IdentifierValueTypeKind::Free
+    );
+}
+
+#[test]
 fn load_file_reports_undefined_typename_in_rich_synonym_rhs() {
     let mut vm = VM::new_for_tests();
 

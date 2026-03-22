@@ -304,23 +304,78 @@ top_level_free_type_expr:
     ttype { $$ = $1; }
     ;
 
+top_level_free_block_padding:
+    /* empty */ { $$ = NIL; }
+    | top_level_free_block_padding Newline { $$ = NIL; }
+    ;
+
+top_level_free_spec_separator:
+    Semicolon top_level_free_block_padding { $$ = NIL; }
+    | Newline top_level_free_block_padding { $$ = NIL; }
+    ;
+
+top_level_free_specs:
+    top_level_free_specs top_level_free_spec_separator top_level_free_spec {
+        let mut x = $1;
+        let spec = $3;
+        let spec_raw: RawValue = spec.into();
+        let mut h: RawValue = self.heap[spec_raw].head.into();
+        let t: Value = self.heap[spec_raw].tail.into();
+        while h != NIL_RAW {
+          let entry = self.heap.cons_ref(self.heap[h].head.into(), t);
+          x = self.heap.cons_ref(entry, x);
+          h = self.heap[h].tail;
+        }
+        $$ = x;
+      }
+    | top_level_free_spec {
+        let mut x = NIL;
+        let spec = $1;
+        let spec_raw: RawValue = spec.into();
+        let mut h: RawValue = self.heap[spec_raw].head.into();
+        let t: Value = self.heap[spec_raw].tail.into();
+        while h != NIL_RAW {
+          let entry = self.heap.cons_ref(self.heap[h].head.into(), t);
+          x = self.heap.cons_ref(entry, x);
+          h = self.heap[h].tail;
+        }
+        $$ = x;
+      }
+    ;
+
+top_level_free_spec:
+    namelist top_level_definition_anchor ColonColon top_level_free_type_expr {
+        let spec_tail = self.heap.cons_ref($2, $4);
+        $$ = self.heap.cons_ref($1, spec_tail);
+      }
+    ;
+
 top_level_constructor_list:
     construction { $$ = $1; }
     ;
 
 top_level_free_item:
-    Free OpenBrace Name top_level_definition_anchor ColonColon top_level_free_type_expr CloseBrace directive_terminators {
-        let identifier = $3;
-        let anchor = $4;
-        let type_expr = $6;
+    Free OpenBrace top_level_free_block_padding top_level_free_specs top_level_free_block_padding CloseBrace directive_terminators {
         if !self.free_binding_payloads.is_empty() {
           self.syntax("multiple %free statements are illegal\n");
         } else {
-          self.free_binding_payloads.push(ParserFreeBindingPayload {
-            identifier: identifier.into(),
-            type_expr,
-            anchor: anchor.into(),
-          });
+          let mut free_specs: RawValue = $4.into();
+          let mut source_order_specs = NIL_RAW;
+          while free_specs != NIL_RAW {
+            source_order_specs = self.heap.cons_ref(self.heap[free_specs].head.into(), source_order_specs.into()).into();
+            free_specs = self.heap[free_specs].tail;
+          }
+          while source_order_specs != NIL_RAW {
+            let free_spec = self.heap[source_order_specs].head;
+            let identifier = self.heap[free_spec].head;
+            let free_spec_tail = self.heap[free_spec].tail;
+            self.free_binding_payloads.push(ParserFreeBindingPayload {
+              identifier,
+              anchor: self.heap[free_spec_tail].head,
+              type_expr: self.heap[free_spec_tail].tail.into(),
+            });
+            source_order_specs = self.heap[source_order_specs].tail;
+          }
         }
         $$ = NIL;
       }

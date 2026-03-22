@@ -3,7 +3,7 @@ use super::*;
 use crate::big_num::SIGN_BIT_MASK;
 use crate::data::{
     api::{ConsList, FileInfoRef, HeapObjectProxy, IdentifierRecordRef},
-    Combinator, Heap, RawValue, Tag, Value,
+    Combinator, Heap, RawValue, Tag, Type, Value,
 };
 
 const TEST_VOID_TUPLE: Value = Value::Data(777);
@@ -150,6 +150,93 @@ fn parser_parses_top_level_list_pattern_form() {
     assert_eq!(heap[tail_raw].tag, Tag::Cons);
     let body_identifier = IdentifierRecordRef::from_ref(heap[lambda_raw].tail);
     assert_eq!(body_identifier.get_name(&heap), "y");
+}
+
+#[test]
+fn parser_parses_multi_entry_free_block() {
+    let (heap, result) = run_parser(
+        "multi_entry_free_block.m",
+        "%free { x :: num; xs :: [char] }\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success");
+    };
+    assert_eq!(payload.free_bindings.len(), 2);
+
+    let first = &payload.free_bindings[0];
+    let second = &payload.free_bindings[1];
+    assert_eq!(
+        IdentifierRecordRef::from_ref(first.identifier).get_name(&heap),
+        "x"
+    );
+    assert_eq!(
+        RawValue::from(first.type_expr),
+        RawValue::from(Type::Number)
+    );
+    assert_eq!(
+        IdentifierRecordRef::from_ref(second.identifier).get_name(&heap),
+        "xs"
+    );
+    assert!(heap.is_list_type(second.type_expr));
+}
+
+#[test]
+fn parser_parses_multi_name_free_spec() {
+    let (heap, result) = run_parser("multi_name_free_spec.m", "%free { f, g :: num }\n");
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success");
+    };
+    assert_eq!(payload.free_bindings.len(), 2);
+    assert_eq!(
+        IdentifierRecordRef::from_ref(payload.free_bindings[0].identifier).get_name(&heap),
+        "f"
+    );
+    assert_eq!(
+        IdentifierRecordRef::from_ref(payload.free_bindings[1].identifier).get_name(&heap),
+        "g"
+    );
+    assert_eq!(
+        RawValue::from(payload.free_bindings[0].type_expr),
+        RawValue::from(Type::Number)
+    );
+    assert_eq!(
+        RawValue::from(payload.free_bindings[1].type_expr),
+        RawValue::from(Type::Number)
+    );
+}
+
+#[test]
+fn parser_parses_mixed_free_type_and_value_specs() {
+    let (heap, result) = run_parser(
+        "mixed_free_type_and_value_specs.m",
+        "%free { t :: type; f :: t }\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success");
+    };
+    assert_eq!(payload.free_bindings.len(), 2);
+
+    let type_binding = &payload.free_bindings[0];
+    let value_binding = &payload.free_bindings[1];
+    assert_eq!(
+        IdentifierRecordRef::from_ref(type_binding.identifier).get_name(&heap),
+        "t"
+    );
+    assert_eq!(
+        RawValue::from(type_binding.type_expr),
+        RawValue::from(Type::Type)
+    );
+    assert_eq!(
+        IdentifierRecordRef::from_ref(value_binding.identifier).get_name(&heap),
+        "f"
+    );
+    assert_eq!(
+        IdentifierRecordRef::from_ref(value_binding.type_expr.into()).get_name(&heap),
+        "t"
+    );
 }
 
 #[test]
