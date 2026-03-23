@@ -1,7 +1,7 @@
 use super::*;
 use crate::compiler::Token;
 use crate::data::{
-    api::{ApNodeRef, IdentifierRecordRef},
+    api::{ApNodeRef, DefinitionRef, IdentifierRecordRef},
     combinator::Combinator,
     tag::Tag,
     values::Value,
@@ -284,12 +284,179 @@ fn abstract_template_from_expression(heap: &mut Heap, template: Value, expressio
     }
 }
 
+/// Lowers one committed `Tag::Let` body through the current Miranda-shaped active subset. This
+/// exists so codegen owns `translet`-style lowering in one place instead of open-coding definition
+/// projection in the main dispatcher. The invariant is that the lowered shape is `ap(abstract(lhs,
+/// codegen(body)), codegen(rhs))` over the committed definition payload.
+fn lower_let_value(heap: &mut Heap, let_value: Value) -> Value {
+    let let_raw: RawValue = let_value.into();
+    let definition = DefinitionRef::from_ref(heap[let_raw].head);
+    let lowered_body = lower_codegen_value(heap, heap[let_raw].tail.into());
+    let lowered_rhs = lower_codegen_value(heap, definition.body_value(heap));
+    let lowered_function =
+        abstract_template_from_expression(heap, definition.lhs_value(heap), lowered_body);
+    heap.apply_ref(lowered_function, lowered_rhs)
+}
+
+/// Bracket-abstracts a list of active simple identifier binders from one lowered expression. This
+/// exists so codegen owns the `abstrlist` subset needed by active `LetRec` lowering over simple-id
+/// definition groups. The invariant is that matching identifiers lower to `SUBSCRIPT` indices while
+/// other leaves become `K` applications.
+fn abstract_variable_list_from_expression(heap: &mut Heap, variables: Value, expression: Value) -> Value {
+    let expression_raw: RawValue = expression.into();
+    if expression_raw < ATOM_LIMIT {
+        let mut index: RawValue = 0;
+        let mut cursor = variables;
+        while RawValue::from(cursor) >= ATOM_LIMIT && heap[RawValue::from(cursor)].tag == Tag::Cons {
+            let cons_ref = RawValue::from(cursor);
+            if heap[cons_ref].head == expression_raw {
+                return heap.apply_ref(Combinator::Subscript.into(), Value::Data(index));
+            }
+            cursor = heap[cons_ref].tail.into();
+            index += 1;
+        }
+        return heap.apply_ref(Combinator::K.into(), expression);
+    }
+
+    match heap[expression_raw].tag {
+        Tag::Cons | Tag::Pair | Tag::TCons => {
+            let lowered_head = abstract_variable_list_from_expression(heap, variables, heap[expression_raw].head.into());
+            let lowered_tail = abstract_variable_list_from_expression(heap, variables, heap[expression_raw].tail.into());
+            combine_list_abstractions(heap, lowered_head, lowered_tail)
+        }
+        Tag::Ap => {
+            let application = ApNodeRef::from_ref(expression_raw);
+            if matches!(
+                application.function_raw(heap),
+                raw if raw == Combinator::BadCase as RawValue
+                    || raw == Combinator::ConfError as RawValue
+            ) {
+                return heap.apply_ref(Combinator::K.into(), expression);
+            }
+            let lowered_function = abstract_variable_list_from_expression(
+                heap,
+                variables,
+                application.function_raw(heap).into(),
+            );
+            let lowered_argument = abstract_variable_list_from_expression(
+                heap,
+                variables,
+                application.argument_raw(heap).into(),
+            );
+            combine_abstractions(heap, lowered_function, lowered_argument)
+        }
+        _ => heap.apply_ref(Combinator::K.into(), expression),
+    }
+}
+
+/// Lowers one committed `Tag::LetRec` body through the current Miranda-shaped active subset.
+/// This exists so codegen owns the first `transletrec` lowering slice over already committed simple-identifier definition groups.
+/// The invariant is that singleton groups lower through `Y` with `abstr`, while multi-definition simple-id groups lower through `abstrlist` over matching lhs/rhs order.
+fn lower_letrec_value(heap: &mut Heap, letrec_value: Value) -> Value {
+    let letrec_raw: RawValue = letrec_value.into();
+    let mut definitions: Value = heap[letrec_raw].head.into();
+    let mut lhs = Combinator::Nil.into();
+    let mut rhs = Combinator::Nil.into();
+
+    while RawValue::from(definitions) >= ATOM_LIMIT && heap[RawValue::from(definitions)].tag == Tag::Cons {
+        let definitions_ref = RawValue::from(definitions);
+        let definition = DefinitionRef::from_ref(heap[definitions_ref].head);
+        lhs = heap.cons_ref(definition.lhs_value(heap), lhs);
+        let lowered_rhs = lower_codegen_value(heap, definition.body_value(heap));
+        rhs = heap.cons_ref(lowered_rhs, rhs);
+        definitions = heap[definitions_ref].tail.into();
+    }
+
+    let lowered_body = lower_codegen_value(heap, heap[letrec_raw].tail.into());
+    let lhs_raw: RawValue = lhs.into();
+    if lhs_raw >= ATOM_LIMIT && heap[lhs_raw].tail == Combinator::Nil.into() {
+        let binder = heap[lhs_raw].head;
+        let rhs_head = heap[RawValue::from(rhs)].head;
+        let lowered_function = abstract_variable_from_expression(
+            heap,
+            IdentifierRecordRef::from_ref(binder),
+            lowered_body,
+        );
+        let lowered_recursive_rhs = abstract_variable_from_expression(
+            heap,
+            IdentifierRecordRef::from_ref(binder),
+            rhs_head.into(),
+        );
+        let recursive_application = heap.apply_ref(Combinator::Y.into(), lowered_recursive_rhs);
+        return heap.apply_ref(lowered_function, recursive_application);
+    }
+
+    let lowered_function = abstract_variable_list_from_expression(heap, lhs, lowered_body);
+    let lowered_recursive_rhs = abstract_variable_list_from_expression(heap, lhs, rhs);
+    let recursive_application = heap.apply_ref(Combinator::Y.into(), lowered_recursive_rhs);
+    heap.apply_ref(lowered_function, recursive_application)
+}
+
+/// Returns whether the committed rhs is fallible in the currently owned `transtries` subset.
+/// This exists so codegen owns the active default-`BADCASE` decision for `Tag::Tries` lowering instead of leaving it implicit in tests.
+/// The invariant is that refutable lambda binders and explicit `FAIL` survive as fallible, while irrefutable simple-id lambdas recurse into their bodies.
+fn is_fallible_rhs(heap: &Heap, mut expression: Value) -> bool {
+    loop {
+        let raw: RawValue = expression.into();
+        if raw < ATOM_LIMIT {
+            return expression == Combinator::Fail.into();
+        }
+
+        match heap[raw].tag {
+            Tag::Label => expression = heap[raw].tail.into(),
+            Tag::Let | Tag::LetRec => expression = heap[raw].tail.into(),
+            Tag::Lambda => {
+                let binder_raw = heap[raw].head;
+                if binder_raw >= ATOM_LIMIT && heap[binder_raw].tag == Tag::Id {
+                    expression = heap[raw].tail.into();
+                } else {
+                    return true;
+                }
+            }
+            _ => return expression == Combinator::Fail.into(),
+        }
+    }
+}
+
+/// Lowers one committed `Tag::Tries` body through the current Miranda-shaped active subset.
+/// This exists so codegen owns nested `TRY` construction and active default-case insertion for multi-clause definition bodies.
+/// The invariant is that reversed alternatives lower into right-associated `TRY` applications, with a terminal `BADCASE` only when the earliest alternative is fallible.
+fn lower_tries_value(heap: &mut Heap, tries_value: Value) -> Value {
+    let tries_raw: RawValue = tries_value.into();
+    let _diagnostic_id: Value = heap[tries_raw].head.into();
+    let mut alternatives: Value = heap[tries_raw].tail.into();
+
+    if alternatives == Combinator::Nil.into() {
+        return tries_value;
+    }
+
+    let earliest_ref = RawValue::from(alternatives);
+    let earliest = heap[earliest_ref].head.into();
+    let mut lowered = if is_fallible_rhs(heap, earliest) {
+        heap.apply_ref(Combinator::BadCase.into(), Combinator::Nil.into())
+    } else {
+        alternatives = heap[earliest_ref].tail.into();
+        lower_codegen_value(heap, earliest)
+    };
+
+    while RawValue::from(alternatives) >= ATOM_LIMIT && heap[RawValue::from(alternatives)].tag == Tag::Cons {
+        let alternatives_ref = RawValue::from(alternatives);
+        let next_alternative = heap[alternatives_ref].head.into();
+        let lowered_alternative = lower_codegen_value(heap, next_alternative);
+        lowered = heap.apply2(Combinator::Try.into(), lowered_alternative, lowered);
+        alternatives = heap[alternatives_ref].tail.into();
+    }
+
+    lowered
+}
+
 /// Lowers one committed definition body through the currently owned codegen rewrite subset. This
 /// exists so the codegen subsystem owns recursive body rewrites in one place instead of scattering
 /// shape handling across the file-definition walk. The invariant is that `Label` nodes lower away
 /// to their rewritten payload, application nodes preserve order while applying the current `APPEND
-/// [] x -> x` rewrite, Miranda tuple/list-like `Pair`/`TCons` cells normalize into `Cons`, and
-/// active lambda binders lower through the current Miranda-shaped abstraction subset.
+/// [] x -> x` rewrite, Miranda tuple/list-like `Pair`/`TCons` cells normalize into `Cons`, active
+/// lambda binders lower through the current Miranda-shaped abstraction subset, and the current
+/// `Let` / `LetRec` / `Tries` family lowers through the corresponding owned local-control subset.
 fn lower_codegen_value(heap: &mut Heap, value: Value) -> Value {
     let raw: RawValue = value.into();
     if raw < ATOM_LIMIT {
@@ -321,6 +488,9 @@ fn lower_codegen_value(heap: &mut Heap, value: Value) -> Value {
             let lowered_body = lower_codegen_value(heap, heap[raw].tail.into());
             abstract_template_from_expression(heap, heap[raw].head.into(), lowered_body)
         }
+        Tag::Let => lower_let_value(heap, value),
+        Tag::LetRec => lower_letrec_value(heap, value),
+        Tag::Tries => lower_tries_value(heap, value),
         _ => value,
     }
 }

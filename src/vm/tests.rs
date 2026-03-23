@@ -5,8 +5,8 @@ use crate::compiler::{
     ParserTopLevelDirectivePayload, Token,
 };
 use crate::data::api::{
-    ApNodeRef, DataPair, FreeFormalBindingRef, HeapObjectProxy, IdentifierValueTypeData,
-    IdentifierValueTypeKind, IdentifierValueTypeRef, TypeExprRef,
+    ApNodeRef, DataPair, DefinitionRef, FreeFormalBindingRef, HeapObjectProxy,
+    IdentifierValueTypeData, IdentifierValueTypeKind, IdentifierValueTypeRef, TypeExprRef,
 };
 use crate::vm::load::LoadScriptForm;
 use std::path::PathBuf;
@@ -3647,6 +3647,124 @@ fn codegen_phase_normalizes_tcons_body_into_cons() {
     assert_eq!(vm.heap[lowered_raw].tag, Tag::Cons);
     assert_eq!(vm.heap[lowered_raw].head, one.get_ref());
     assert_eq!(vm.heap[lowered_raw].tail, two.get_ref());
+}
+
+#[test]
+fn codegen_phase_lowers_let_body_through_translet_shape() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let x = vm.heap.make_empty_identifier("x");
+    let holder = vm.heap.make_empty_identifier("holder");
+    let definition = DefinitionRef::new(&mut vm.heap, x.into(), Type::Undefined.into(), Value::Data(1));
+    let let_body = vm.heap.let_ref(definition.get_ref().into(), x.into());
+    holder.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(let_body));
+
+    let definienda = ConsList::new(&mut vm.heap, holder);
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("codegen_let_body.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        definienda,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+    vm.undefined_names = ConsList::EMPTY;
+
+    let result = vm.run_codegen_phase();
+
+    assert!(result.is_ok());
+    let lowered_raw = holder
+        .get_value(&vm.heap)
+        .expect("expected lowered let body")
+        .get_ref();
+    assert_eq!(vm.heap[lowered_raw].tag, Tag::Ap);
+    assert_eq!(vm.heap[lowered_raw].head, RawValue::from(Combinator::I));
+    assert_eq!(vm.heap[lowered_raw].tail, 1);
+}
+
+#[test]
+fn codegen_phase_lowers_letrec_singleton_body_through_y() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let x = vm.heap.make_empty_identifier("x");
+    let holder = vm.heap.make_empty_identifier("holder");
+    let definition = DefinitionRef::new(&mut vm.heap, x.into(), Type::Undefined.into(), Value::Data(1));
+    let definitions = vm.heap.cons_ref(definition.get_ref().into(), Combinator::Nil.into());
+    let letrec_body = vm.heap.letrec_ref(definitions, x.into());
+    holder.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(letrec_body));
+
+    let definienda = ConsList::new(&mut vm.heap, holder);
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("codegen_letrec_body.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        definienda,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+    vm.undefined_names = ConsList::EMPTY;
+
+    let result = vm.run_codegen_phase();
+
+    assert!(result.is_ok());
+    let lowered_raw = holder
+        .get_value(&vm.heap)
+        .expect("expected lowered letrec body")
+        .get_ref();
+    assert_eq!(vm.heap[lowered_raw].tag, Tag::Ap);
+    assert_eq!(vm.heap[lowered_raw].head, RawValue::from(Combinator::I));
+    let recursive_rhs = vm.heap[lowered_raw].tail;
+    assert_eq!(vm.heap[recursive_rhs].tag, Tag::Ap);
+    assert_eq!(vm.heap[recursive_rhs].head, RawValue::from(Combinator::Y));
+}
+
+#[test]
+fn codegen_phase_lowers_tries_with_fallible_first_case_to_try_and_badcase() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let x = vm.heap.make_empty_identifier("x");
+    let y = vm.heap.make_empty_identifier("y");
+    let holder = vm.heap.make_empty_identifier("holder");
+    let tuple_binder = vm.heap.pair_ref(x.into(), y.into());
+    let fallible = vm.heap.lambda_ref(tuple_binder, x.into());
+    let alternatives = vm.heap.cons_ref(fallible, Combinator::Nil.into());
+    let tries_body = vm.heap.tries_ref(holder.into(), alternatives);
+    holder.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(tries_body));
+
+    let definienda = ConsList::new(&mut vm.heap, holder);
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("codegen_tries_body.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        definienda,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+    vm.undefined_names = ConsList::EMPTY;
+
+    let result = vm.run_codegen_phase();
+
+    assert!(result.is_ok());
+    let lowered_raw = holder
+        .get_value(&vm.heap)
+        .expect("expected lowered tries body")
+        .get_ref();
+    assert_eq!(vm.heap[lowered_raw].tag, Tag::Ap);
+    let try_head = vm.heap[lowered_raw].head;
+    assert_eq!(vm.heap[try_head].tag, Tag::Ap);
+    assert_eq!(vm.heap[try_head].head, RawValue::from(Combinator::Try));
+    let fallback_raw = vm.heap[lowered_raw].tail;
+    assert_eq!(vm.heap[fallback_raw].tag, Tag::Ap);
+    assert_eq!(vm.heap[fallback_raw].head, RawValue::from(Combinator::BadCase));
 }
 
 #[test]
