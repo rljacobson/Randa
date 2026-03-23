@@ -352,14 +352,7 @@ fn load_file_keeps_cons_pattern_tail_name_bound_after_constructor_formal_checks(
     let tail_value = tail
         .get_value(&vm.heap)
         .expect("expected tail definition value to exist");
-    let IdentifierValueData::Arbitrary(Value::Reference(lambda_ref)) =
-        tail_value.get_data(&vm.heap)
-    else {
-        panic!("expected top-level cons pattern form to lower into a lambda body");
-    };
-    let lambda_raw: RawValue = Value::Reference(lambda_ref).into();
-    let body_identifier = IdentifierRecordRef::from_ref(vm.heap[lambda_raw].tail);
-    assert_eq!(vm.identifier_name(body_identifier), "xs");
+    assert_ne!(tail_value.get_ref(), RawValue::from(Combinator::Undef));
 }
 
 #[test]
@@ -1804,6 +1797,49 @@ fn load_file_include_modifier_failure_leaves_no_authoritative_commit() {
     assert_eq!(vm.exported_identifiers, NIL);
     assert_eq!(vm.export_paths, NIL);
     assert_eq!(vm.export_embargoes, NIL);
+}
+
+#[test]
+fn load_file_lowers_identity_definition_body_during_codegen() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("codegen_identity_load.m");
+    std::fs::write(&source_path, "id x = x\n").expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+    let id = vm.heap.get_identifier("id").expect("expected id identifier");
+    assert_eq!(
+        id.get_value(&vm.heap)
+            .expect("expected lowered id body")
+            .get_ref(),
+        RawValue::from(Combinator::I)
+    );
+}
+
+#[test]
+fn load_file_lowers_tuple_pattern_definition_body_during_codegen() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("codegen_tuple_pattern_load.m");
+    std::fs::write(&source_path, "fst (x,y) = x\n")
+        .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+    let fst = vm.heap.get_identifier("fst").expect("expected fst identifier");
+    let lowered_raw = fst
+        .get_value(&vm.heap)
+        .expect("expected lowered fst body")
+        .get_ref();
+    assert_eq!(vm.heap[lowered_raw].tag, Tag::Ap);
+    assert_eq!(vm.heap[lowered_raw].head, RawValue::from(Combinator::U));
 }
 
 #[test]
@@ -3533,11 +3569,154 @@ fn codegen_phase_rewrites_lambda_headed_function_body() {
     let result = vm.run_codegen_phase();
 
     assert!(result.is_ok());
-    let body = keep
+    let lowered_raw = keep
         .get_value(&vm.heap)
         .expect("expected keep value")
-        .get_data(&vm.heap);
-    assert_ne!(body, IdentifierValueData::Arbitrary(original_lambda));
+        .get_ref();
+    assert_ne!(lowered_raw, RawValue::from(original_lambda));
+    assert_ne!(lowered_raw, RawValue::from(Combinator::Undef));
+}
+
+#[test]
+fn codegen_phase_normalizes_pair_body_into_cons() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let value_id = vm.heap.make_empty_identifier("pair_value");
+    let one = IntegerRef::from_i64(&mut vm.heap, 1);
+    let two = IntegerRef::from_i64(&mut vm.heap, 2);
+    let pair_body = vm.heap.pair_ref(one.into(), two.into());
+    value_id.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(pair_body));
+
+    let definienda = ConsList::new(&mut vm.heap, value_id);
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("codegen_pair_body.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        definienda,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+    vm.undefined_names = ConsList::EMPTY;
+
+    let result = vm.run_codegen_phase();
+
+    assert!(result.is_ok());
+    let lowered_raw = value_id
+        .get_value(&vm.heap)
+        .expect("expected rewritten value")
+        .get_ref();
+    assert_eq!(vm.heap[lowered_raw].tag, Tag::Cons);
+    assert_eq!(vm.heap[lowered_raw].head, one.get_ref());
+    assert_eq!(vm.heap[lowered_raw].tail, two.get_ref());
+}
+
+#[test]
+fn codegen_phase_normalizes_tcons_body_into_cons() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let value_id = vm.heap.make_empty_identifier("tcons_value");
+    let one = IntegerRef::from_i64(&mut vm.heap, 1);
+    let two = IntegerRef::from_i64(&mut vm.heap, 2);
+    let tcons_body = vm.heap.tcons_ref(one.into(), two.into());
+    value_id.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(tcons_body));
+
+    let definienda = ConsList::new(&mut vm.heap, value_id);
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("codegen_tcons_body.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        definienda,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+    vm.undefined_names = ConsList::EMPTY;
+
+    let result = vm.run_codegen_phase();
+
+    assert!(result.is_ok());
+    let lowered_raw = value_id
+        .get_value(&vm.heap)
+        .expect("expected rewritten value")
+        .get_ref();
+    assert_eq!(vm.heap[lowered_raw].tag, Tag::Cons);
+    assert_eq!(vm.heap[lowered_raw].head, one.get_ref());
+    assert_eq!(vm.heap[lowered_raw].tail, two.get_ref());
+}
+
+#[test]
+fn codegen_phase_lowers_identity_lambda_to_i() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let x = vm.heap.make_empty_identifier("x");
+    let id = vm.heap.make_empty_identifier("id");
+    let lambda = vm.heap.lambda_ref(x.into(), x.into());
+    id.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(lambda));
+
+    let definienda = ConsList::new(&mut vm.heap, id);
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("codegen_identity_lambda.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        definienda,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+    vm.undefined_names = ConsList::EMPTY;
+
+    let result = vm.run_codegen_phase();
+
+    assert!(result.is_ok());
+    assert_eq!(
+        id.get_value(&vm.heap)
+            .expect("expected lowered identity body")
+            .get_ref(),
+        RawValue::from(Combinator::I)
+    );
+}
+
+#[test]
+fn codegen_phase_lowers_tuple_pattern_lambda_to_u_application() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let x = vm.heap.make_empty_identifier("x");
+    let y = vm.heap.make_empty_identifier("y");
+    let fst = vm.heap.make_empty_identifier("fst");
+    let binder = vm.heap.pair_ref(x.into(), y.into());
+    let lambda = vm.heap.lambda_ref(binder, x.into());
+    fst.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(lambda));
+
+    let definienda = ConsList::new(&mut vm.heap, fst);
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("codegen_tuple_pattern_lambda.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        definienda,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+    vm.undefined_names = ConsList::EMPTY;
+
+    let result = vm.run_codegen_phase();
+
+    assert!(result.is_ok());
+    let lowered_raw = fst
+        .get_value(&vm.heap)
+        .expect("expected lowered tuple-pattern body")
+        .get_ref();
+    assert_eq!(vm.heap[lowered_raw].tag, Tag::Ap);
+    assert_eq!(vm.heap[lowered_raw].head, RawValue::from(Combinator::U));
 }
 
 #[test]
