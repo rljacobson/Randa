@@ -131,6 +131,12 @@ pub struct ParserFreeBindingPayload {
     pub anchor: FileInfoRef,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParserAbstypeGroupPayload {
+    pub type_identifiers: Vec<IdentifierRecordRef>,
+    pub signature_identifiers: Vec<IdentifierRecordRef>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ParserTopLevelDirectivePayload {
     pub include_requests: Vec<ParserIncludeDirectivePayload>,
@@ -145,6 +151,7 @@ pub struct ParserTopLevelScriptPayload {
     pub type_declarations: Vec<ParserTypeDeclarationPayload>,
     pub constructor_declarations: Vec<ParserConstructorPayload>,
     pub free_bindings: Vec<ParserFreeBindingPayload>,
+    pub abstype_groups: Vec<ParserAbstypeGroupPayload>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

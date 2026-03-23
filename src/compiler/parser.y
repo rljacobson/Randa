@@ -27,6 +27,7 @@ use super::{
   ParserDefinitionPayload,
   ParserExportDirectivePayload,
   ParserFreeBindingPayload,
+  ParserAbstypeGroupPayload,
   ParserIncludeBindingPayload,
   ParserIncludeDirectivePayload,
   ParserIncludeModifierPayload,
@@ -87,6 +88,7 @@ use crate::{
   type_declaration_payloads: Vec<ParserTypeDeclarationPayload>,
   constructor_payloads: Vec<ParserConstructorPayload>,
   free_binding_payloads: Vec<ParserFreeBindingPayload>,
+  abstype_group_payloads: Vec<ParserAbstypeGroupPayload>,
 
   lex_states: ConsList<Value>,
   used_identifiers: ConsList<Value>,
@@ -289,6 +291,7 @@ top_level_item:
     | top_level_specification_item { $$ = NIL; }
     | top_level_synonym_type_item { $$ = NIL; }
     | top_level_algebraic_type_item { $$ = NIL; }
+    | top_level_abstype_item { $$ = NIL; }
     | top_level_free_item { $$ = NIL; }
     ;
 
@@ -389,6 +392,96 @@ top_level_free_item:
             source_order_specs = self.heap[source_order_specs].tail;
           }
         }
+        $$ = NIL;
+      }
+    ;
+
+top_level_abstype_typeforms:
+    top_level_abstype_typeforms Comma top_level_typeform {
+        $$ = self.heap.cons_ref($3, $1);
+      }
+    | top_level_typeform { $$ = self.heap.cons_ref($1, NIL); }
+    ;
+
+top_level_abstype_spec:
+    namelist top_level_definition_anchor ColonColon top_level_type_expr {
+        let spec_tail = self.heap.cons_ref($2, $4);
+        $$ = self.heap.cons_ref($1, spec_tail);
+      }
+    ;
+
+top_level_abstype_specs:
+    top_level_abstype_specs top_level_free_spec_separator top_level_abstype_spec {
+        $$ = self.heap.cons_ref($3, $1);
+      }
+    | top_level_abstype_spec { $$ = self.heap.cons_ref($1, NIL); }
+    ;
+
+top_level_abstype_signature_block:
+    top_level_abstype_spec { $$ = self.heap.cons_ref($1, NIL); }
+    | OpenBrace top_level_free_block_padding top_level_abstype_specs top_level_free_block_padding CloseBrace {
+        $$ = $3;
+      }
+    ;
+
+top_level_abstype_item:
+    AbsoluteType top_level_definition_anchor top_level_abstype_typeforms With top_level_abstype_signature_block directive_terminators {
+        let anchor = FileInfoRef::from_ref($2.into());
+        let mut specs: RawValue = $5.into();
+        let mut source_order_specs = NIL_RAW;
+        while specs != NIL_RAW {
+          source_order_specs = self.heap.cons_ref(self.heap[specs].head.into(), source_order_specs.into()).into();
+          specs = self.heap[specs].tail;
+        }
+
+        let mut signature_identifiers = Vec::new();
+        while source_order_specs != NIL_RAW {
+          let spec = self.heap[source_order_specs].head;
+          let mut names: RawValue = self.heap[spec].head.into();
+          let spec_tail = self.heap[spec].tail;
+          let spec_anchor = FileInfoRef::from_ref(self.heap[spec_tail].head);
+          let type_expr = TypeExprRef::new(self.heap[spec_tail].tail.into());
+          while names != NIL_RAW {
+            let identifier = IdentifierRecordRef::from_ref(self.heap[names].head);
+            self.specification_payloads.push(ParserSpecificationPayload {
+              identifier,
+              type_expr,
+              anchor: spec_anchor,
+            });
+            signature_identifiers.push(identifier);
+            names = self.heap[names].tail;
+          }
+          source_order_specs = self.heap[source_order_specs].tail;
+        }
+
+        let mut typeforms: RawValue = $3.into();
+        let mut source_order_typeforms = NIL_RAW;
+        while typeforms != NIL_RAW {
+          source_order_typeforms = self.heap.cons_ref(self.heap[typeforms].head.into(), source_order_typeforms.into()).into();
+          typeforms = self.heap[typeforms].tail;
+        }
+
+        let mut type_identifiers = Vec::new();
+        while source_order_typeforms != NIL_RAW {
+          let typeform = TypeExprRef::new(self.heap[source_order_typeforms].head.into());
+          let Some((type_identifier, arguments)) = typeform.identifier_head_application_spine(&self.heap) else {
+            unreachable!("abstype lhs should stay identifier-headed")
+          };
+          self.type_declaration_payloads.push(ParserTypeDeclarationPayload {
+            type_identifier,
+            arity: arguments.len() as isize,
+            kind: IdentifierValueTypeKind::Abstract,
+            info: Type::Undefined.into(),
+            anchor,
+          });
+          type_identifiers.push(type_identifier);
+          source_order_typeforms = self.heap[source_order_typeforms].tail;
+        }
+
+        self.abstype_group_payloads.push(ParserAbstypeGroupPayload {
+          type_identifiers,
+          signature_identifiers,
+        });
         $$ = NIL;
       }
     ;
@@ -2702,6 +2795,7 @@ impl<'ctx /* 'fix quotes */> Parser<'ctx /* 'fix quotes */> {
         type_declaration_payloads: Vec::new(),
         constructor_payloads: Vec::new(),
         free_binding_payloads: Vec::new(),
+        abstype_group_payloads: Vec::new(),
 
         lex_states: session.lex_states,
         used_identifiers: session.used_identifiers,
@@ -3021,6 +3115,7 @@ impl<'ctx /* 'fix quotes */> Parser<'ctx /* 'fix quotes */> {
                 type_declarations: self.type_declaration_payloads,
                 constructor_declarations: self.constructor_payloads,
                 free_bindings: self.free_binding_payloads,
+                abstype_groups: self.abstype_group_payloads,
             });
         }
 

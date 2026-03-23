@@ -852,6 +852,14 @@ impl IdentifierValueTypeRef {
         );
         TypeExprRef::new(heap[self.reference].tail.into())
     }
+
+    /// Returns the committed basis payload for an abstract typed identifier value.
+    /// This exists so abstype consumers read basis state through the typed identifier-value seam instead of raw heap-tail access.
+    /// The invariant is that only abstract typed values yield `Some(...)`, and that payload is exactly the value-type node tail.
+    pub fn abstract_basis(&self, heap: &Heap) -> Option<Value> {
+        (self.get_identifier_value_type_kind(heap) == IdentifierValueTypeKind::Abstract)
+            .then(|| heap[self.reference].tail.into())
+    }
 }
 
 impl HeapObjectProxy for IdentifierValueTypeRef {

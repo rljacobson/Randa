@@ -1357,6 +1357,31 @@ impl VM {
             if !payload.free_bindings.is_empty() {
                 self.commit_top_level_free_bindings_payload(current_file, &payload.free_bindings);
             }
+            for group in &payload.abstype_groups {
+                let mut tids = NIL;
+                for &type_identifier in group.type_identifiers.iter().rev() {
+                    if let Some(&show_function) = group.signature_identifiers.iter().find(|identifier| {
+                        self.identifier_name(**identifier)
+                            == format!("show{}", self.identifier_name(type_identifier))
+                    }) {
+                        self.attach_type_show_function(type_identifier, show_function)
+                            .expect("abstype type identifier should accept typed show-function attachment after commit");
+                    }
+                    tids = self.heap.cons_ref(type_identifier.into(), tids);
+                }
+
+                let ids = group
+                    .signature_identifiers
+                    .iter()
+                    .rev()
+                    .fold(NIL, |list, identifier| self.heap.cons_ref((*identifier).into(), list));
+                let group_entry = self.heap.cons_ref(tids, ids);
+                self.type_abstractions = ConsList::from_ref(
+                    self.heap
+                        .cons_ref(group_entry, self.type_abstractions.into())
+                        .into(),
+                );
+            }
         }
 
         files
@@ -1402,20 +1427,81 @@ impl VM {
         let definition_metadata = self.definition_metadata_from_anchor(type_declaration.anchor);
         type_identifier.set_definition(&mut self.heap, definition_metadata);
         type_identifier.set_type_expr(&mut self.heap, TypeExprRef::new(Type::Type.into()));
-        let info = if type_declaration.kind == IdentifierValueTypeKind::Algebraic {
-            self.commit_algebraic_type_constructor_info(
-                type_declaration.type_identifier.get_ref(),
-                constructor_payloads,
-            )
-        } else {
-            type_declaration.info
+
+        let existing_typed_value = type_identifier.get_value(&self.heap).and_then(|value| {
+            match value.get_data(&self.heap) {
+                IdentifierValueData::Typed {
+                    show_function,
+                    value_type,
+                    ..
+                } => Some((show_function, value_type)),
+                _ => None,
+            }
+        });
+        let inherited_show_function = existing_typed_value.and_then(|(show_function, _)| {
+            (show_function != Value::None).then_some(show_function)
+        });
+
+        let (kind, info, show_function) = match type_declaration.kind {
+            IdentifierValueTypeKind::Algebraic => (
+                IdentifierValueTypeKind::Algebraic,
+                self.commit_algebraic_type_constructor_info(
+                    type_declaration.type_identifier.get_ref(),
+                    constructor_payloads,
+                ),
+                None,
+            ),
+            IdentifierValueTypeKind::Synonym => match existing_typed_value {
+                Some((_, existing_value_type))
+                    if existing_value_type.get_identifier_value_type_kind(&self.heap)
+                        == IdentifierValueTypeKind::Abstract =>
+                {
+                    (
+                        IdentifierValueTypeKind::Abstract,
+                        type_declaration.info,
+                        inherited_show_function,
+                    )
+                }
+                _ => (IdentifierValueTypeKind::Synonym, type_declaration.info, None),
+            },
+            IdentifierValueTypeKind::Abstract => match existing_typed_value {
+                Some((_, existing_value_type))
+                    if existing_value_type.get_identifier_value_type_kind(&self.heap)
+                        == IdentifierValueTypeKind::Synonym =>
+                {
+                    (
+                        IdentifierValueTypeKind::Abstract,
+                        existing_value_type.synonym_rhs_type_expr(&self.heap).value(),
+                        inherited_show_function,
+                    )
+                }
+                Some((_, existing_value_type))
+                    if existing_value_type.get_identifier_value_type_kind(&self.heap)
+                        == IdentifierValueTypeKind::Abstract =>
+                {
+                    (
+                        IdentifierValueTypeKind::Abstract,
+                        existing_value_type
+                            .abstract_basis(&self.heap)
+                            .unwrap_or(Type::Undefined.into()),
+                        inherited_show_function,
+                    )
+                }
+                _ => (
+                    IdentifierValueTypeKind::Abstract,
+                    Type::Undefined.into(),
+                    inherited_show_function,
+                ),
+            },
+            _ => (type_declaration.kind, type_declaration.info, None),
         };
+
         let value = IdentifierValueRef::from_type_identifier_parts(
             &mut self.heap,
             TypeIdentifierValueParts {
                 arity: type_declaration.arity,
-                show_function: None,
-                kind: type_declaration.kind,
+                show_function,
+                kind,
                 info,
             },
         );
@@ -1767,14 +1853,14 @@ impl VM {
             | (Some(Token::Name), Some(Token::ColonColon))
             | (Some(Token::Name), Some(Token::EqualEqual))
             | (Some(Token::Name), Some(Token::Colon2Equal))
-            | (Some(Token::Free), _) => LoadScriptForm::TopLevelScript,
+            | (Some(Token::Free), _)
+            | (Some(Token::AbsoluteType), _) => LoadScriptForm::TopLevelScript,
             _ if name_led && has_declaration_marker => LoadScriptForm::TopLevelScript,
             _ if typeform_led && has_declaration_marker => LoadScriptForm::TopLevelScript,
             _ if name_led && has_equal => LoadScriptForm::TopLevelScript,
             (Some(Token::Lex), _)
             | (Some(Token::BNF), _)
             | (Some(Token::Type), _)
-            | (Some(Token::AbsoluteType), _)
             | (Some(Token::Value), _)
             | (Some(Token::Eval), _)
             | (Some(Token::ConstructorName), Some(Token::Colon2Equal)) => {

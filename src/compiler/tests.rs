@@ -600,6 +600,57 @@ fn parser_rejects_infix_constructor_name_on_top_level_type_lhs() {
 }
 
 #[test]
+fn parser_parses_top_level_abstype_payloads() {
+    let (heap, result) = run_parser(
+        "abstype_payloads.m",
+        "abstype thing with showthing :: num\nthing == num\nshowthing = 0\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success");
+    };
+    assert_eq!(payload.abstype_groups.len(), 1);
+    assert_eq!(payload.type_declarations.len(), 2);
+    assert_eq!(payload.specifications.len(), 1);
+    assert_eq!(payload.definitions.len(), 1);
+
+    let abstype_declaration = &payload.type_declarations[0];
+    assert_eq!(abstype_declaration.type_identifier.get_name(&heap), "thing");
+    assert_eq!(abstype_declaration.arity, 0);
+    assert_eq!(
+        abstype_declaration.kind,
+        crate::data::api::IdentifierValueTypeKind::Abstract
+    );
+
+    let abstype_group = &payload.abstype_groups[0];
+    assert_eq!(abstype_group.type_identifiers.len(), 1);
+    assert_eq!(abstype_group.signature_identifiers.len(), 1);
+    assert_eq!(abstype_group.type_identifiers[0].get_name(&heap), "thing");
+    assert_eq!(
+        abstype_group.signature_identifiers[0].get_name(&heap),
+        "showthing"
+    );
+    assert_eq!(payload.specifications[0].identifier.get_name(&heap), "showthing");
+}
+
+#[test]
+fn parser_parses_top_level_braced_abstype_signature_block() {
+    let (heap, result) = run_parser(
+        "abstype_braced_signatures.m",
+        "abstype thing, widget with { showthing :: num; showwidget :: num }\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success");
+    };
+    assert_eq!(payload.abstype_groups.len(), 1);
+    assert_eq!(payload.abstype_groups[0].type_identifiers.len(), 2);
+    assert_eq!(payload.abstype_groups[0].signature_identifiers.len(), 2);
+    assert_eq!(payload.abstype_groups[0].type_identifiers[0].get_name(&heap), "thing");
+    assert_eq!(payload.abstype_groups[0].type_identifiers[1].get_name(&heap), "widget");
+}
+
+#[test]
 fn parser_parses_include_modifier_payloads() {
     let (heap, result) = run_parser("include_modifiers.m", "%include \"inc.m\" foo / bar -baz\n");
 

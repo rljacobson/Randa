@@ -320,6 +320,11 @@ fn classify_load_script_form_distinguishes_supported_top_level_forms() {
             .expect("%free should classify"),
         LoadScriptForm::TopLevelScript
     );
+    assert_eq!(
+        vm.classify_load_script_form("slice.m", "abstype thing with showthing :: num")
+            .expect("abstype should classify"),
+        LoadScriptForm::TopLevelScript
+    );
 }
 
 #[test]
@@ -1879,6 +1884,138 @@ fn parse_source_text_accepts_distinct_type_variables_on_algebraic_lhs() {
         "diagnostics={:?}",
         vm.parser_diagnostics
     );
+}
+
+#[test]
+fn parse_source_text_commits_abstype_with_later_basis_binding() {
+    let mut vm = VM::new_for_tests();
+
+    let source_path = unique_test_path("abstype_with_later_basis_binding.m");
+    let source_path_str = source_path.to_string_lossy().to_string();
+    let result = vm.parse_source_text(
+        &source_path_str,
+        "abstype thing with showthing :: num\nthing == num\nshowthing = 0\n",
+        UNIX_EPOCH,
+        false,
+    );
+
+    let outcome = result.expect("expected parse outcome");
+    assert_eq!(outcome.status, ParsePhaseStatus::Parsed);
+    let thing = vm.intern_identifier("thing");
+    let showthing = vm.intern_identifier("showthing");
+    let IdentifierValueData::Typed {
+        show_function,
+        value_type,
+        ..
+    } = thing.get_value(&vm.heap).expect("missing type value").get_data(&vm.heap)
+    else {
+        panic!("expected typed type identifier value");
+    };
+    assert_eq!(
+        value_type.get_identifier_value_type_kind(&vm.heap),
+        IdentifierValueTypeKind::Abstract
+    );
+    assert_eq!(show_function, showthing.into());
+    assert_eq!(
+        RawValue::from(value_type.abstract_basis(&vm.heap).expect("missing abstract basis")),
+        RawValue::from(Type::Number)
+    );
+    assert!(!vm.type_abstractions.is_empty());
+}
+
+#[test]
+fn parse_source_text_commits_abstype_after_prior_basis_binding() {
+    let mut vm = VM::new_for_tests();
+
+    let source_path = unique_test_path("abstype_after_prior_basis_binding.m");
+    let source_path_str = source_path.to_string_lossy().to_string();
+    let result = vm.parse_source_text(
+        &source_path_str,
+        "thing == num\nabstype thing with showthing :: num\nshowthing = 0\n",
+        UNIX_EPOCH,
+        false,
+    );
+
+    let outcome = result.expect("expected parse outcome");
+    assert_eq!(outcome.status, ParsePhaseStatus::Parsed);
+    let thing = vm.intern_identifier("thing");
+    let showthing = vm.intern_identifier("showthing");
+    let IdentifierValueData::Typed {
+        show_function,
+        value_type,
+        ..
+    } = thing.get_value(&vm.heap).expect("missing type value").get_data(&vm.heap)
+    else {
+        panic!("expected typed type identifier value");
+    };
+    assert_eq!(
+        value_type.get_identifier_value_type_kind(&vm.heap),
+        IdentifierValueTypeKind::Abstract
+    );
+    assert_eq!(show_function, showthing.into());
+    assert_eq!(
+        RawValue::from(value_type.abstract_basis(&vm.heap).expect("missing abstract basis")),
+        RawValue::from(Type::Number)
+    );
+    assert!(!vm.type_abstractions.is_empty());
+}
+
+#[test]
+fn load_file_accepts_abstype_with_basis_and_showfunction() {
+    let mut vm = VM::new_for_tests();
+    let source_path = unique_test_path("abstype_with_basis_and_showfunction.m");
+    std::fs::write(&source_path, "abstype thing with showthing :: num\nthing == num\nshowthing = 0\n")
+        .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(result.is_ok(), "result={result:?} undefined={:?}", vm.undefined_names);
+    let thing = vm.intern_identifier("thing");
+    let showthing = vm.intern_identifier("showthing");
+    let IdentifierValueData::Typed {
+        show_function,
+        value_type,
+        ..
+    } = thing.get_value(&vm.heap).expect("missing type value").get_data(&vm.heap)
+    else {
+        panic!("expected typed type identifier value");
+    };
+    assert_eq!(
+        value_type.get_identifier_value_type_kind(&vm.heap),
+        IdentifierValueTypeKind::Abstract
+    );
+    assert_eq!(show_function, showthing.into());
+    assert_eq!(
+        RawValue::from(value_type.abstract_basis(&vm.heap).expect("missing abstract basis")),
+        RawValue::from(Type::Number)
+    );
+    assert!(!vm.type_abstractions.is_empty());
+}
+
+#[test]
+fn load_file_reports_unbound_abstype_without_basis() {
+    let mut vm = VM::new_for_tests();
+    let source_path = unique_test_path("unbound_abstype_without_basis.m");
+    std::fs::write(&source_path, "abstype thing with showthing :: num\nshowthing = 0\n")
+        .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(TypecheckError::UnboundAbstractTypeNames { count: 1 }))
+    ));
+    let mut undefined_names = vm.undefined_names;
+    let mut found_thing = false;
+    while let Some(identifier) = undefined_names.pop(&vm.heap) {
+        if identifier.get_name(&vm.heap) == "thing" {
+            found_thing = true;
+            break;
+        }
+    }
+    assert!(found_thing);
 }
 
 #[test]
