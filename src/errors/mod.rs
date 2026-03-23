@@ -115,8 +115,14 @@ pub enum TypecheckError {
     UndeclaredConstructorsInFormals { count: usize },
     #[error("Typecheck phase found constructor arity mismatches in formals ({count})")]
     ConstructorArityMismatchInFormals { count: usize },
-    #[error("Typecheck phase found unsupported arithmetic patterns in formals ({count})")]
-    UnsupportedArithmeticPatternsInFormals { count: usize },
+    #[error("Typecheck phase found non-canonical binary plus patterns in formals ({count})")]
+    NonCanonicalPlusPatternsInFormals { count: usize },
+    #[error("Typecheck phase found unary minus patterns in formals ({count})")]
+    UnaryMinusPatternsInFormals { count: usize },
+    #[error("Typecheck phase found malformed plus applications in formals ({count})")]
+    MalformedPlusApplicationsInFormals { count: usize },
+    #[error("Typecheck phase found malformed minus applications in formals ({count})")]
+    MalformedMinusApplicationsInFormals { count: usize },
     #[error("Typecheck phase found invalid canonical successor patterns in formals ({count})")]
     InvalidSuccessorPatternsInFormals { count: usize },
     #[error("Typecheck phase found value-headed applications in formals ({count})")]

@@ -47,7 +47,10 @@ pub(super) fn run_partial_typecheck(
     let mut specified_but_not_defined = ConsList::EMPTY;
     let mut undeclared_constructors_in_formals = ConsList::EMPTY;
     let mut constructor_arity_mismatch_in_formals = ConsList::EMPTY;
-    let mut unsupported_arithmetic_patterns_in_formals = 0usize;
+    let mut non_canonical_plus_patterns_in_formals = 0usize;
+    let mut unary_minus_patterns_in_formals = 0usize;
+    let mut malformed_plus_applications_in_formals = 0usize;
+    let mut malformed_minus_applications_in_formals = 0usize;
     let mut invalid_successor_patterns_in_formals = 0usize;
     let mut value_head_applications_in_formals = 0usize;
     let mut non_identifier_application_heads_in_formals = 0usize;
@@ -85,7 +88,10 @@ pub(super) fn run_partial_typecheck(
                         body,
                         &mut undeclared_constructors_in_formals,
                         &mut constructor_arity_mismatch_in_formals,
-                        &mut unsupported_arithmetic_patterns_in_formals,
+                        &mut non_canonical_plus_patterns_in_formals,
+                        &mut unary_minus_patterns_in_formals,
+                        &mut malformed_plus_applications_in_formals,
+                        &mut malformed_minus_applications_in_formals,
                         &mut invalid_successor_patterns_in_formals,
                         &mut value_head_applications_in_formals,
                         &mut non_identifier_application_heads_in_formals,
@@ -201,9 +207,21 @@ pub(super) fn run_partial_typecheck(
         Some(TypecheckError::ConstructorArityMismatchInFormals {
             count: constructor_formal_arity_mismatch_count,
         })
-    } else if unsupported_arithmetic_patterns_in_formals > 0 {
-        Some(TypecheckError::UnsupportedArithmeticPatternsInFormals {
-            count: unsupported_arithmetic_patterns_in_formals,
+    } else if non_canonical_plus_patterns_in_formals > 0 {
+        Some(TypecheckError::NonCanonicalPlusPatternsInFormals {
+            count: non_canonical_plus_patterns_in_formals,
+        })
+    } else if unary_minus_patterns_in_formals > 0 {
+        Some(TypecheckError::UnaryMinusPatternsInFormals {
+            count: unary_minus_patterns_in_formals,
+        })
+    } else if malformed_plus_applications_in_formals > 0 {
+        Some(TypecheckError::MalformedPlusApplicationsInFormals {
+            count: malformed_plus_applications_in_formals,
+        })
+    } else if malformed_minus_applications_in_formals > 0 {
+        Some(TypecheckError::MalformedMinusApplicationsInFormals {
+            count: malformed_minus_applications_in_formals,
         })
     } else if value_head_applications_in_formals > 0 {
         Some(TypecheckError::ValueHeadApplicationsInFormals {
@@ -233,14 +251,19 @@ pub(super) fn run_partial_typecheck(
 }
 
 /// Walks committed lambda-head patterns and records formal-pattern misuse in the active subset.
-/// This exists so the typecheck boundary owns formal-pattern diagnostics over the already lowered top-level forms.
-/// The invariant is that constructor misuse, canonical successor-pattern recursion, deferred arithmetic forms, and invalid application shapes are diagnosed before generic undefined-name reporting.
+/// This exists so the typecheck boundary owns formal-pattern diagnostics over the already lowered
+/// top-level forms. The invariant is that constructor misuse, canonical successor-pattern
+/// recursion, malformed arithmetic forms, and invalid application shapes are diagnosed before
+/// generic undefined-name reporting.
 fn collect_formal_pattern_issues(
     heap: &mut Heap,
     expression: Value,
     undeclared_constructors_in_formals: &mut ConsList<IdentifierRecordRef>,
     constructor_arity_mismatch_in_formals: &mut ConsList<IdentifierRecordRef>,
-    unsupported_arithmetic_patterns_in_formals: &mut usize,
+    non_canonical_plus_patterns_in_formals: &mut usize,
+    unary_minus_patterns_in_formals: &mut usize,
+    malformed_plus_applications_in_formals: &mut usize,
+    malformed_minus_applications_in_formals: &mut usize,
     invalid_successor_patterns_in_formals: &mut usize,
     value_head_applications_in_formals: &mut usize,
     non_identifier_application_heads_in_formals: &mut usize,
@@ -258,7 +281,10 @@ fn collect_formal_pattern_issues(
                 pattern,
                 undeclared_constructors_in_formals,
                 constructor_arity_mismatch_in_formals,
-                unsupported_arithmetic_patterns_in_formals,
+                non_canonical_plus_patterns_in_formals,
+                unary_minus_patterns_in_formals,
+                malformed_plus_applications_in_formals,
+                malformed_minus_applications_in_formals,
                 invalid_successor_patterns_in_formals,
                 value_head_applications_in_formals,
                 non_identifier_application_heads_in_formals,
@@ -269,7 +295,10 @@ fn collect_formal_pattern_issues(
                 body,
                 undeclared_constructors_in_formals,
                 constructor_arity_mismatch_in_formals,
-                unsupported_arithmetic_patterns_in_formals,
+                non_canonical_plus_patterns_in_formals,
+                unary_minus_patterns_in_formals,
+                malformed_plus_applications_in_formals,
+                malformed_minus_applications_in_formals,
                 invalid_successor_patterns_in_formals,
                 value_head_applications_in_formals,
                 non_identifier_application_heads_in_formals,
@@ -281,7 +310,10 @@ fn collect_formal_pattern_issues(
                 heap[raw_reference].tail.into(),
                 undeclared_constructors_in_formals,
                 constructor_arity_mismatch_in_formals,
-                unsupported_arithmetic_patterns_in_formals,
+                non_canonical_plus_patterns_in_formals,
+                unary_minus_patterns_in_formals,
+                malformed_plus_applications_in_formals,
+                malformed_minus_applications_in_formals,
                 invalid_successor_patterns_in_formals,
                 value_head_applications_in_formals,
                 non_identifier_application_heads_in_formals,
@@ -293,7 +325,10 @@ fn collect_formal_pattern_issues(
                 heap[raw_reference].head.into(),
                 undeclared_constructors_in_formals,
                 constructor_arity_mismatch_in_formals,
-                unsupported_arithmetic_patterns_in_formals,
+                non_canonical_plus_patterns_in_formals,
+                unary_minus_patterns_in_formals,
+                malformed_plus_applications_in_formals,
+                malformed_minus_applications_in_formals,
                 invalid_successor_patterns_in_formals,
                 value_head_applications_in_formals,
                 non_identifier_application_heads_in_formals,
@@ -308,7 +343,10 @@ fn collect_formal_pattern_issues_in_pattern(
     pattern: Value,
     undeclared_constructors_in_formals: &mut ConsList<IdentifierRecordRef>,
     constructor_arity_mismatch_in_formals: &mut ConsList<IdentifierRecordRef>,
-    unsupported_arithmetic_patterns_in_formals: &mut usize,
+    non_canonical_plus_patterns_in_formals: &mut usize,
+    unary_minus_patterns_in_formals: &mut usize,
+    malformed_plus_applications_in_formals: &mut usize,
+    malformed_minus_applications_in_formals: &mut usize,
     invalid_successor_patterns_in_formals: &mut usize,
     value_head_applications_in_formals: &mut usize,
     non_identifier_application_heads_in_formals: &mut usize,
@@ -339,7 +377,10 @@ fn collect_formal_pattern_issues_in_pattern(
                     argument,
                     undeclared_constructors_in_formals,
                     constructor_arity_mismatch_in_formals,
-                    unsupported_arithmetic_patterns_in_formals,
+                    non_canonical_plus_patterns_in_formals,
+                    unary_minus_patterns_in_formals,
+                    malformed_plus_applications_in_formals,
+                    malformed_minus_applications_in_formals,
                     invalid_successor_patterns_in_formals,
                     value_head_applications_in_formals,
                     non_identifier_application_heads_in_formals,
@@ -359,8 +400,10 @@ fn collect_formal_pattern_issues_in_pattern(
                 }
                 CommittedFormalPattern::ConstructorIntentIdentifier(_)
                 | CommittedFormalPattern::ConstructorApplication { .. }
-                | CommittedFormalPattern::UnsupportedPlusPattern { .. }
-                | CommittedFormalPattern::UnsupportedMinusPattern { .. }
+                | CommittedFormalPattern::NonCanonicalPlusPattern { .. }
+                | CommittedFormalPattern::MalformedPlusApplication { .. }
+                | CommittedFormalPattern::UnaryMinusPattern { .. }
+                | CommittedFormalPattern::MalformedMinusApplication { .. }
                 | CommittedFormalPattern::ValueHeadApplication { .. }
                 | CommittedFormalPattern::RepeatedNameHeadApplication { .. }
                 | CommittedFormalPattern::NonIdentifierHeadApplication { .. }
@@ -375,15 +418,26 @@ fn collect_formal_pattern_issues_in_pattern(
                 inner,
                 undeclared_constructors_in_formals,
                 constructor_arity_mismatch_in_formals,
-                unsupported_arithmetic_patterns_in_formals,
+                non_canonical_plus_patterns_in_formals,
+                unary_minus_patterns_in_formals,
+                malformed_plus_applications_in_formals,
+                malformed_minus_applications_in_formals,
                 invalid_successor_patterns_in_formals,
                 value_head_applications_in_formals,
                 non_identifier_application_heads_in_formals,
             );
         }
-        CommittedFormalPattern::UnsupportedPlusPattern { .. }
-        | CommittedFormalPattern::UnsupportedMinusPattern { .. } => {
-            *unsupported_arithmetic_patterns_in_formals += 1;
+        CommittedFormalPattern::NonCanonicalPlusPattern { .. } => {
+            *non_canonical_plus_patterns_in_formals += 1;
+        }
+        CommittedFormalPattern::UnaryMinusPattern { .. } => {
+            *unary_minus_patterns_in_formals += 1;
+        }
+        CommittedFormalPattern::MalformedPlusApplication { .. } => {
+            *malformed_plus_applications_in_formals += 1;
+        }
+        CommittedFormalPattern::MalformedMinusApplication { .. } => {
+            *malformed_minus_applications_in_formals += 1;
         }
         CommittedFormalPattern::ValueHeadApplication { .. }
         | CommittedFormalPattern::RepeatedNameHeadApplication { .. } => {
@@ -399,7 +453,10 @@ fn collect_formal_pattern_issues_in_pattern(
                 head,
                 undeclared_constructors_in_formals,
                 constructor_arity_mismatch_in_formals,
-                unsupported_arithmetic_patterns_in_formals,
+                non_canonical_plus_patterns_in_formals,
+                unary_minus_patterns_in_formals,
+                malformed_plus_applications_in_formals,
+                malformed_minus_applications_in_formals,
                 invalid_successor_patterns_in_formals,
                 value_head_applications_in_formals,
                 non_identifier_application_heads_in_formals,
@@ -409,7 +466,10 @@ fn collect_formal_pattern_issues_in_pattern(
                 tail,
                 undeclared_constructors_in_formals,
                 constructor_arity_mismatch_in_formals,
-                unsupported_arithmetic_patterns_in_formals,
+                non_canonical_plus_patterns_in_formals,
+                unary_minus_patterns_in_formals,
+                malformed_plus_applications_in_formals,
+                malformed_minus_applications_in_formals,
                 invalid_successor_patterns_in_formals,
                 value_head_applications_in_formals,
                 non_identifier_application_heads_in_formals,
@@ -607,11 +667,18 @@ fn collect_pattern_bound_identifiers(
         CommittedFormalPattern::SuccessorPattern { inner, .. } => {
             collect_pattern_bound_identifiers(heap, inner, bound_identifiers);
         }
-        CommittedFormalPattern::UnsupportedPlusPattern { arguments }
-        | CommittedFormalPattern::UnsupportedMinusPattern { arguments } => {
+        CommittedFormalPattern::NonCanonicalPlusPattern { left, right } => {
+            collect_pattern_bound_identifiers(heap, left, bound_identifiers);
+            collect_pattern_bound_identifiers(heap, right, bound_identifiers);
+        }
+        CommittedFormalPattern::MalformedPlusApplication { arguments }
+        | CommittedFormalPattern::MalformedMinusApplication { arguments } => {
             for argument in arguments {
                 collect_pattern_bound_identifiers(heap, argument, bound_identifiers);
             }
+        }
+        CommittedFormalPattern::UnaryMinusPattern { operand } => {
+            collect_pattern_bound_identifiers(heap, operand, bound_identifiers);
         }
         CommittedFormalPattern::ValueHeadApplication { head, arguments } => {
             collect_pattern_bound_identifiers(heap, head.into(), bound_identifiers);
@@ -650,10 +717,17 @@ enum CommittedFormalPattern {
         offset: Value,
         inner: Value,
     },
-    UnsupportedPlusPattern {
+    NonCanonicalPlusPattern {
+        left: Value,
+        right: Value,
+    },
+    MalformedPlusApplication {
         arguments: Vec<Value>,
     },
-    UnsupportedMinusPattern {
+    UnaryMinusPattern {
+        operand: Value,
+    },
+    MalformedMinusApplication {
         arguments: Vec<Value>,
     },
     ValueHeadApplication {
@@ -681,9 +755,11 @@ enum CommittedFormalPattern {
     LiteralOrVoidLeaf,
 }
 
-/// Classifies one committed formal-pattern node into the shared semantic taxonomy used by typecheck.
-/// This exists so bound-name collection and formal diagnostics interpret the same committed shapes consistently.
-/// The invariant is that wrapped constant cells, canonical successor patterns, deferred arithmetic families, and invalid application families are distinguished before either walk recurses or records bindings.
+/// Classifies one committed formal-pattern node into the shared semantic taxonomy used by
+/// typecheck. This exists so bound-name collection and formal diagnostics interpret the same
+/// committed shapes consistently. The invariant is that wrapped constant cells, canonical successor
+/// patterns, malformed arithmetic families, and invalid application families are distinguished
+/// before either walk recurses or records bindings.
 fn classify_committed_formal_pattern(heap: &Heap, pattern: Value) -> CommittedFormalPattern {
     let raw_reference: RawValue = pattern.into();
     if raw_reference < ATOM_LIMIT {
@@ -718,12 +794,19 @@ fn classify_committed_formal_pattern(heap: &Heap, pattern: Value) -> CommittedFo
                 }
 
                 return match head {
-                    Value::Combinator(Combinator::Plus) => {
-                        CommittedFormalPattern::UnsupportedPlusPattern { arguments }
-                    }
-                    Value::Combinator(Combinator::Minus) => {
-                        CommittedFormalPattern::UnsupportedMinusPattern { arguments }
-                    }
+                    Value::Combinator(Combinator::Plus) => match arguments.as_slice() {
+                        [left, right] => CommittedFormalPattern::NonCanonicalPlusPattern {
+                            left: *left,
+                            right: *right,
+                        },
+                        _ => CommittedFormalPattern::MalformedPlusApplication { arguments },
+                    },
+                    Value::Combinator(Combinator::Minus) => match arguments.as_slice() {
+                        [operand] => CommittedFormalPattern::UnaryMinusPattern {
+                            operand: *operand,
+                        },
+                        _ => CommittedFormalPattern::MalformedMinusApplication { arguments },
+                    },
                     _ => CommittedFormalPattern::NonIdentifierHeadApplication { head, arguments },
                 };
             }
