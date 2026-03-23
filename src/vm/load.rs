@@ -1402,7 +1402,7 @@ impl VM {
             IdentifierValueData::Arbitrary(definition.body.into()),
         );
 
-        self.push_definiendum_once(current_file, definition.identifier);
+        current_file.push_definiendum_once(&mut self.heap, definition.identifier);
     }
 
     fn commit_top_level_specification_payload(
@@ -1414,7 +1414,7 @@ impl VM {
         let type_expr = specification.type_expr;
         identifier.set_type_expr(&mut self.heap, type_expr);
 
-        self.push_definiendum_once(current_file, specification.identifier);
+        current_file.push_definiendum_once(&mut self.heap, specification.identifier);
     }
 
     fn commit_top_level_type_declaration_payload(
@@ -1507,7 +1507,7 @@ impl VM {
         );
         type_identifier.set_value(&mut self.heap, value);
 
-        self.push_definiendum_once(current_file, type_declaration.type_identifier);
+        current_file.push_definiendum_once(&mut self.heap, type_declaration.type_identifier);
     }
 
     fn commit_top_level_constructor_payload(
@@ -1529,7 +1529,7 @@ impl VM {
             IdentifierValueData::Arbitrary(constructor_value.into()),
         );
 
-        self.push_definiendum_once(current_file, constructor_payload.constructor);
+        current_file.push_definiendum_once(&mut self.heap, constructor_payload.constructor);
     }
 
     /// Returns the committed ordinal of a constructor within its parent algebraic type declaration.
@@ -1684,7 +1684,7 @@ impl VM {
             let formal_binding =
                 FreeFormalBindingRef::new(&mut self.heap, identifier, original_name, type_expr);
             formal_bindings.push(&mut self.heap, formal_binding);
-            self.push_definiendum_once(current_file, free_binding.identifier);
+            current_file.push_definiendum_once(&mut self.heap, free_binding.identifier);
         }
 
         self.free_identifiers = ConsList::from_ref(super::bytecode::hdsort_binding_list_ref(
@@ -1735,17 +1735,6 @@ impl VM {
             },
             None,
         )
-    }
-
-    fn push_definiendum_once(&mut self, current_file: FileRecord, identifier: IdentifierRecordRef) {
-        let mut definienda = current_file.get_definienda(&self.heap);
-        while let Some(existing) = definienda.pop(&self.heap) {
-            if existing == identifier {
-                return;
-            }
-        }
-
-        current_file.push_item_onto_definienda(&mut self.heap, identifier);
     }
 
     fn parser_activation(&mut self, load_script_form: LoadScriptForm) -> ParserActivation<'_> {

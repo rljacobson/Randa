@@ -352,6 +352,40 @@ impl IdentifierRecordRef {
         }
     }
 
+    /// Returns the arity of the identifier's committed typed value when present.
+    /// This exists so subsystem code can query typed identifier arity through the identifier owner instead of re-decoding the typed payload locally.
+    /// The invariant is that only identifiers whose committed value is a typed identifier payload return `Some(arity)`.
+    pub fn typed_arity(&self, heap: &Heap) -> Option<usize> {
+        let value = self.get_value(heap)?;
+        let IdentifierValueData::Typed { arity, .. } = value.get_data(heap) else {
+            return None;
+        };
+        Some(arity.max(0) as usize)
+    }
+
+    /// Returns whether the identifier currently has a committed non-type specification but no committed value binding.
+    /// This exists so subsystem code can query specified-but-not-defined identifier state through the identifier owner.
+    /// The invariant is that datatype `Undefined` and `Type` identifiers return `false`, and only value-level identifiers with an undefined committed value return `true`.
+    pub fn is_specified_but_not_defined(&self, heap: &Heap) -> bool {
+        let identifier_type = RawValue::from(self.get_type(heap));
+        if identifier_type == RawValue::from(Type::Undefined)
+            || identifier_type == RawValue::from(Type::Type)
+        {
+            return false;
+        }
+
+        self.get_value(heap)
+            .is_some_and(|value| matches!(value.get_data(heap), IdentifierValueData::Undefined))
+    }
+
+    /// Returns whether the identifier currently denotes a constructor-valued binding.
+    /// This exists so subsystem code can query constructor-valued identifier state through the identifier owner instead of repeating value-field shape checks.
+    /// The invariant is that only identifiers whose value payload points at a `Tag::Constructor` cell return `true`.
+    pub fn is_constructor_valued(&self, heap: &Heap) -> bool {
+        let raw_value: RawValue = self.get_value_field(heap).into();
+        raw_value >= crate::data::ATOM_LIMIT && heap[raw_value].tag == Tag::Constructor
+    }
+
     /// An IdentifierRecordRef is "unset" if its `value` is `UNDEF`, its `who` is `NIL`, and its `type` is `undef_t`
     pub fn unset_id(&self, heap: &mut Heap) {
         assert_eq!(heap[self.reference].tag, Tag::Id);

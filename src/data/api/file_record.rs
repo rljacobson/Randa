@@ -133,6 +133,20 @@ impl FileRecord {
         let new_list: Value = heap.cons_ref(item.into(), definienda_tail);
         self.set_definienda_value(heap, new_list);
     }
+
+    /// Pushes `item` onto the definienda only if it is not already attributed to this file.
+    /// This exists so file-owned definienda uniqueness stays on the `FileRecord` owner instead of in load orchestration code.
+    /// The invariant is that identifier identity remains unique within the file's definienda list while preserving the existing push-at-front behavior for new entries.
+    pub fn push_definiendum_once(&self, heap: &mut Heap, item: IdentifierRecordRef) {
+        let mut definienda = self.get_definienda(heap);
+        while let Some(existing) = definienda.pop(heap) {
+            if existing == item {
+                return;
+            }
+        }
+
+        self.push_item_onto_definienda(heap, item);
+    }
 }
 
 impl HeapObjectProxy for FileRecord {

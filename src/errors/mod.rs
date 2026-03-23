@@ -117,6 +117,8 @@ pub enum TypecheckError {
     ConstructorArityMismatchInFormals { count: usize },
     #[error("Typecheck phase found unsupported arithmetic patterns in formals ({count})")]
     UnsupportedArithmeticPatternsInFormals { count: usize },
+    #[error("Typecheck phase found invalid canonical successor patterns in formals ({count})")]
+    InvalidSuccessorPatternsInFormals { count: usize },
     #[error("Typecheck phase found value-headed applications in formals ({count})")]
     ValueHeadApplicationsInFormals { count: usize },
     #[error("Typecheck phase found non-identifier application heads in formals ({count})")]

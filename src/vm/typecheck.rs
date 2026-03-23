@@ -3,7 +3,7 @@ use crate::big_num::SIGN_BIT_MASK;
 use crate::compiler::Token;
 use crate::data::api::{
     AlgebraicConstructorMetadataRef, IdentifierRecordRef, IdentifierValueTypeKind,
-    IdentifierValueTypeRef, TypeExprRef,
+    TypeExprRef,
 };
 use crate::data::heap::is_capitalized;
 use crate::data::{Combinator, Heap, RawValue, Tag, Type, Value, ATOM_LIMIT};
@@ -48,6 +48,7 @@ pub(super) fn run_partial_typecheck(
     let mut undeclared_constructors_in_formals = ConsList::EMPTY;
     let mut constructor_arity_mismatch_in_formals = ConsList::EMPTY;
     let mut unsupported_arithmetic_patterns_in_formals = 0usize;
+    let mut invalid_successor_patterns_in_formals = 0usize;
     let mut value_head_applications_in_formals = 0usize;
     let mut non_identifier_application_heads_in_formals = 0usize;
     let mut checked_definition_count = 0usize;
@@ -72,7 +73,7 @@ pub(super) fn run_partial_typecheck(
                 continue;
             };
 
-            if is_specified_but_not_defined(heap, identifier) {
+            if identifier.is_specified_but_not_defined(heap) {
                 specified_but_not_defined.insert_ordered(heap, identifier);
             }
 
@@ -85,6 +86,7 @@ pub(super) fn run_partial_typecheck(
                         &mut undeclared_constructors_in_formals,
                         &mut constructor_arity_mismatch_in_formals,
                         &mut unsupported_arithmetic_patterns_in_formals,
+                        &mut invalid_successor_patterns_in_formals,
                         &mut value_head_applications_in_formals,
                         &mut non_identifier_application_heads_in_formals,
                     );
@@ -109,7 +111,9 @@ pub(super) fn run_partial_typecheck(
                             );
                         }
                         IdentifierValueTypeKind::Abstract => {
-                            let basis = abstract_type_basis(heap, value_type);
+                            let basis = value_type
+                                .abstract_basis(heap)
+                                .unwrap_or(Type::Undefined.into());
                             if RawValue::from(basis) == RawValue::from(Type::Undefined) {
                                 unbound_abstract_type_names.insert_ordered(heap, identifier);
                             }
@@ -209,6 +213,10 @@ pub(super) fn run_partial_typecheck(
         Some(TypecheckError::NonIdentifierApplicationHeadsInFormals {
             count: non_identifier_application_heads_in_formals,
         })
+    } else if invalid_successor_patterns_in_formals > 0 {
+        Some(TypecheckError::InvalidSuccessorPatternsInFormals {
+            count: invalid_successor_patterns_in_formals,
+        })
     } else if undefined_count > 0 {
         Some(TypecheckError::UndefinedNames {
             count: undefined_count,
@@ -233,6 +241,7 @@ fn collect_formal_pattern_issues(
     undeclared_constructors_in_formals: &mut ConsList<IdentifierRecordRef>,
     constructor_arity_mismatch_in_formals: &mut ConsList<IdentifierRecordRef>,
     unsupported_arithmetic_patterns_in_formals: &mut usize,
+    invalid_successor_patterns_in_formals: &mut usize,
     value_head_applications_in_formals: &mut usize,
     non_identifier_application_heads_in_formals: &mut usize,
 ) {
@@ -250,6 +259,7 @@ fn collect_formal_pattern_issues(
                 undeclared_constructors_in_formals,
                 constructor_arity_mismatch_in_formals,
                 unsupported_arithmetic_patterns_in_formals,
+                invalid_successor_patterns_in_formals,
                 value_head_applications_in_formals,
                 non_identifier_application_heads_in_formals,
             );
@@ -260,6 +270,7 @@ fn collect_formal_pattern_issues(
                 undeclared_constructors_in_formals,
                 constructor_arity_mismatch_in_formals,
                 unsupported_arithmetic_patterns_in_formals,
+                invalid_successor_patterns_in_formals,
                 value_head_applications_in_formals,
                 non_identifier_application_heads_in_formals,
             );
@@ -271,6 +282,7 @@ fn collect_formal_pattern_issues(
                 undeclared_constructors_in_formals,
                 constructor_arity_mismatch_in_formals,
                 unsupported_arithmetic_patterns_in_formals,
+                invalid_successor_patterns_in_formals,
                 value_head_applications_in_formals,
                 non_identifier_application_heads_in_formals,
             );
@@ -282,6 +294,7 @@ fn collect_formal_pattern_issues(
                 undeclared_constructors_in_formals,
                 constructor_arity_mismatch_in_formals,
                 unsupported_arithmetic_patterns_in_formals,
+                invalid_successor_patterns_in_formals,
                 value_head_applications_in_formals,
                 non_identifier_application_heads_in_formals,
             );
@@ -296,6 +309,7 @@ fn collect_formal_pattern_issues_in_pattern(
     undeclared_constructors_in_formals: &mut ConsList<IdentifierRecordRef>,
     constructor_arity_mismatch_in_formals: &mut ConsList<IdentifierRecordRef>,
     unsupported_arithmetic_patterns_in_formals: &mut usize,
+    invalid_successor_patterns_in_formals: &mut usize,
     value_head_applications_in_formals: &mut usize,
     non_identifier_application_heads_in_formals: &mut usize,
 ) {
@@ -326,18 +340,43 @@ fn collect_formal_pattern_issues_in_pattern(
                     undeclared_constructors_in_formals,
                     constructor_arity_mismatch_in_formals,
                     unsupported_arithmetic_patterns_in_formals,
+                    invalid_successor_patterns_in_formals,
                     value_head_applications_in_formals,
                     non_identifier_application_heads_in_formals,
                 );
             }
         }
         CommittedFormalPattern::SuccessorPattern { inner, .. } => {
+            match classify_committed_formal_pattern(heap, inner) {
+                CommittedFormalPattern::Binder(_)
+                | CommittedFormalPattern::RepeatedNameLeaf(_)
+                | CommittedFormalPattern::SuccessorPattern { .. } => {}
+                CommittedFormalPattern::WrappedConstantLeaf(value) => {
+                    let raw_value: RawValue = value.into();
+                    if raw_value < ATOM_LIMIT || heap[raw_value].tag != Tag::Int {
+                        *invalid_successor_patterns_in_formals += 1;
+                    }
+                }
+                CommittedFormalPattern::ConstructorIntentIdentifier(_)
+                | CommittedFormalPattern::ConstructorApplication { .. }
+                | CommittedFormalPattern::UnsupportedPlusPattern { .. }
+                | CommittedFormalPattern::UnsupportedMinusPattern { .. }
+                | CommittedFormalPattern::ValueHeadApplication { .. }
+                | CommittedFormalPattern::RepeatedNameHeadApplication { .. }
+                | CommittedFormalPattern::NonIdentifierHeadApplication { .. }
+                | CommittedFormalPattern::StructuralCons { .. }
+                | CommittedFormalPattern::StructuralTuple { .. }
+                | CommittedFormalPattern::LiteralOrVoidLeaf => {
+                    *invalid_successor_patterns_in_formals += 1;
+                }
+            }
             collect_formal_pattern_issues_in_pattern(
                 heap,
                 inner,
                 undeclared_constructors_in_formals,
                 constructor_arity_mismatch_in_formals,
                 unsupported_arithmetic_patterns_in_formals,
+                invalid_successor_patterns_in_formals,
                 value_head_applications_in_formals,
                 non_identifier_application_heads_in_formals,
             );
@@ -361,6 +400,7 @@ fn collect_formal_pattern_issues_in_pattern(
                 undeclared_constructors_in_formals,
                 constructor_arity_mismatch_in_formals,
                 unsupported_arithmetic_patterns_in_formals,
+                invalid_successor_patterns_in_formals,
                 value_head_applications_in_formals,
                 non_identifier_application_heads_in_formals,
             );
@@ -370,6 +410,7 @@ fn collect_formal_pattern_issues_in_pattern(
                 undeclared_constructors_in_formals,
                 constructor_arity_mismatch_in_formals,
                 unsupported_arithmetic_patterns_in_formals,
+                invalid_successor_patterns_in_formals,
                 value_head_applications_in_formals,
                 non_identifier_application_heads_in_formals,
             );
@@ -398,20 +439,19 @@ fn collect_unresolved_identifier_references(
     match heap[raw_reference].tag {
         Tag::Id => {
             let identifier = IdentifierRecordRef::from_ref(raw_reference);
-            if bound_identifiers.contains(&identifier)
-                || is_constructor_identifier(heap, identifier)
-            {
+            if bound_identifiers.contains(&identifier) || identifier.is_constructor_valued(heap) {
                 return;
             }
 
-            match classify_expression_identifier_reference(heap, identifier) {
-                ExpressionIdentifierReferenceKind::ValidRuntimeIdentifier => {}
-                ExpressionIdentifierReferenceKind::UndefinedName => {
-                    undefined_names.insert_ordered(heap, identifier);
-                }
-                ExpressionIdentifierReferenceKind::TypeNameUsedAsIdentifier => {
-                    type_names_used_as_identifiers.insert_ordered(heap, identifier);
-                }
+            let identifier_type = RawValue::from(identifier.get_type(heap));
+            if identifier_type == RawValue::from(Type::Type) {
+                type_names_used_as_identifiers.insert_ordered(heap, identifier);
+            } else if identifier_type == RawValue::from(Type::Undefined)
+                && identifier
+                    .get_value(heap)
+                    .is_some_and(|value| matches!(value.get_data(heap), IdentifierValueData::Undefined))
+            {
+                undefined_names.insert_ordered(heap, identifier);
             }
         }
         Tag::Ap | Tag::Cons | Tag::Pair | Tag::TCons => {
@@ -481,20 +521,21 @@ fn collect_type_expression_issues(
     arity_mismatch_type_names: &mut ConsList<IdentifierRecordRef>,
 ) {
     if let Some((identifier, arguments)) = type_expr.identifier_head_application_spine(heap) {
-        match classify_type_identifier_reference(heap, identifier) {
-            TypeIdentifierReferenceKind::ValidTypeName => {
-                if let Some(expected_arity) = type_identifier_arity(heap, identifier) {
-                    if expected_arity != arguments.len() {
-                        arity_mismatch_type_names.insert_ordered(heap, identifier);
-                    }
+        let identifier_type = RawValue::from(identifier.get_type(heap));
+        if identifier_type == RawValue::from(Type::Type) {
+            if let Some(expected_arity) = identifier.typed_arity(heap) {
+                if expected_arity != arguments.len() {
+                    arity_mismatch_type_names.insert_ordered(heap, identifier);
                 }
             }
-            TypeIdentifierReferenceKind::UndefinedTypeName => {
-                undefined_type_names.insert_ordered(heap, identifier);
-            }
-            TypeIdentifierReferenceKind::NonTypeIdentifier => {
-                non_type_identifiers.insert_ordered(heap, identifier);
-            }
+        } else if identifier_type == RawValue::from(Type::Undefined)
+            && identifier
+                .get_value(heap)
+                .is_some_and(|value| matches!(value.get_data(heap), IdentifierValueData::Undefined))
+        {
+            undefined_type_names.insert_ordered(heap, identifier);
+        } else {
+            non_type_identifiers.insert_ordered(heap, identifier);
         }
 
         for argument in arguments {
@@ -652,39 +693,83 @@ fn classify_committed_formal_pattern(heap: &Heap, pattern: Value) -> CommittedFo
     match heap[raw_reference].tag {
         Tag::Id => {
             let identifier = IdentifierRecordRef::from_ref(raw_reference);
-            if identifier_has_constructor_intent(heap, identifier) {
+            if is_capitalized(identifier.get_name(heap).as_str()) {
                 CommittedFormalPattern::ConstructorIntentIdentifier(identifier)
             } else {
                 CommittedFormalPattern::Binder(identifier)
             }
         }
         Tag::Ap => {
-            let (head_raw, arguments) = pattern_application_spine(heap, pattern);
-            match classify_formal_application_head(heap, head_raw) {
-                FormalApplicationHead::ConstructorIdentifier(identifier) => {
-                    CommittedFormalPattern::ConstructorApplication {
-                        head: identifier,
-                        arguments,
+            let mut head_raw: RawValue = pattern.into();
+            let mut arguments = Vec::new();
+            while heap[head_raw].tag == Tag::Ap {
+                arguments.push(heap[head_raw].tail.into());
+                head_raw = heap[head_raw].head;
+                if head_raw < ATOM_LIMIT {
+                    break;
+                }
+            }
+            arguments.reverse();
+
+            if head_raw < ATOM_LIMIT {
+                let head = Value::from(head_raw);
+                if let Some((offset, inner)) = canonical_successor_pattern(heap, head, &arguments) {
+                    return CommittedFormalPattern::SuccessorPattern { offset, inner };
+                }
+
+                return match head {
+                    Value::Combinator(Combinator::Plus) => {
+                        CommittedFormalPattern::UnsupportedPlusPattern { arguments }
+                    }
+                    Value::Combinator(Combinator::Minus) => {
+                        CommittedFormalPattern::UnsupportedMinusPattern { arguments }
+                    }
+                    _ => CommittedFormalPattern::NonIdentifierHeadApplication { head, arguments },
+                };
+            }
+
+            match heap[head_raw].tag {
+                Tag::Id => {
+                    let identifier = IdentifierRecordRef::from_ref(head_raw);
+                    if is_capitalized(identifier.get_name(heap).as_str()) {
+                        CommittedFormalPattern::ConstructorApplication {
+                            head: identifier,
+                            arguments,
+                        }
+                    } else {
+                        CommittedFormalPattern::ValueHeadApplication {
+                            head: identifier,
+                            arguments,
+                        }
                     }
                 }
-                FormalApplicationHead::ValueIdentifier(identifier) => {
-                    CommittedFormalPattern::ValueHeadApplication {
-                        head: identifier,
-                        arguments,
+                Tag::Cons => {
+                    let constant_tag = RawValue::from(Value::Token(Token::Constant));
+                    if heap[head_raw].head == constant_tag {
+                        let wrapped: Value = heap[head_raw].tail.into();
+                        let wrapped_raw: RawValue = wrapped.into();
+                        if wrapped_raw >= ATOM_LIMIT && heap[wrapped_raw].tag == Tag::Id {
+                            CommittedFormalPattern::RepeatedNameHeadApplication {
+                                head: IdentifierRecordRef::from_ref(wrapped_raw),
+                                arguments,
+                            }
+                        } else {
+                            CommittedFormalPattern::NonIdentifierHeadApplication {
+                                head: wrapped,
+                                arguments,
+                            }
+                        }
+                    } else {
+                        CommittedFormalPattern::NonIdentifierHeadApplication {
+                            head: head_raw.into(),
+                            arguments,
+                        }
                     }
                 }
-                FormalApplicationHead::RepeatedNameIdentifier(identifier) => {
-                    CommittedFormalPattern::RepeatedNameHeadApplication {
-                        head: identifier,
-                        arguments,
-                    }
-                }
-                FormalApplicationHead::ArithmeticOperator(head) => {
-                    classify_remaining_arithmetic_formal_pattern(heap, head, arguments)
-                }
-                FormalApplicationHead::Other(head) => {
-                    CommittedFormalPattern::NonIdentifierHeadApplication { head, arguments }
-                }
+                _ => CommittedFormalPattern::NonIdentifierHeadApplication {
+                    head: head_raw.into(),
+                    arguments,
+                },
             }
         }
         Tag::Cons => {
@@ -714,79 +799,6 @@ fn classify_committed_formal_pattern(heap: &Heap, pattern: Value) -> CommittedFo
     }
 }
 
-fn identifier_has_constructor_intent(heap: &Heap, identifier: IdentifierRecordRef) -> bool {
-    is_capitalized(identifier.get_name(heap).as_str())
-}
-
-enum FormalApplicationHead {
-    ConstructorIdentifier(IdentifierRecordRef),
-    ValueIdentifier(IdentifierRecordRef),
-    RepeatedNameIdentifier(IdentifierRecordRef),
-    ArithmeticOperator(Value),
-    Other(Value),
-}
-
-fn classify_formal_application_head(heap: &Heap, head_raw: RawValue) -> FormalApplicationHead {
-    if head_raw < ATOM_LIMIT {
-        let head = Value::from(head_raw);
-        return match head {
-            Value::Combinator(Combinator::Plus | Combinator::Minus) => {
-                FormalApplicationHead::ArithmeticOperator(head)
-            }
-            _ => FormalApplicationHead::Other(head),
-        };
-    }
-
-    match heap[head_raw].tag {
-        Tag::Id => {
-            let identifier = IdentifierRecordRef::from_ref(head_raw);
-            if identifier_has_constructor_intent(heap, identifier) {
-                FormalApplicationHead::ConstructorIdentifier(identifier)
-            } else {
-                FormalApplicationHead::ValueIdentifier(identifier)
-            }
-        }
-        Tag::Cons => {
-            let constant_tag = RawValue::from(Value::Token(Token::Constant));
-            if heap[head_raw].head == constant_tag {
-                let wrapped: Value = heap[head_raw].tail.into();
-                let wrapped_raw: RawValue = wrapped.into();
-                if wrapped_raw >= ATOM_LIMIT && heap[wrapped_raw].tag == Tag::Id {
-                    FormalApplicationHead::RepeatedNameIdentifier(IdentifierRecordRef::from_ref(
-                        wrapped_raw,
-                    ))
-                } else {
-                    FormalApplicationHead::Other(wrapped)
-                }
-            } else {
-                FormalApplicationHead::Other(head_raw.into())
-            }
-        }
-        _ => FormalApplicationHead::Other(head_raw.into()),
-    }
-}
-
-/// Returns the head value plus source-order arguments for one committed pattern-application spine.
-/// This exists so the shared committed-formal classifier can distinguish identifier-headed applications, canonical successor patterns, and other non-identifier heads.
-/// The invariant is that the returned arguments preserve the original left-to-right source order of the committed application tree.
-fn pattern_application_spine(heap: &Heap, pattern: Value) -> (RawValue, Vec<Value>) {
-    let mut raw_reference: RawValue = pattern.into();
-    debug_assert!(raw_reference >= ATOM_LIMIT);
-    debug_assert_eq!(heap[raw_reference].tag, Tag::Ap);
-
-    let mut arguments = Vec::new();
-    while heap[raw_reference].tag == Tag::Ap {
-        arguments.push(heap[raw_reference].tail.into());
-        raw_reference = heap[raw_reference].head;
-        if raw_reference < ATOM_LIMIT {
-            break;
-        }
-    }
-
-    arguments.reverse();
-    (raw_reference, arguments)
-}
-
 // Todo: promote this raw heap-shape natural-integer check to a bigint-owned query once `IntegerRef`
 // exposes a crate-visible Miranda `isnat` predicate.
 fn canonical_successor_pattern(
@@ -806,34 +818,6 @@ fn canonical_successor_pattern(
     }
 
     ((heap[offset_raw].head & SIGN_BIT_MASK) == 0).then_some((offset, inner))
-}
-
-fn classify_remaining_arithmetic_formal_pattern(
-    heap: &Heap,
-    head: Value,
-    arguments: Vec<Value>,
-) -> CommittedFormalPattern {
-    if let Some((offset, inner)) = canonical_successor_pattern(heap, head, &arguments) {
-        return CommittedFormalPattern::SuccessorPattern { offset, inner };
-    }
-
-    match head {
-        Value::Combinator(Combinator::Plus) => {
-            CommittedFormalPattern::UnsupportedPlusPattern { arguments }
-        }
-        Value::Combinator(Combinator::Minus) => {
-            CommittedFormalPattern::UnsupportedMinusPattern { arguments }
-        }
-        _ => unreachable!("arithmetic formal classifier requires plus/minus head"),
-    }
-}
-
-/// Returns whether an identifier currently denotes a constructor-valued binding.
-/// This exists so constructor names are not misclassified as unresolved variable references during typecheck scanning.
-/// The invariant is that only identifiers whose value payload points at a `Tag::Constructor` cell are treated as constructors here.
-fn is_constructor_identifier(heap: &Heap, identifier: IdentifierRecordRef) -> bool {
-    let raw_value: RawValue = identifier.get_value_field(heap).into();
-    raw_value >= ATOM_LIMIT && heap[raw_value].tag == Tag::Constructor
 }
 
 /// Returns the declared arity for a committed constructor identifier when available.
@@ -883,96 +867,3 @@ fn constructor_parent_type_identifier(
         .map(|(identifier, _)| identifier)
 }
 
-/// Projects the committed basis payload from a typed abstract type-identifier value.
-/// This exists so abstract-type declaration checks read the parser/runtime-committed basis payload through one subsystem-owned seam.
-/// The invariant is that the returned value is the `tail` payload of the `value_type` node for abstract type identifiers.
-fn abstract_type_basis(heap: &Heap, value_type: IdentifierValueTypeRef) -> Value {
-    debug_assert_eq!(
-        value_type.get_identifier_value_type_kind(heap),
-        IdentifierValueTypeKind::Abstract
-    );
-    heap[value_type.get_ref()].tail.into()
-}
-
-#[derive(Copy, Clone, Eq, PartialEq, Debug)]
-enum TypeIdentifierReferenceKind {
-    ValidTypeName,
-    UndefinedTypeName,
-    NonTypeIdentifier,
-}
-
-#[derive(Copy, Clone, Eq, PartialEq, Debug)]
-enum ExpressionIdentifierReferenceKind {
-    ValidRuntimeIdentifier,
-    UndefinedName,
-    TypeNameUsedAsIdentifier,
-}
-
-/// Classifies one identifier leaf in a type expression.
-/// This exists so the partial typecheck boundary uses one owner for undefined-typename vs wrong-kind diagnostics.
-/// The invariant is that only identifiers whose type slot is `type_t` are accepted as legal typename leaves.
-fn classify_type_identifier_reference(
-    heap: &Heap,
-    identifier: IdentifierRecordRef,
-) -> TypeIdentifierReferenceKind {
-    let identifier_type = RawValue::from(identifier.get_type(heap));
-    if identifier_type == RawValue::from(Type::Type) {
-        TypeIdentifierReferenceKind::ValidTypeName
-    } else if identifier_type == RawValue::from(Type::Undefined)
-        && identifier
-            .get_value(heap)
-            .is_some_and(|value| matches!(value.get_data(heap), IdentifierValueData::Undefined))
-    {
-        TypeIdentifierReferenceKind::UndefinedTypeName
-    } else {
-        TypeIdentifierReferenceKind::NonTypeIdentifier
-    }
-}
-
-/// Classifies one identifier leaf in an expression context.
-/// This exists so the partial typecheck boundary can distinguish undefined names from typenames used as runtime identifiers.
-/// The invariant is that identifiers whose committed type slot is `type_t` are rejected as expression-side identifiers unless they are constructor-valued.
-fn classify_expression_identifier_reference(
-    heap: &Heap,
-    identifier: IdentifierRecordRef,
-) -> ExpressionIdentifierReferenceKind {
-    let identifier_type = RawValue::from(identifier.get_type(heap));
-    if identifier_type == RawValue::from(Type::Type) {
-        ExpressionIdentifierReferenceKind::TypeNameUsedAsIdentifier
-    } else if identifier_type == RawValue::from(Type::Undefined)
-        && identifier
-            .get_value(heap)
-            .is_some_and(|value| matches!(value.get_data(heap), IdentifierValueData::Undefined))
-    {
-        ExpressionIdentifierReferenceKind::UndefinedName
-    } else {
-        ExpressionIdentifierReferenceKind::ValidRuntimeIdentifier
-    }
-}
-
-/// Returns the declared arity for a legal typename identifier when available.
-/// This exists so the partial typecheck boundary can perform Miranda-shaped typename arity checking.
-/// The invariant is that only typed typename identifiers expose an arity through this helper.
-fn type_identifier_arity(heap: &Heap, identifier: IdentifierRecordRef) -> Option<usize> {
-    let value = identifier.get_value(heap)?;
-    let IdentifierValueData::Typed { arity, .. } = value.get_data(heap) else {
-        return None;
-    };
-    Some(arity.max(0) as usize)
-}
-
-/// Returns whether the identifier currently has a committed specification/type but no committed value binding.
-/// This exists so the partial typecheck boundary can surface Miranda's specified-but-not-defined state as a typed subsystem failure.
-/// The invariant is that type identifiers themselves are excluded; only value-level names with a real type payload and undefined value qualify.
-fn is_specified_but_not_defined(heap: &Heap, identifier: IdentifierRecordRef) -> bool {
-    let identifier_type = RawValue::from(identifier.get_type(heap));
-    if identifier_type == RawValue::from(Type::Undefined)
-        || identifier_type == RawValue::from(Type::Type)
-    {
-        return false;
-    }
-
-    identifier
-        .get_value(heap)
-        .is_some_and(|value| matches!(value.get_data(heap), IdentifierValueData::Undefined))
-}
