@@ -607,6 +607,25 @@ fn load_file_accepts_unparenthesized_declared_infix_constructor_application_in_f
 }
 
 #[test]
+fn load_file_accepts_ordinary_multi_argument_function_form() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("ordinary_multi_argument_function_form.m");
+    std::fs::write(&source_path, "id x y = x\n").expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(
+        result.is_ok(),
+        "result={result:?} diagnostics={:?}",
+        vm.parser_diagnostics
+    );
+    assert!(vm.undefined_names.is_empty());
+}
+
+#[test]
 fn load_file_rejects_infix_name_application_in_formal() {
     let mut vm = VM::new_for_tests();
     vm.initializing = false;

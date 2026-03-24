@@ -2185,18 +2185,23 @@ v:
 
 v1:
     v1 Plus Constant  /* n+k pattern */ {
-        if (!isnat($3)){
-          syntax("inappropriate use of \"+\" in pattern\n");
+        let constant_raw: RawValue = $3.into();
+        if constant_raw < ATOM_LIMIT
+          || self.heap[constant_raw].tag != Tag::Int
+          || (self.heap[constant_raw].head & SIGN_BIT_MASK) != 0
+        {
+          self.syntax("inappropriate use of \"+\" in pattern\n");
         }
         $$ = self.heap.apply2(Combinator::Plus.into(), $3, $1);
       }
     | Minus Constant {
-        /* if(tag[$2]==DOUBLE)
-              $$ = self.heap.cons(Constant, sto_dbl(-get_dbl($2))); else */
-        if (tag[$2]==Tag::Int) {
-          $$ = self.heap.cons_ref(Token::Constant.into(), bignegate($2));
+        let constant_raw: RawValue = $2.into();
+        if constant_raw >= ATOM_LIMIT && self.heap[constant_raw].tag == Tag::Int {
+          let negated = IntegerRef::from_ref(constant_raw).negate(self.heap);
+          $$ = self.heap.cons_ref(Token::Constant.into(), negated.into());
         } else {
-          syntax("inappropriate use of \"-\" in pattern\n");
+          self.syntax("inappropriate use of \"-\" in pattern\n");
+          $$ = self.heap.cons_ref(Token::Constant.into(), $2);
         }
       }
     | v2 InfixName v1 { $$ = self.heap.apply2($2, $1, $3); }
@@ -2206,14 +2211,22 @@ v1:
 v2:
     v3
     | v2 v3 {
-        $$ = self.heap.apply_ref(
-          if self.heap[$1].head==Token::Constant.into() && tag[tl[$1]]==Tag::Id {
-            self.heap[$1].tail.into()
+        let head_raw: RawValue = $1.into();
+        let head =
+          if head_raw >= ATOM_LIMIT
+            && self.heap[head_raw].tag == Tag::Cons
+            && self.heap[head_raw].head == RawValue::from(Value::Token(Token::Constant))
+          {
+            let inner = self.heap[head_raw].tail;
+            if inner >= ATOM_LIMIT && self.heap[inner].tag == Tag::Id {
+              Value::from(inner)
+            } else {
+              $1
+            }
           } else {
             $1
-          },
-          $2
-        );
+          };
+        $$ = self.heap.apply_ref(head, $2);
         /* repeated name apparatus may have wrapped Constant around leading id
            - not wanted */
       }
@@ -2221,46 +2234,49 @@ v2:
 
 v3:
     Name {
-        if (self.semantic_reduction_count != 0 && member(gvars, $1)){
-          syntax("illegal use of $num symbol\n");
+        if self.semantic_reduction_count != 0 {
+          // `%bnf` grammar-variable legality remains deferred with `%bnf` itself.
+          self.syntax("illegal use of $num symbol\n");
         }
-        /* cannot use grammar variable in a binding position */
         if self.used_identifiers.contains(self.heap, $1) {
           $$ = self.heap.cons_ref(Token::Constant.into(), $1);
         } /* picks up repeated names in a template */
         else {
           self.used_identifiers.push(self.heap, $1);
+          $$ = $1;
         }
       }
     | ConstructorName
     | Constant {
-        if (tag[$1]==Tag::Double) {
-          syntax("use of floating point literal in pattern\n");
+        let constant_raw: RawValue = $1.into();
+        if constant_raw >= ATOM_LIMIT && self.heap[constant_raw].tag == Tag::Double {
+          self.syntax("use of floating point literal in pattern\n");
         }
         $$ = self.heap.cons_ref(Token::Constant.into(), $1);
       }
     | OpenBracket CloseBracket { $$ = self.heap.nill; }
     | OpenBracket vlist CloseBracket {
-        let mut x = $2;
+        let mut x: RawValue = $2.into();
         let mut y = self.heap.nill;
-        while(x!=NIL) {
-          y = self.heap.cons_ref(self.heap[x].head, y);
+        while x != NIL_RAW {
+          y = self.heap.cons_ref(self.heap[x].head.into(), y);
           x = self.heap[x].tail;
         }
         $$ = y;
       }
-    | OpenParenthesis CloseParenthesis { $$ = Void; }
+    | OpenParenthesis CloseParenthesis { $$ = self.vm.void_tuple(); }
     | OpenParenthesis v CloseParenthesis { $$ = $2; }
     | OpenParenthesis v Comma vlist CloseParenthesis {
         /* representation of the tuple (a1, ..., an) is
              self.heap.cons_ref(a1, self.heap.cons_ref(a2, ...pair(a(n-1), an))) */
-        if(self.heap[$4].tail==NIL) {
-          $$ = self.heap.pair_ref($2, self.heap[$4].head.into());
+        let tuple_tail_raw: RawValue = $4.into();
+        if self.heap[tuple_tail_raw].tail == NIL_RAW {
+          $$ = self.heap.pair_ref($2, self.heap[tuple_tail_raw].head.into());
         } else {
-          let second_pair = self.heap[$4].tail;
-          $$ = self.heap.pair_ref(self.heap[second_pair].head.into(), self.heap[$4].head.into());
+          let second_pair = self.heap[tuple_tail_raw].tail;
+          $$ = self.heap.pair_ref(self.heap[second_pair].head.into(), self.heap[tuple_tail_raw].head.into());
           let mut rest = self.heap[second_pair].tail;
-          while (rest!=NIL) {
+          while rest != NIL_RAW {
             $$ = self.heap.cons_ref(self.heap[rest].head.into(), $$);
             rest = self.heap[rest].tail;
           }
@@ -2991,7 +3007,6 @@ impl<'ctx /* 'fix quotes */> Parser<'ctx /* 'fix quotes */> {
         .then_some(Value::from(inner))
         .unwrap_or(head)
     }
-
 
     /// Decodes one raw include-binding heap node into its typed parser payload variant. This exists so parser-owned
     /// include payload construction keeps raw `Cons` versus `Ap` binding-shape dispatch in one heap-boundary seam. The
