@@ -584,6 +584,29 @@ fn load_file_accepts_declared_infix_constructor_application_in_formal() {
 }
 
 #[test]
+fn load_file_accepts_unparenthesized_declared_infix_constructor_application_in_formal() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("unparenthesized_infix_constructor_application_formal.m");
+    std::fs::write(
+        &source_path,
+        "pair * ** ::= * $Pair **\nfirst x $Pair y = x\n",
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(
+        result.is_ok(),
+        "result={result:?} diagnostics={:?}",
+        vm.parser_diagnostics
+    );
+    assert!(vm.undefined_names.is_empty());
+}
+
+#[test]
 fn load_file_rejects_infix_name_application_in_formal() {
     let mut vm = VM::new_for_tests();
     vm.initializing = false;
@@ -599,6 +622,172 @@ fn load_file_rejects_infix_name_application_in_formal() {
         result,
         Err(LoadFileError::Typecheck(
             TypecheckError::ValueHeadApplicationsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
+fn load_file_rejects_unparenthesized_infix_name_application_in_formal() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("unparenthesized_infix_name_application_formal.m");
+    std::fs::write(&source_path, "bad x $merge y = x\n")
+        .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::ValueHeadApplicationsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
+fn load_file_reports_unparenthesized_infix_name_formal_before_generic_undefined_name() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("unparenthesized_infix_name_formal_precedes_undefined_name.m");
+    std::fs::write(&source_path, "bad x $merge y = missing\n")
+        .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::ValueHeadApplicationsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
+fn load_file_rejects_unparenthesized_undeclared_infix_constructor_application_in_formal() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("unparenthesized_undeclared_infix_constructor_application_formal.m");
+    std::fs::write(&source_path, "first x $Nope y = x\n")
+        .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::UndeclaredConstructorsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
+fn load_file_reports_unparenthesized_undeclared_infix_constructor_before_generic_undefined_name() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("unparenthesized_undeclared_infix_constructor_precedes_undefined_name.m");
+    std::fs::write(&source_path, "first x $Nope y = missing\n")
+        .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::UndeclaredConstructorsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
+fn load_file_rejects_unparenthesized_infix_name_form_with_value_head_left_operand() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("unparenthesized_infix_name_value_head_left_operand.m");
+    std::fs::write(&source_path, "bad g x $merge y = x\n")
+        .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::ValueHeadApplicationsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
+fn load_file_reports_unparenthesized_infix_name_value_head_before_generic_undefined_name() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("unparenthesized_infix_name_value_head_precedes_undefined_name.m");
+    std::fs::write(&source_path, "bad g x $merge y = missing\n")
+        .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::ValueHeadApplicationsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
+fn load_file_rejects_unparenthesized_infix_constructor_form_with_non_identifier_left_operand() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("unparenthesized_infix_constructor_non_identifier_left_operand.m");
+    std::fs::write(
+        &source_path,
+        "pair * ** ::= * $Pair **\nfirst (x:xs) y $Pair z = z\n",
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::NonIdentifierApplicationHeadsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
+fn load_file_reports_unparenthesized_infix_constructor_non_identifier_head_before_generic_undefined_name() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("unparenthesized_infix_constructor_non_identifier_head_precedes_undefined_name.m");
+    std::fs::write(
+        &source_path,
+        "pair * ** ::= * $Pair **\nfirst (x:xs) y $Pair z = missing\n",
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::NonIdentifierApplicationHeadsInFormals { count: 1 }
         ))
     ));
 }

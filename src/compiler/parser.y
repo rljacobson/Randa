@@ -507,6 +507,27 @@ top_level_definition_item:
         let anchor = FileInfoRef::from_ref($3.into());
         let mut body = $5;
         let mut parameters: RawValue = $2.into();
+        if parameters != NIL_RAW {
+          let trailing_parameters = self.heap[parameters].tail;
+          if trailing_parameters != NIL_RAW {
+            let infix_parameter = Value::from(self.heap[parameters].head);
+            let infix_parameter_ref = RawValue::from(infix_parameter);
+            if infix_parameter_ref >= ATOM_LIMIT && self.heap[infix_parameter_ref].tag == Tag::Ap {
+              let outer_application = ApNodeRef::from_ref(infix_parameter_ref);
+              if let Some(operator_application) = outer_application.function_application(&self.heap) {
+                let operator = Value::from(operator_application.function_raw(&self.heap));
+                let left = Value::from(operator_application.argument_raw(&self.heap));
+                let right = Value::from(outer_application.argument_raw(&self.heap));
+
+                let previous_parameter = Value::from(self.heap[trailing_parameters].head);
+                let combined_left = self.heap.apply_ref(self.top_level_application_head(previous_parameter), left);
+                let combined_pattern = self.heap.apply2(operator, combined_left, right);
+                self.heap[parameters].head = combined_pattern.into();
+                self.heap[parameters].tail = self.heap[trailing_parameters].tail;
+              }
+            }
+          }
+        }
         while parameters != NIL_RAW {
           body = self.heap.lambda_ref(self.heap[parameters].head.into(), body);
           parameters = self.heap[parameters].tail;
@@ -536,7 +557,13 @@ top_level_definition_parameters_start:
     ;
 
 top_level_definition_parameter:
-    Name {
+    top_level_pattern_atom InfixName top_level_pattern_arithmetic {
+        $$ = self.heap.apply2($2, $1, $3);
+      }
+    | top_level_pattern_atom InfixCName top_level_pattern_arithmetic {
+        $$ = self.heap.apply2($2, $1, $3);
+      }
+    | Name {
         let identifier = $1;
         if self.used_identifiers.contains(self.heap, identifier) {
           $$ = self.heap.cons_ref(Token::Constant.into(), identifier);
@@ -802,7 +829,10 @@ top_level_algebraic_type_item:
             if declaration_ref >= ATOM_LIMIT && self.heap[declaration_ref].tag == Tag::Id {
               fields.reverse();
               let field_payloads = fields.into_iter().map(|field| {
-                ParserConstructorFieldPayload::from_field_type(field, self.strict_constructor_field_type(field))
+                ParserConstructorFieldPayload::from_field_type(
+                  field,
+                  TypeExprRef::new(field).strict_field_inner_type(&self.heap).map(|type_expr| type_expr.value()),
+                )
               }).collect::<Vec<_>>();
               let payload = ParserConstructorPayload {
                 constructor: IdentifierRecordRef::from_ref(declaration_ref),
@@ -2962,23 +2992,6 @@ impl<'ctx /* 'fix quotes */> Parser<'ctx /* 'fix quotes */> {
         .unwrap_or(head)
     }
 
-    /// Returns the inner field type when a constructor field carries a strictness marker. This exists so parser payload
-    /// lowering can preserve strictness as metadata instead of leaking it into later declaration consumers as a wrapped
-    /// type node. The invariant is that successful results come only from the canonical `Strict field_type` application
-    /// shape.
-    fn strict_constructor_field_type(&self, field: Value) -> Option<Value> {
-      let field_ref = RawValue::from(field);
-      if field_ref < ATOM_LIMIT || self.heap[field_ref].tag != Tag::Ap {
-        return None;
-      }
-
-      let field_application = ApNodeRef::from_ref(field_ref);
-      if field_application.function_raw(&self.heap) != RawValue::from(Type::Strict) {
-        return None;
-      }
-
-      Some(field_application.argument_raw(&self.heap).into())
-    }
 
     /// Decodes one raw include-binding heap node into its typed parser payload variant. This exists so parser-owned
     /// include payload construction keeps raw `Cons` versus `Ap` binding-shape dispatch in one heap-boundary seam. The

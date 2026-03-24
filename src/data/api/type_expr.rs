@@ -9,7 +9,7 @@ The wrapper exists so VM-side seams can talk about type expressions as one domai
 navigation helpers without open-coding raw `Value` walks in each subsystem.
 */
 
-use super::{HeapObjectProxy, IdentifierRecordRef};
+use super::{ApNodeRef, HeapObjectProxy, IdentifierRecordRef};
 use crate::data::{Heap, RawValue, Tag, Type, Value, ATOM_LIMIT};
 
 /// Semantic reference to one type-expression root.
@@ -131,6 +131,20 @@ impl TypeExprRef {
 
         (heap[raw_reference].tag == Tag::TypeVar).then_some(heap[raw_reference].tail)
     }
+
+    /// Returns the inner type expression when this root is the canonical strict-field wrapper.
+    /// This exists so constructor-field consumers can decode `Strict field_type` through the type-expression owner instead of open-coding `Tag::Ap` shape checks outside the wrapper.
+    /// The invariant is that projection succeeds only for the canonical `Type::Strict` application shape and returns the wrapped field type unchanged.
+    pub fn strict_field_inner_type(&self, heap: &Heap) -> Option<TypeExprRef> {
+        let raw_reference: RawValue = self.value.into();
+        if raw_reference < ATOM_LIMIT || heap[raw_reference].tag != Tag::Ap {
+            return None;
+        }
+
+        let application = ApNodeRef::from_ref(raw_reference);
+        (application.function_raw(heap) == RawValue::from(Type::Strict))
+            .then(|| TypeExprRef::new(application.argument_raw(heap).into()))
+    }
 }
 
 #[cfg(test)]
@@ -199,5 +213,18 @@ mod tests {
                 .is_builtin_type(Type::Char),
             true
         );
+    }
+
+    #[test]
+    fn strict_field_inner_type_decodes_only_canonical_strict_wrapper() {
+        let mut heap = Heap::new();
+        let wrapped = TypeExprRef::new(heap.apply_ref(Type::Strict.into(), Type::Char.into()));
+        let plain = TypeExprRef::new(Type::Char.into());
+
+        assert!(wrapped
+            .strict_field_inner_type(&heap)
+            .expect("expected strict inner type")
+            .is_builtin_type(Type::Char));
+        assert!(plain.strict_field_inner_type(&heap).is_none());
     }
 }
