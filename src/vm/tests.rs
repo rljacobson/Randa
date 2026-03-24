@@ -1704,6 +1704,171 @@ fn load_file_materializes_included_source_definienda() {
 }
 
 #[test]
+fn load_file_routes_include_value_actual_bindings_through_bindparams() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let include_path = unique_test_path("parameterized_include_value_target.m");
+    std::fs::write(&include_path, "%free { x :: num }\nfoo = x\n")
+        .expect("failed to write include source test file");
+    let include_path_str = include_path.to_string_lossy().to_string();
+
+    let source_path = unique_test_path("parameterized_include_value_driver.m");
+    std::fs::write(&source_path, format!("%include \"{}\" {{ x = 42 }}\n", include_path_str))
+        .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+    let x = vm.heap.get_identifier("x").expect("expected free identifier");
+    assert_eq!(vm.missing_parameter_bindings.len(&vm.heap), 0);
+    assert_eq!(vm.detritus_parameter_bindings.len(&vm.heap), 0);
+    assert_eq!(vm.free_binding_sets.len(&vm.heap), 1);
+    assert_eq!(
+        IntegerRef::from_ref(vm.heap[x.get_ref()].tail).to_i64_lossy(&vm.heap),
+        42
+    );
+}
+
+#[test]
+fn load_file_routes_include_type_actual_bindings_through_bindparams() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let include_path = unique_test_path("parameterized_include_type_target.m");
+    std::fs::write(&include_path, "%free { t :: type }\nid :: t -> t\nid x = x\n")
+        .expect("failed to write include source test file");
+    let include_path_str = include_path.to_string_lossy().to_string();
+
+    let source_path = unique_test_path("parameterized_include_type_driver.m");
+    std::fs::write(
+        &source_path,
+        format!("%include \"{}\" {{ t == num }}\n", include_path_str),
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+    let t = vm.heap.get_identifier("t").expect("expected free type identifier");
+    assert_eq!(vm.missing_parameter_bindings.len(&vm.heap), 0);
+    assert_eq!(vm.detritus_parameter_bindings.len(&vm.heap), 0);
+    assert_eq!(vm.free_binding_sets.len(&vm.heap), 1);
+
+    let actual_type_value = t.get_value(&vm.heap).expect("expected bound type value");
+    let IdentifierValueData::Typed {
+        arity, value_type, ..
+    } = actual_type_value.get_data(&vm.heap)
+    else {
+        panic!("expected typed include-bound type value");
+    };
+    assert_eq!(arity, 0);
+    assert_eq!(
+        value_type.get_identifier_value_type_kind(&vm.heap),
+        IdentifierValueTypeKind::Synonym
+    );
+    assert_eq!(
+        RawValue::from(value_type.synonym_rhs_type_expr(&vm.heap).value()),
+        RawValue::from(Type::Number)
+    );
+}
+
+#[test]
+fn load_file_parameterized_include_missing_actual_binding_errors_before_commit() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let include_path = unique_test_path("parameterized_include_missing_target.m");
+    std::fs::write(&include_path, "%free { x :: num; y :: num }\nfoo = x\nbar = y\n")
+        .expect("failed to write include source test file");
+    let include_path_str = include_path.to_string_lossy().to_string();
+
+    let source_path = unique_test_path("parameterized_include_missing_driver.m");
+    std::fs::write(&source_path, format!("%include \"{}\" {{ x = 42 }}\n", include_path_str))
+        .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(TypecheckError::MissingFreeBindings { count })) if count == 1
+    ));
+    assert_eq!(vm.files.len(&vm.heap), 1);
+    assert_eq!(vm.detritus_parameter_bindings.len(&vm.heap), 0);
+    assert_eq!(vm.missing_parameter_bindings.len(&vm.heap), 1);
+}
+
+#[test]
+fn load_file_parameterized_include_extra_actual_binding_errors_before_commit() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let include_path = unique_test_path("parameterized_include_extra_target.m");
+    std::fs::write(&include_path, "%free { x :: num }\nfoo = x\n")
+        .expect("failed to write include source test file");
+    let include_path_str = include_path.to_string_lossy().to_string();
+
+    let source_path = unique_test_path("parameterized_include_extra_driver.m");
+    std::fs::write(
+        &source_path,
+        format!("%include \"{}\" {{ x = 42; y = 99 }}\n", include_path_str),
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(TypecheckError::InvalidFreeBindings { count })) if count == 1
+    ));
+    assert_eq!(vm.files.len(&vm.heap), 1);
+    assert_eq!(vm.detritus_parameter_bindings.len(&vm.heap), 1);
+    assert_eq!(vm.missing_parameter_bindings.len(&vm.heap), 0);
+}
+
+#[test]
+fn load_file_preserves_parameterized_include_request_order() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let first_include_path = unique_test_path("parameterized_include_first_target.m");
+    std::fs::write(&first_include_path, "%free { x :: num }\nfoo = x\n")
+        .expect("failed to write first include source test file");
+    let first_include_path_str = first_include_path.to_string_lossy().to_string();
+
+    let second_include_path = unique_test_path("parameterized_include_second_target.m");
+    std::fs::write(&second_include_path, "%free { y :: num }\nbar = y\n")
+        .expect("failed to write second include source test file");
+    let second_include_path_str = second_include_path.to_string_lossy().to_string();
+
+    let source_path = unique_test_path("parameterized_include_order_driver.m");
+    std::fs::write(
+        &source_path,
+        format!(
+            "%include \"{}\" {{ x = 1 }}\n%include \"{}\" {{ y = 2 }}\n",
+            first_include_path_str, second_include_path_str,
+        ),
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+    assert_eq!(vm.free_binding_sets.len(&vm.heap), 2);
+
+    let mut included_files = vm.files.rest(&vm.heap).expect("expected included file list tail");
+    let first_includee = included_files.pop(&vm.heap).expect("expected first included file");
+    let second_includee = included_files.pop(&vm.heap).expect("expected second included file");
+    assert_eq!(first_includee.get_file_name(&vm.heap), first_include_path_str);
+    assert_eq!(second_includee.get_file_name(&vm.heap), second_include_path_str);
+}
+
+#[test]
 fn load_file_applies_include_rename_modifier_to_materialized_definienda() {
     let mut vm = VM::new_for_tests();
     vm.initializing = false;

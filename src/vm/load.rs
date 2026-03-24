@@ -531,6 +531,7 @@ impl VM {
         }
 
         let mut materialized_includees = ConsList::EMPTY;
+        let outer_free_identifiers = self.free_identifiers;
         for include_request in &directive_payload.include_requests {
             let path = self
                 .heap
@@ -559,10 +560,58 @@ impl VM {
                     source,
                 }
             })?;
-            let parse_outcome = self.parse_source_text(&path, &source_text, modified_time, false)?;
+            let parse_outcome = match self.parse_source_text(&path, &source_text, modified_time, false) {
+                Ok(parse_outcome) => parse_outcome,
+                Err(error) => {
+                    self.free_identifiers = outer_free_identifiers;
+                    return Err(error);
+                }
+            };
             if parse_outcome.status == ParsePhaseStatus::SyntaxError {
+                self.free_identifiers = outer_free_identifiers;
                 return Err(IncludeDirectiveError::SyntaxErrorsPresent { path }.into());
             }
+
+            if !include_request.bindings.is_empty() {
+                let mut include_formal_bindings: ConsList<FreeFormalBindingRef> = ConsList::EMPTY;
+                if let Some(top_level_payload) = parse_outcome.top_level_payload.as_ref() {
+                    for free_binding in &top_level_payload.free_bindings {
+                        let original_name = IdentifierDefinitionRef::alias_metadata_from_source_identifier(
+                            &mut self.heap,
+                            free_binding.identifier,
+                        );
+                        let formal_binding = FreeFormalBindingRef::new(
+                            &mut self.heap,
+                            free_binding.identifier,
+                            original_name,
+                            free_binding.type_expr,
+                        );
+                        include_formal_bindings.push(&mut self.heap, formal_binding);
+                    }
+                }
+
+                let sorted_formals = super::bytecode::hdsort_binding_list_ref(
+                    &mut self.heap,
+                    include_formal_bindings.get_ref(),
+                );
+                let actuals = self.lower_include_binding_actuals(&include_request.bindings);
+                self.bindparams(sorted_formals.into(), actuals);
+                if !self.detritus_parameter_bindings.is_empty() {
+                    self.free_identifiers = outer_free_identifiers;
+                    return Err(TypecheckError::InvalidFreeBindings {
+                        count: self.detritus_parameter_bindings.len(&self.heap),
+                    }
+                    .into());
+                }
+                if !self.missing_parameter_bindings.is_empty() {
+                    self.free_identifiers = outer_free_identifiers;
+                    return Err(TypecheckError::MissingFreeBindings {
+                        count: self.missing_parameter_bindings.len(&self.heap),
+                    }
+                    .into());
+                }
+            }
+            self.free_identifiers = outer_free_identifiers;
 
             let mut parsed_includees = parse_outcome.files;
             while let Some(includee) = parsed_includees.pop(&self.heap) {
