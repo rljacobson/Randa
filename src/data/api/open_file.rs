@@ -1,7 +1,4 @@
-use crate::data::api::{FileRecord, HeapObjectProxy, StrConsRef};
-use crate::data::{Heap, RawValue, Value};
-
-/**
+/*!
 The `fileq` member of vm is a ConsList of files open for input of the form
   `cons(strcons(stream,<ptr to element of 'files'>),...)`.
 This corresponds to the Randa API structure
@@ -12,6 +9,9 @@ and
 Of course, the `OpenFile` structure does not have `stream` and `file_record` as members. The stream is represented by
 a handle, an index into a vector of streams owned by the VM.
 */
+
+use crate::data::api::{FileRecord, HeapObjectProxy, StrConsRef};
+use crate::data::{Heap, RawValue, Value};
 
 /// Reference-semantics view of one open-file queue entry.
 ///
