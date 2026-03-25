@@ -42,6 +42,68 @@ fn include_request_payload(
     }
 }
 
+fn collect_subscript_indices(heap: &Heap, value: Value, indices: &mut Vec<RawValue>) {
+    let raw: RawValue = value.into();
+    if raw < ATOM_LIMIT {
+        return;
+    }
+
+    match heap[raw].tag {
+        Tag::Ap => {
+            let application = ApNodeRef::from_ref(raw);
+            if let Some(function_application) = application.function_application(heap) {
+                if function_application.function_raw(heap) == Combinator::Subscript as RawValue {
+                    indices.push(function_application.argument_raw(heap));
+                }
+            }
+            collect_subscript_indices(heap, application.function_raw(heap).into(), indices);
+            collect_subscript_indices(heap, application.argument_raw(heap).into(), indices);
+        }
+        Tag::Cons | Tag::Pair | Tag::TCons | Tag::Let | Tag::LetRec | Tag::Tries | Tag::Label | Tag::Show => {
+            collect_subscript_indices(heap, heap[raw].head.into(), indices);
+            collect_subscript_indices(heap, heap[raw].tail.into(), indices);
+        }
+        Tag::Share => {
+            collect_subscript_indices(heap, heap[raw].head.into(), indices);
+        }
+        _ => {}
+    }
+}
+
+fn application_spine(heap: &Heap, value: Value) -> (Value, Vec<Value>) {
+    let mut arguments = Vec::new();
+    let mut current = value;
+
+    loop {
+        let raw: RawValue = current.into();
+        if raw < ATOM_LIMIT || heap[raw].tag != Tag::Ap {
+            arguments.reverse();
+            return (current, arguments);
+        }
+
+        let application = ApNodeRef::from_ref(raw);
+        arguments.push(application.argument_raw(heap).into());
+        current = application.function_raw(heap).into();
+    }
+}
+
+fn subtree_contains_combinator(heap: &Heap, value: Value, combinator: Combinator) -> bool {
+    let raw: RawValue = value.into();
+    if raw < ATOM_LIMIT {
+        return value == combinator.into();
+    }
+
+    match heap[raw].tag {
+        Tag::Ap | Tag::Cons | Tag::Pair | Tag::TCons | Tag::Let | Tag::LetRec | Tag::Tries | Tag::Label | Tag::Show => {
+            heap[raw].head == combinator as RawValue
+                || subtree_contains_combinator(heap, heap[raw].head.into(), combinator)
+                || subtree_contains_combinator(heap, heap[raw].tail.into(), combinator)
+        }
+        Tag::Share => subtree_contains_combinator(heap, heap[raw].head.into(), combinator),
+        _ => false,
+    }
+}
+
 fn export_payload(
     vm: &mut VM,
     source_path: &str,
@@ -3078,10 +3140,10 @@ fn typecheck_phase_does_not_bind_repeated_name_leaf_in_formal() {
     let missing = vm.heap.make_empty_identifier("missing");
     let lambda_body = vm
         .heap
-        .lambda_ref(repeated_name_pattern.into(), missing.into());
+        .lambda_ref(repeated_name_pattern, missing.into());
     f.set_value_from_data(
         &mut vm.heap,
-        IdentifierValueData::Arbitrary(lambda_body.into()),
+        IdentifierValueData::Arbitrary(lambda_body),
     );
     current_file.push_item_onto_definienda(&mut vm.heap, f);
 
@@ -3113,10 +3175,10 @@ fn typecheck_phase_does_not_bind_wrapped_constant_leaf_in_formal() {
     let missing = vm.heap.make_empty_identifier("missing");
     let lambda_body = vm
         .heap
-        .lambda_ref(wrapped_constant_pattern.into(), missing.into());
+        .lambda_ref(wrapped_constant_pattern, missing.into());
     f.set_value_from_data(
         &mut vm.heap,
-        IdentifierValueData::Arbitrary(lambda_body.into()),
+        IdentifierValueData::Arbitrary(lambda_body),
     );
     current_file.push_item_onto_definienda(&mut vm.heap, f);
 
@@ -3147,10 +3209,10 @@ fn typecheck_phase_rejects_value_head_application_in_formal() {
     let g = vm.heap.make_empty_identifier("g");
     let x = vm.heap.make_empty_identifier("x");
     let malformed_pattern = vm.heap.apply_ref(g.into(), x.into());
-    let lambda_body = vm.heap.lambda_ref(malformed_pattern.into(), x.into());
+    let lambda_body = vm.heap.lambda_ref(malformed_pattern, x.into());
     f.set_value_from_data(
         &mut vm.heap,
-        IdentifierValueData::Arbitrary(lambda_body.into()),
+        IdentifierValueData::Arbitrary(lambda_body),
     );
     current_file.push_item_onto_definienda(&mut vm.heap, f);
 
@@ -3182,11 +3244,11 @@ fn typecheck_phase_rejects_non_identifier_application_head_in_formal() {
     let xs = vm.heap.make_empty_identifier("xs");
     let y = vm.heap.make_empty_identifier("y");
     let malformed_head = vm.heap.cons_ref(x.into(), xs.into());
-    let malformed_pattern = vm.heap.apply_ref(malformed_head.into(), y.into());
-    let lambda_body = vm.heap.lambda_ref(malformed_pattern.into(), y.into());
+    let malformed_pattern = vm.heap.apply_ref(malformed_head, y.into());
+    let lambda_body = vm.heap.lambda_ref(malformed_pattern, y.into());
     f.set_value_from_data(
         &mut vm.heap,
-        IdentifierValueData::Arbitrary(lambda_body.into()),
+        IdentifierValueData::Arbitrary(lambda_body),
     );
     current_file.push_item_onto_definienda(&mut vm.heap, f);
 
@@ -3217,11 +3279,11 @@ fn typecheck_phase_rejects_repeated_name_application_head_in_value_head_bucket()
     let x = vm.heap.make_empty_identifier("x");
     let y = vm.heap.make_empty_identifier("y");
     let repeated_head = vm.heap.cons_ref(Token::Constant.into(), x.into());
-    let malformed_pattern = vm.heap.apply_ref(repeated_head.into(), y.into());
-    let lambda_body = vm.heap.lambda_ref(malformed_pattern.into(), y.into());
+    let malformed_pattern = vm.heap.apply_ref(repeated_head, y.into());
+    let lambda_body = vm.heap.lambda_ref(malformed_pattern, y.into());
     f.set_value_from_data(
         &mut vm.heap,
-        IdentifierValueData::Arbitrary(lambda_body.into()),
+        IdentifierValueData::Arbitrary(lambda_body),
     );
     current_file.push_item_onto_definienda(&mut vm.heap, f);
 
@@ -3253,11 +3315,11 @@ fn typecheck_phase_non_identifier_application_head_still_binds_interior_names() 
     let xs = vm.heap.make_empty_identifier("xs");
     let y = vm.heap.make_empty_identifier("y");
     let malformed_head = vm.heap.cons_ref(x.into(), xs.into());
-    let malformed_pattern = vm.heap.apply_ref(malformed_head.into(), y.into());
-    let lambda_body = vm.heap.lambda_ref(malformed_pattern.into(), y.into());
+    let malformed_pattern = vm.heap.apply_ref(malformed_head, y.into());
+    let lambda_body = vm.heap.lambda_ref(malformed_pattern, y.into());
     f.set_value_from_data(
         &mut vm.heap,
-        IdentifierValueData::Arbitrary(lambda_body.into()),
+        IdentifierValueData::Arbitrary(lambda_body),
     );
     current_file.push_item_onto_definienda(&mut vm.heap, f);
 
@@ -3291,11 +3353,11 @@ fn typecheck_phase_non_identifier_application_head_still_binds_head_subtree_name
     let xs = vm.heap.make_empty_identifier("xs");
     let y = vm.heap.make_empty_identifier("y");
     let malformed_head = vm.heap.cons_ref(x.into(), xs.into());
-    let malformed_pattern = vm.heap.apply_ref(malformed_head.into(), y.into());
-    let lambda_body = vm.heap.lambda_ref(malformed_pattern.into(), xs.into());
+    let malformed_pattern = vm.heap.apply_ref(malformed_head, y.into());
+    let lambda_body = vm.heap.lambda_ref(malformed_pattern, xs.into());
     f.set_value_from_data(
         &mut vm.heap,
-        IdentifierValueData::Arbitrary(lambda_body.into()),
+        IdentifierValueData::Arbitrary(lambda_body),
     );
     current_file.push_item_onto_definienda(&mut vm.heap, f);
 
@@ -3329,10 +3391,10 @@ fn typecheck_phase_rejects_infix_name_application_in_value_head_bucket() {
     let x = vm.heap.make_empty_identifier("x");
     let y = vm.heap.make_empty_identifier("y");
     let malformed_pattern = vm.heap.apply2(merge.into(), x.into(), y.into());
-    let lambda_body = vm.heap.lambda_ref(malformed_pattern.into(), x.into());
+    let lambda_body = vm.heap.lambda_ref(malformed_pattern, x.into());
     f.set_value_from_data(
         &mut vm.heap,
-        IdentifierValueData::Arbitrary(lambda_body.into()),
+        IdentifierValueData::Arbitrary(lambda_body),
     );
     current_file.push_item_onto_definienda(&mut vm.heap, f);
 
@@ -3368,10 +3430,10 @@ fn typecheck_phase_infix_name_value_head_left_operand_still_binds_interior_names
     let malformed_pattern = vm.heap.apply2(merge.into(), left_operand, y.into());
     let xy_body = vm.heap.pair_ref(x.into(), y.into());
     let body = vm.heap.pair_ref(g.into(), xy_body);
-    let lambda_body = vm.heap.lambda_ref(malformed_pattern.into(), body);
+    let lambda_body = vm.heap.lambda_ref(malformed_pattern, body);
     f.set_value_from_data(
         &mut vm.heap,
-        IdentifierValueData::Arbitrary(lambda_body.into()),
+        IdentifierValueData::Arbitrary(lambda_body),
     );
     current_file.push_item_onto_definienda(&mut vm.heap, f);
 
@@ -3409,10 +3471,10 @@ fn typecheck_phase_infix_name_repeated_head_left_operand_still_binds_interior_na
     let malformed_pattern = vm.heap.apply2(merge.into(), left_operand, z.into());
     let yz_body = vm.heap.pair_ref(y.into(), z.into());
     let body = vm.heap.pair_ref(x.into(), yz_body);
-    let lambda_body = vm.heap.lambda_ref(malformed_pattern.into(), body);
+    let lambda_body = vm.heap.lambda_ref(malformed_pattern, body);
     f.set_value_from_data(
         &mut vm.heap,
-        IdentifierValueData::Arbitrary(lambda_body.into()),
+        IdentifierValueData::Arbitrary(lambda_body),
     );
     current_file.push_item_onto_definienda(&mut vm.heap, f);
 
@@ -3445,10 +3507,10 @@ fn typecheck_phase_invalid_application_formal_still_binds_interior_names() {
     let g = vm.heap.make_empty_identifier("g");
     let x = vm.heap.make_empty_identifier("x");
     let malformed_pattern = vm.heap.apply_ref(g.into(), x.into());
-    let lambda_body = vm.heap.lambda_ref(malformed_pattern.into(), x.into());
+    let lambda_body = vm.heap.lambda_ref(malformed_pattern, x.into());
     f.set_value_from_data(
         &mut vm.heap,
-        IdentifierValueData::Arbitrary(lambda_body.into()),
+        IdentifierValueData::Arbitrary(lambda_body),
     );
     current_file.push_item_onto_definienda(&mut vm.heap, f);
 
@@ -3481,10 +3543,10 @@ fn typecheck_phase_invalid_application_formal_still_binds_head_name() {
     let g = vm.heap.make_empty_identifier("g");
     let x = vm.heap.make_empty_identifier("x");
     let malformed_pattern = vm.heap.apply_ref(g.into(), x.into());
-    let lambda_body = vm.heap.lambda_ref(malformed_pattern.into(), g.into());
+    let lambda_body = vm.heap.lambda_ref(malformed_pattern, g.into());
     f.set_value_from_data(
         &mut vm.heap,
-        IdentifierValueData::Arbitrary(lambda_body.into()),
+        IdentifierValueData::Arbitrary(lambda_body),
     );
     current_file.push_item_onto_definienda(&mut vm.heap, f);
 
@@ -3517,11 +3579,11 @@ fn typecheck_phase_repeated_name_application_head_still_binds_argument_names() {
     let x = vm.heap.make_empty_identifier("x");
     let y = vm.heap.make_empty_identifier("y");
     let repeated_head = vm.heap.cons_ref(Token::Constant.into(), x.into());
-    let malformed_pattern = vm.heap.apply_ref(repeated_head.into(), y.into());
-    let lambda_body = vm.heap.lambda_ref(malformed_pattern.into(), y.into());
+    let malformed_pattern = vm.heap.apply_ref(repeated_head, y.into());
+    let lambda_body = vm.heap.lambda_ref(malformed_pattern, y.into());
     f.set_value_from_data(
         &mut vm.heap,
-        IdentifierValueData::Arbitrary(lambda_body.into()),
+        IdentifierValueData::Arbitrary(lambda_body),
     );
     current_file.push_item_onto_definienda(&mut vm.heap, f);
 
@@ -3556,10 +3618,10 @@ fn typecheck_phase_successor_pattern_binds_inner_name() {
     let successor_pattern = vm
         .heap
         .apply2(Combinator::Plus.into(), one.into(), x.into());
-    let lambda_body = vm.heap.lambda_ref(successor_pattern.into(), x.into());
+    let lambda_body = vm.heap.lambda_ref(successor_pattern, x.into());
     f.set_value_from_data(
         &mut vm.heap,
-        IdentifierValueData::Arbitrary(lambda_body.into()),
+        IdentifierValueData::Arbitrary(lambda_body),
     );
     current_file.push_item_onto_definienda(&mut vm.heap, f);
 
@@ -3592,11 +3654,11 @@ fn typecheck_phase_rejects_structural_inner_successor_pattern() {
     let inner_pattern = vm.heap.cons_ref(x.into(), xs.into());
     let successor_pattern = vm
         .heap
-        .apply2(Combinator::Plus.into(), one.into(), inner_pattern.into());
-    let lambda_body = vm.heap.lambda_ref(successor_pattern.into(), xs.into());
+        .apply2(Combinator::Plus.into(), one.into(), inner_pattern);
+    let lambda_body = vm.heap.lambda_ref(successor_pattern, xs.into());
     f.set_value_from_data(
         &mut vm.heap,
-        IdentifierValueData::Arbitrary(lambda_body.into()),
+        IdentifierValueData::Arbitrary(lambda_body),
     );
     current_file.push_item_onto_definienda(&mut vm.heap, f);
 
@@ -3630,11 +3692,11 @@ fn typecheck_phase_invalid_successor_pattern_still_binds_interior_names() {
     let inner_pattern = vm.heap.cons_ref(x.into(), xs.into());
     let successor_pattern = vm
         .heap
-        .apply2(Combinator::Plus.into(), one.into(), inner_pattern.into());
-    let lambda_body = vm.heap.lambda_ref(successor_pattern.into(), xs.into());
+        .apply2(Combinator::Plus.into(), one.into(), inner_pattern);
+    let lambda_body = vm.heap.lambda_ref(successor_pattern, xs.into());
     f.set_value_from_data(
         &mut vm.heap,
-        IdentifierValueData::Arbitrary(lambda_body.into()),
+        IdentifierValueData::Arbitrary(lambda_body),
     );
     current_file.push_item_onto_definienda(&mut vm.heap, f);
 
@@ -3670,11 +3732,11 @@ fn typecheck_phase_successor_pattern_preserves_inner_value_head_diagnostic() {
     let inner_pattern = vm.heap.apply_ref(g.into(), x.into());
     let successor_pattern = vm
         .heap
-        .apply2(Combinator::Plus.into(), one.into(), inner_pattern.into());
-    let lambda_body = vm.heap.lambda_ref(successor_pattern.into(), x.into());
+        .apply2(Combinator::Plus.into(), one.into(), inner_pattern);
+    let lambda_body = vm.heap.lambda_ref(successor_pattern, x.into());
     f.set_value_from_data(
         &mut vm.heap,
-        IdentifierValueData::Arbitrary(lambda_body.into()),
+        IdentifierValueData::Arbitrary(lambda_body),
     );
     current_file.push_item_onto_definienda(&mut vm.heap, f);
 
@@ -3708,11 +3770,11 @@ fn typecheck_phase_rejects_undeclared_constructor_inside_successor_pattern() {
     let inner_pattern = vm.heap.apply_ref(nope.into(), x.into());
     let successor_pattern =
         vm.heap
-            .apply2(Combinator::Plus.into(), one.into(), inner_pattern.into());
-    let lambda_body = vm.heap.lambda_ref(successor_pattern.into(), x.into());
+            .apply2(Combinator::Plus.into(), one.into(), inner_pattern);
+    let lambda_body = vm.heap.lambda_ref(successor_pattern, x.into());
     f.set_value_from_data(
         &mut vm.heap,
-        IdentifierValueData::Arbitrary(lambda_body.into()),
+        IdentifierValueData::Arbitrary(lambda_body),
     );
     current_file.push_item_onto_definienda(&mut vm.heap, f);
 
@@ -3745,10 +3807,10 @@ fn typecheck_phase_rejects_non_canonical_plus_pattern_in_formal() {
     let arithmetic_pattern = vm
         .heap
         .apply2(Combinator::Plus.into(), x.into(), one.into());
-    let lambda_body = vm.heap.lambda_ref(arithmetic_pattern.into(), x.into());
+    let lambda_body = vm.heap.lambda_ref(arithmetic_pattern, x.into());
     f.set_value_from_data(
         &mut vm.heap,
-        IdentifierValueData::Arbitrary(lambda_body.into()),
+        IdentifierValueData::Arbitrary(lambda_body),
     );
     current_file.push_item_onto_definienda(&mut vm.heap, f);
 
@@ -3781,10 +3843,10 @@ fn typecheck_phase_non_canonical_plus_pattern_still_binds_interior_names() {
     let arithmetic_pattern = vm
         .heap
         .apply2(Combinator::Plus.into(), x.into(), one.into());
-    let lambda_body = vm.heap.lambda_ref(arithmetic_pattern.into(), x.into());
+    let lambda_body = vm.heap.lambda_ref(arithmetic_pattern, x.into());
     f.set_value_from_data(
         &mut vm.heap,
-        IdentifierValueData::Arbitrary(lambda_body.into()),
+        IdentifierValueData::Arbitrary(lambda_body),
     );
     current_file.push_item_onto_definienda(&mut vm.heap, f);
 
@@ -3816,10 +3878,10 @@ fn typecheck_phase_rejects_unary_minus_pattern_in_formal() {
     let f = vm.heap.make_empty_identifier("f");
     let x = vm.heap.make_empty_identifier("x");
     let arithmetic_pattern = vm.heap.apply_ref(Combinator::Minus.into(), x.into());
-    let lambda_body = vm.heap.lambda_ref(arithmetic_pattern.into(), x.into());
+    let lambda_body = vm.heap.lambda_ref(arithmetic_pattern, x.into());
     f.set_value_from_data(
         &mut vm.heap,
-        IdentifierValueData::Arbitrary(lambda_body.into()),
+        IdentifierValueData::Arbitrary(lambda_body),
     );
     current_file.push_item_onto_definienda(&mut vm.heap, f);
 
@@ -3849,10 +3911,10 @@ fn typecheck_phase_unary_minus_pattern_still_binds_interior_names() {
     let f = vm.heap.make_empty_identifier("f");
     let x = vm.heap.make_empty_identifier("x");
     let arithmetic_pattern = vm.heap.apply_ref(Combinator::Minus.into(), x.into());
-    let lambda_body = vm.heap.lambda_ref(arithmetic_pattern.into(), x.into());
+    let lambda_body = vm.heap.lambda_ref(arithmetic_pattern, x.into());
     f.set_value_from_data(
         &mut vm.heap,
-        IdentifierValueData::Arbitrary(lambda_body.into()),
+        IdentifierValueData::Arbitrary(lambda_body),
     );
     current_file.push_item_onto_definienda(&mut vm.heap, f);
 
@@ -3887,10 +3949,10 @@ fn typecheck_phase_rejects_malformed_plus_application_in_formal() {
     let one = IntegerRef::from_i64(&mut vm.heap, 1);
     let partial_pattern = vm.heap.apply2(Combinator::Plus.into(), one.into(), x.into());
     let malformed_pattern = vm.heap.apply_ref(partial_pattern, y.into());
-    let lambda_body = vm.heap.lambda_ref(malformed_pattern.into(), y.into());
+    let lambda_body = vm.heap.lambda_ref(malformed_pattern, y.into());
     f.set_value_from_data(
         &mut vm.heap,
-        IdentifierValueData::Arbitrary(lambda_body.into()),
+        IdentifierValueData::Arbitrary(lambda_body),
     );
     current_file.push_item_onto_definienda(&mut vm.heap, f);
 
@@ -3923,10 +3985,10 @@ fn typecheck_phase_malformed_plus_application_still_binds_all_pattern_operands()
     let one = IntegerRef::from_i64(&mut vm.heap, 1);
     let partial_pattern = vm.heap.apply2(Combinator::Plus.into(), one.into(), x.into());
     let malformed_pattern = vm.heap.apply_ref(partial_pattern, y.into());
-    let lambda_body = vm.heap.lambda_ref(malformed_pattern.into(), y.into());
+    let lambda_body = vm.heap.lambda_ref(malformed_pattern, y.into());
     f.set_value_from_data(
         &mut vm.heap,
-        IdentifierValueData::Arbitrary(lambda_body.into()),
+        IdentifierValueData::Arbitrary(lambda_body),
     );
     current_file.push_item_onto_definienda(&mut vm.heap, f);
 
@@ -3959,10 +4021,10 @@ fn typecheck_phase_rejects_binary_minus_pattern_in_formal() {
     let x = vm.heap.make_empty_identifier("x");
     let y = vm.heap.make_empty_identifier("y");
     let malformed_pattern = vm.heap.apply2(Combinator::Minus.into(), x.into(), y.into());
-    let lambda_body = vm.heap.lambda_ref(malformed_pattern.into(), y.into());
+    let lambda_body = vm.heap.lambda_ref(malformed_pattern, y.into());
     f.set_value_from_data(
         &mut vm.heap,
-        IdentifierValueData::Arbitrary(lambda_body.into()),
+        IdentifierValueData::Arbitrary(lambda_body),
     );
     current_file.push_item_onto_definienda(&mut vm.heap, f);
 
@@ -3995,10 +4057,10 @@ fn typecheck_phase_binary_minus_pattern_still_binds_both_operands() {
     let x = vm.heap.make_empty_identifier("x");
     let y = vm.heap.make_empty_identifier("y");
     let malformed_pattern = vm.heap.apply2(Combinator::Minus.into(), x.into(), y.into());
-    let lambda_body = vm.heap.lambda_ref(malformed_pattern.into(), y.into());
+    let lambda_body = vm.heap.lambda_ref(malformed_pattern, y.into());
     f.set_value_from_data(
         &mut vm.heap,
-        IdentifierValueData::Arbitrary(lambda_body.into()),
+        IdentifierValueData::Arbitrary(lambda_body),
     );
     current_file.push_item_onto_definienda(&mut vm.heap, f);
 
@@ -4596,6 +4658,99 @@ fn codegen_phase_lowers_letrec_singleton_body_through_y() {
 }
 
 #[test]
+fn codegen_phase_lowers_pattern_letrec_body_through_recursive_carrier_and_subscripts() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let x = vm.heap.make_empty_identifier("x");
+    let y = vm.heap.make_empty_identifier("y");
+    let holder = vm.heap.make_empty_identifier("holder");
+    let binder = vm.heap.pair_ref(x.into(), y.into());
+    let body = vm.heap.cons_ref(x.into(), y.into());
+    let definition = DefinitionRef::new(&mut vm.heap, binder, Type::Undefined.into(), body);
+    let definitions = vm.heap.cons_ref(definition.get_ref().into(), Combinator::Nil.into());
+    let letrec_body = vm.heap.letrec_ref(definitions, x.into());
+    holder.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(letrec_body));
+
+    let definienda = ConsList::new(&mut vm.heap, holder);
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("codegen_pattern_letrec_body.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        definienda,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+    vm.undefined_names = ConsList::EMPTY;
+
+    let result = vm.run_codegen_phase();
+
+    assert!(result.is_ok());
+    let lowered_raw = holder
+        .get_value(&vm.heap)
+        .expect("expected lowered patterned letrec body")
+        .get_ref();
+    assert_eq!(vm.heap[lowered_raw].tag, Tag::Ap);
+    let recursive_rhs = vm.heap[lowered_raw].tail;
+    assert_eq!(vm.heap[recursive_rhs].tag, Tag::Ap);
+    assert_eq!(vm.heap[recursive_rhs].head, RawValue::from(Combinator::Y));
+
+    let abstraction_result = vm.heap[recursive_rhs].tail;
+    let mut subscript_indices = Vec::new();
+    collect_subscript_indices(&vm.heap, abstraction_result.into(), &mut subscript_indices);
+    subscript_indices.sort();
+    assert_eq!(subscript_indices, vec![0, 1]);
+}
+
+#[test]
+fn codegen_phase_lowers_mixed_letrec_group_with_pattern_projection_order() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let x = vm.heap.make_empty_identifier("x");
+    let y = vm.heap.make_empty_identifier("y");
+    let z = vm.heap.make_empty_identifier("z");
+    let holder = vm.heap.make_empty_identifier("holder");
+    let binder = vm.heap.pair_ref(x.into(), y.into());
+    let patterned_definition = DefinitionRef::new(&mut vm.heap, binder, Type::Undefined.into(), z.into());
+    let simple_definition = DefinitionRef::new(&mut vm.heap, z.into(), Type::Undefined.into(), Value::Data(7));
+    let simple_tail = vm.heap.cons_ref(simple_definition.get_ref().into(), Combinator::Nil.into());
+    let definitions = vm.heap.cons_ref(patterned_definition.get_ref().into(), simple_tail);
+    let body = vm.heap.cons_ref(x.into(), z.into());
+    let letrec_body = vm.heap.letrec_ref(definitions, body);
+    holder.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(letrec_body));
+
+    let definienda = ConsList::new(&mut vm.heap, holder);
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("codegen_mixed_letrec_body.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        definienda,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+    vm.undefined_names = ConsList::EMPTY;
+
+    let result = vm.run_codegen_phase();
+
+    assert!(result.is_ok());
+    let lowered_raw = holder
+        .get_value(&vm.heap)
+        .expect("expected lowered mixed letrec body")
+        .get_ref();
+    let recursive_rhs = vm.heap[lowered_raw].tail;
+    let abstraction_result = vm.heap[recursive_rhs].tail;
+    let mut subscript_indices = Vec::new();
+    collect_subscript_indices(&vm.heap, abstraction_result.into(), &mut subscript_indices);
+    subscript_indices.sort();
+    assert_eq!(subscript_indices, vec![0, 1]);
+}
+
+#[test]
 fn codegen_phase_lowers_tries_with_fallible_first_case_to_try_and_badcase() {
     let mut vm = VM::new_for_tests();
     vm.initializing = false;
@@ -4706,6 +4861,150 @@ fn codegen_phase_lowers_tuple_pattern_lambda_to_u_application() {
         .get_ref();
     assert_eq!(vm.heap[lowered_raw].tag, Tag::Ap);
     assert_eq!(vm.heap[lowered_raw].head, RawValue::from(Combinator::U));
+}
+
+#[test]
+fn codegen_phase_preserves_cond_shape_for_left_k_guarded_abstraction() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let x = vm.heap.make_empty_identifier("x");
+    let guard = vm.heap.make_empty_identifier("guard");
+    let then_branch = vm.heap.make_empty_identifier("then_branch");
+    let holder = vm.heap.make_empty_identifier("holder");
+    let cond_body = vm.heap.apply2(Combinator::Cond.into(), guard.into(), then_branch.into());
+    let duplicated_x = vm.heap.apply_ref(x.into(), x.into());
+    let body = vm.heap.apply_ref(cond_body, duplicated_x);
+    let lambda = vm.heap.lambda_ref(x.into(), body);
+    holder.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(lambda));
+
+    let definienda = ConsList::new(&mut vm.heap, holder);
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("codegen_cond_left_k_lambda.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        definienda,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+    vm.undefined_names = ConsList::EMPTY;
+
+    let result = vm.run_codegen_phase();
+
+    assert!(result.is_ok());
+    let lowered = holder
+        .get_value(&vm.heap)
+        .expect("expected lowered guarded lambda body")
+        .get_ref()
+        .into();
+    let (head, arguments) = application_spine(&vm.heap, lowered);
+    assert_eq!(head, Combinator::Cond.into());
+    assert_eq!(arguments.len(), 3);
+    assert_eq!(arguments[0], guard.into());
+
+    let (preserved_head, preserved_arguments) = application_spine(&vm.heap, arguments[1]);
+    assert_eq!(preserved_head, Combinator::K.into());
+    assert_eq!(preserved_arguments, vec![then_branch.into()]);
+}
+
+#[test]
+fn codegen_phase_preserves_cond_shape_for_left_b_with_right_k_guarded_abstraction() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let x = vm.heap.make_empty_identifier("x");
+    let guard = vm.heap.make_empty_identifier("guard");
+    let y = vm.heap.make_empty_identifier("y");
+    let holder = vm.heap.make_empty_identifier("holder");
+    let cond_body = vm.heap.apply_ref(Combinator::Cond.into(), guard.into());
+    let duplicated_x = vm.heap.apply_ref(x.into(), x.into());
+    let guarded_function = vm.heap.apply_ref(cond_body, duplicated_x);
+    let body = vm.heap.apply_ref(guarded_function, y.into());
+    let lambda = vm.heap.lambda_ref(x.into(), body);
+    holder.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(lambda));
+
+    let definienda = ConsList::new(&mut vm.heap, holder);
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("codegen_cond_left_b_right_k_lambda.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        definienda,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+    vm.undefined_names = ConsList::EMPTY;
+
+    let result = vm.run_codegen_phase();
+
+    assert!(result.is_ok());
+    let lowered = holder
+        .get_value(&vm.heap)
+        .expect("expected lowered guarded application body")
+        .get_ref()
+        .into();
+    let (head, arguments) = application_spine(&vm.heap, lowered);
+    assert_eq!(head, Combinator::Cond.into());
+    assert_eq!(arguments.len(), 3);
+    assert_eq!(arguments[0], guard.into());
+    assert_eq!(arguments[2], y.into());
+}
+
+#[test]
+fn codegen_phase_lowers_pattern_letrec_through_tries_and_guarded_lambda_interaction() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let x = vm.heap.make_empty_identifier("x");
+    let y = vm.heap.make_empty_identifier("y");
+    let inner_x = vm.heap.make_empty_identifier("inner_x");
+    let inner_y = vm.heap.make_empty_identifier("inner_y");
+    let guard = vm.heap.make_empty_identifier("guard");
+    let holder = vm.heap.make_empty_identifier("holder");
+    let binder = vm.heap.pair_ref(x.into(), y.into());
+    let cond_body = vm.heap.apply2(Combinator::Cond.into(), guard.into(), inner_x.into());
+    let duplicated_inner = vm.heap.apply_ref(inner_x.into(), inner_y.into());
+    let guarded_body = vm.heap.apply_ref(cond_body, duplicated_inner);
+    let inner_binder = vm.heap.pair_ref(inner_x.into(), inner_y.into());
+    let fallible_alternative = vm.heap.lambda_ref(inner_binder, guarded_body);
+    let alternatives = vm.heap.cons_ref(fallible_alternative, Combinator::Nil.into());
+    let tries_body = vm.heap.tries_ref(holder.into(), alternatives);
+    let definition = DefinitionRef::new(&mut vm.heap, binder, Type::Undefined.into(), tries_body);
+    let definitions = vm.heap.cons_ref(definition.get_ref().into(), Combinator::Nil.into());
+    let letrec_body = vm.heap.letrec_ref(definitions, x.into());
+    holder.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(letrec_body));
+
+    let definienda = ConsList::new(&mut vm.heap, holder);
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("codegen_pattern_letrec_tries_guarded.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        definienda,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+    vm.undefined_names = ConsList::EMPTY;
+
+    let result = vm.run_codegen_phase();
+
+    assert!(result.is_ok());
+    let lowered = holder
+        .get_value(&vm.heap)
+        .expect("expected lowered letrec tries body")
+        .get_ref()
+        .into();
+    let mut subscript_indices = Vec::new();
+    collect_subscript_indices(&vm.heap, lowered, &mut subscript_indices);
+    subscript_indices.sort();
+    assert_eq!(subscript_indices, vec![0, 1]);
+    assert!(subtree_contains_combinator(&vm.heap, lowered, Combinator::Try));
+    assert!(subtree_contains_combinator(&vm.heap, lowered, Combinator::BadCase));
+    assert!(subtree_contains_combinator(&vm.heap, lowered, Combinator::Cond));
 }
 
 #[test]

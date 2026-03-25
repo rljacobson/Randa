@@ -953,7 +953,7 @@ impl VM {
 
             while let Some(dependency) = dependencies.pop(&self.heap) {
                 let dependency_value: Value = dependency.into();
-                if !ConsList::<Value>::contains_value(&self.heap, committed_exports.into(), dependency_value)
+                if !ConsList::<Value>::contains_value(&self.heap, committed_exports, dependency_value)
                 {
                     committed_exports = ConsList::<Value>::insert_ordered_value(
                         &mut self.heap,
@@ -1543,7 +1543,7 @@ impl VM {
         modified_time: SystemTime,
         _is_main_script: bool,
     ) -> Result<ParsePhaseOutcome, LoadFileError> {
-        let load_script_form = self.classify_load_script_form(source_path, &source_text)?;
+        let load_script_form = self.classify_load_script_form(source_path, source_text)?;
         match load_script_form {
             LoadScriptForm::Expression | LoadScriptForm::TopLevelScript => {}
             LoadScriptForm::OtherTopLevelForm => {
@@ -1555,7 +1555,7 @@ impl VM {
         }
 
         let placeholder_files = self.empty_environment_for_source(source_path, modified_time);
-        let lexer = Lexer::new(source_path, &source_text);
+        let lexer = Lexer::new(source_path, source_text);
         let activation = self.parser_activation(load_script_form);
         let mut parser = Parser::new(lexer, activation);
         let parsed = parser.parse();

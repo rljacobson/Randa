@@ -34,22 +34,28 @@ pub(super) struct CodegenBoundaryResult {
     pub(super) failure: Option<CodegenError>,
 }
 
-/// Returns the payload `x` when `value` has the committed shape `ap(K, x)`.
-/// This exists so codegen owns one stable `K`-application recognizer for Miranda's active `combine` and `liscomb` rules.
-/// The invariant is that only a direct `K` application returns a payload.
-fn k_application_payload(heap: &Heap, value: Value) -> Option<Value> {
+/// Returns the payload `x` when `value` has the committed shape `ap(combinator, x)`. This exists so
+/// codegen owns one stable unary-application recognizer for Miranda's active `combine` and
+/// `liscomb` rules. The invariant is that only a direct application of the selected combinator
+/// returns a payload.
+fn unary_application_payload(heap: &Heap, value: Value, combinator: Combinator) -> Option<Value> {
     let raw: RawValue = value.into();
     (raw >= ATOM_LIMIT && heap[raw].tag == Tag::Ap).then(|| {
         let application = ApNodeRef::from_ref(raw);
-        (application.function_raw(heap) == Combinator::K as RawValue)
+        (application.function_raw(heap) == combinator as RawValue)
             .then(|| application.argument_raw(heap).into())
     })?
 }
 
-/// Returns `(a, b)` when `value` has the committed shape `ap2(B, a, b)`.
-/// This exists so codegen owns one stable recognizer for the active `combine` rules that branch on `B` applications.
-/// The invariant is that only the left-associated `ap(ap(B, a), b)` shape returns payloads.
-fn b_application_payloads(heap: &Heap, value: Value) -> Option<(Value, Value)> {
+/// Returns `(a, b)` when `value` has the committed shape `ap2(combinator, a, b)`. This exists so
+/// codegen owns one stable binary-application recognizer for the active `combine` rules that branch
+/// on left-associated application spines. The invariant is that only the left-associated
+/// `ap(ap(combinator, a), b)` shape returns payloads.
+fn binary_application_payloads(
+    heap: &Heap,
+    value: Value,
+    combinator: Combinator,
+) -> Option<(Value, Value)> {
     let raw: RawValue = value.into();
     if raw < ATOM_LIMIT || heap[raw].tag != Tag::Ap {
         return None;
@@ -57,7 +63,7 @@ fn b_application_payloads(heap: &Heap, value: Value) -> Option<(Value, Value)> {
 
     let application = ApNodeRef::from_ref(raw);
     let function_application = application.function_application(heap)?;
-    (function_application.function_raw(heap) == Combinator::B as RawValue).then(|| {
+    (function_application.function_raw(heap) == combinator as RawValue).then(|| {
         (
             function_application.argument_raw(heap).into(),
             application.argument_raw(heap).into(),
@@ -67,11 +73,11 @@ fn b_application_payloads(heap: &Heap, value: Value) -> Option<(Value, Value)> {
 
 /// Combines two active bracket-abstraction results using Miranda's current `combine` rule subset.
 /// This exists so codegen owns application-family combinator selection in one place during active
-/// lambda lowering. The invariant is that `K` propagation, `eta`, `B`/`C`/`S`, and the active
-/// `B1`/`C1`/`S1` introductions follow one consistent rule set.
+/// lambda lowering. The invariant is that `K` propagation, `eta`, guarded `COND` preservation,
+/// `B`/`C`/`S`, and the active `B1`/`C1`/`S1` introductions follow one consistent rule set.
 fn combine_abstractions(heap: &mut Heap, left: Value, right: Value) -> Value {
-    let left_k_payload = k_application_payload(heap, left);
-    let right_k_payload = k_application_payload(heap, right);
+    let left_k_payload = unary_application_payload(heap, left, Combinator::K);
+    let right_k_payload = unary_application_payload(heap, right, Combinator::K);
 
     if let (Some(left_payload), Some(right_payload)) = (left_k_payload, right_k_payload) {
         let applied = heap.apply_ref(left_payload, right_payload);
@@ -83,22 +89,39 @@ fn combine_abstractions(heap: &mut Heap, left: Value, right: Value) -> Value {
             return left_payload;
         }
 
-        if let Some((right_left, right_right)) = b_application_payloads(heap, right) {
+        if let Some((right_left, right_right)) =
+            binary_application_payloads(heap, right, Combinator::B)
+        {
             return heap.apply3(Combinator::B1.into(), left_payload, right_left, right_right);
+        }
+
+        if let Some((condition, branch)) =
+            binary_application_payloads(heap, left_payload, Combinator::Cond)
+        {
+            let preserved_branch = heap.apply_ref(Combinator::K.into(), branch);
+            return heap.apply3(Combinator::Cond.into(), condition, preserved_branch, right);
         }
 
         return heap.apply2(Combinator::B.into(), left_payload, right);
     }
 
     if let Some(right_payload) = right_k_payload {
-        if let Some((left_left, left_right)) = b_application_payloads(heap, left) {
+        if let Some((left_left, left_right)) = binary_application_payloads(heap, left, Combinator::B) {
+            if let Some(condition) = unary_application_payload(heap, left_left, Combinator::Cond) {
+                return heap.apply3(Combinator::Cond.into(), condition, left_right, right_payload);
+            }
+
             return heap.apply3(Combinator::C1.into(), left_left, left_right, right_payload);
         }
 
         return heap.apply2(Combinator::C.into(), left, right_payload);
     }
 
-    if let Some((left_left, left_right)) = b_application_payloads(heap, left) {
+    if let Some((left_left, left_right)) = binary_application_payloads(heap, left, Combinator::B) {
+        if let Some(condition) = unary_application_payload(heap, left_left, Combinator::Cond) {
+            return heap.apply3(Combinator::Cond.into(), condition, left_right, right);
+        }
+
         return heap.apply3(Combinator::S1.into(), left_left, left_right, right);
     }
 
@@ -110,8 +133,8 @@ fn combine_abstractions(heap: &mut Heap, left: Value, right: Value) -> Value {
 /// place during active lambda lowering. The invariant is that structural abstraction preserves `K`
 /// propagation and the active `P`/`B_p`/`C_p`/`S_p` selection.
 fn combine_list_abstractions(heap: &mut Heap, left: Value, right: Value) -> Value {
-    let left_k_payload = k_application_payload(heap, left);
-    let right_k_payload = k_application_payload(heap, right);
+    let left_k_payload = unary_application_payload(heap, left, Combinator::K);
+    let right_k_payload = unary_application_payload(heap, right, Combinator::K);
 
     if let (Some(left_payload), Some(right_payload)) = (left_k_payload, right_k_payload) {
         let cons_value = heap.cons_ref(left_payload, right_payload);
@@ -349,9 +372,72 @@ fn abstract_variable_list_from_expression(heap: &mut Heap, variables: Value, exp
     }
 }
 
+/// Collects the active bound identifiers from one committed recursive-template pattern.
+/// This exists so codegen owns the identifier-extraction step needed by Miranda's `new_mklazy`
+/// `LetRec` lowering without depending on the typecheck boundary. The invariant is that binder
+/// identifiers are collected in first-occurrence order while constructor heads, wrapped constants,
+/// and successor offsets remain non-binding.
+fn collect_recursive_pattern_identifiers(
+    heap: &Heap,
+    pattern: Value,
+    bound_identifiers: &mut Vec<IdentifierRecordRef>,
+) {
+    let raw: RawValue = pattern.into();
+    if raw < ATOM_LIMIT {
+        return;
+    }
+
+    match heap[raw].tag {
+        Tag::Id => {
+            let identifier = IdentifierRecordRef::from_ref(raw);
+            if !identifier.is_constructor_valued(heap) && !bound_identifiers.contains(&identifier) {
+                bound_identifiers.push(identifier);
+            }
+        }
+        Tag::Cons => {
+            if heap[raw].head == RawValue::from(Value::Token(Token::Constant)) {
+                return;
+            }
+
+            collect_recursive_pattern_identifiers(heap, heap[raw].head.into(), bound_identifiers);
+            collect_recursive_pattern_identifiers(heap, heap[raw].tail.into(), bound_identifiers);
+        }
+        Tag::Pair | Tag::TCons => {
+            collect_recursive_pattern_identifiers(heap, heap[raw].head.into(), bound_identifiers);
+            collect_recursive_pattern_identifiers(heap, heap[raw].tail.into(), bound_identifiers);
+        }
+        Tag::Ap => {
+            let application = ApNodeRef::from_ref(raw);
+            if let Some(function_application) = application.function_application(heap) {
+                if function_application.function_raw(heap) == Combinator::Plus as RawValue {
+                    collect_recursive_pattern_identifiers(
+                        heap,
+                        application.argument_raw(heap).into(),
+                        bound_identifiers,
+                    );
+                    return;
+                }
+            }
+
+            collect_recursive_pattern_identifiers(
+                heap,
+                application.argument_raw(heap).into(),
+                bound_identifiers,
+            );
+            let function = application.function_raw(heap).into();
+            if constructor_template_value(heap, function).is_none() {
+                collect_recursive_pattern_identifiers(heap, function, bound_identifiers);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Lowers one committed `Tag::LetRec` body through the current Miranda-shaped active subset.
-/// This exists so codegen owns the first `transletrec` lowering slice over already committed simple-identifier definition groups.
-/// The invariant is that singleton groups lower through `Y` with `abstr`, while multi-definition simple-id groups lower through `abstrlist` over matching lhs/rhs order.
+/// This exists so codegen owns the active `transletrec` lowering slice over committed recursive
+/// definition groups, including Miranda's private-carrier projection strategy for non-identifier
+/// lhs definitions. The invariant is that singleton simple-id groups lower through `Y` with
+/// `abstr`, while broader groups lower through `abstrlist` over the Miranda-shaped lhs/rhs order.
 fn lower_letrec_value(heap: &mut Heap, letrec_value: Value) -> Value {
     let letrec_raw: RawValue = letrec_value.into();
     let mut definitions: Value = heap[letrec_raw].head.into();
@@ -361,9 +447,34 @@ fn lower_letrec_value(heap: &mut Heap, letrec_value: Value) -> Value {
     while RawValue::from(definitions) >= ATOM_LIMIT && heap[RawValue::from(definitions)].tag == Tag::Cons {
         let definitions_ref = RawValue::from(definitions);
         let definition = DefinitionRef::from_ref(heap[definitions_ref].head);
-        lhs = heap.cons_ref(definition.lhs_value(heap), lhs);
+        let lhs_value = definition.lhs_value(heap);
+        let lhs_raw: RawValue = lhs_value.into();
         let lowered_rhs = lower_codegen_value(heap, definition.body_value(heap));
-        rhs = heap.cons_ref(lowered_rhs, rhs);
+
+        if lhs_raw >= ATOM_LIMIT && heap[lhs_raw].tag == Tag::Id {
+            lhs = heap.cons_ref(lhs_value, lhs);
+            rhs = heap.cons_ref(lowered_rhs, rhs);
+        } else {
+            let recursive_carrier = match heap.make_private_symbol_ref(Combinator::Undef.into()) {
+                Value::Reference(reference) => Value::from(reference),
+                _ => unreachable!("make_private_symbol_ref should return a heap reference"),
+            };
+            lhs = heap.cons_ref(recursive_carrier, lhs);
+            rhs = heap.cons_ref(lowered_rhs, rhs);
+
+            let mut bound_identifiers = Vec::new();
+            collect_recursive_pattern_identifiers(heap, lhs_value, &mut bound_identifiers);
+            for (index, identifier) in bound_identifiers.into_iter().enumerate() {
+                lhs = heap.cons_ref(identifier.into(), lhs);
+                let projection = heap.apply2(
+                    Combinator::Subscript.into(),
+                    Value::Data(index as RawValue),
+                    recursive_carrier,
+                );
+                rhs = heap.cons_ref(projection, rhs);
+            }
+        }
+
         definitions = heap[definitions_ref].tail.into();
     }
 

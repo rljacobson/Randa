@@ -206,12 +206,11 @@ mod tests {
             TypeExprRef::new(heap.apply2(Type::Arrow.into(), typevar.value(), Type::Char.into()));
 
         assert_eq!(typevar.type_variable_ordinal(&heap), Some(2));
-        assert_eq!(
+        assert!(
             arrow
                 .arrow_result_type(&heap)
                 .expect("expected arrow result type")
-                .is_builtin_type(Type::Char),
-            true
+                .is_builtin_type(Type::Char)
         );
     }
 

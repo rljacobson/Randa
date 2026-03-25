@@ -11,11 +11,16 @@ AST nodes.
 pub(crate) mod bytecode;
 pub mod errors;
 mod lexer;
-// This clippy lint allow is needed because it triggers on generated skeleton code and thus
-// can't be addressed by fixes in `parser.y`. Since this can hide genuine issues in future edits to
-// `parser.y`, we should periodically disable this allow to check that warnings are only baseline,
+// These clippy lint allows are needed because they trigger on generated parser code and thus
+// can't be addressed by fixes in `parser.y`. Since they can hide genuine issues in future edits to
+// `parser.y`, we should periodically disable these allows to check that warnings are only baseline,
 // not real problems in new code.
-#[allow(clippy::clone_on_copy)]
+#[allow(
+    clippy::clone_on_copy,
+    clippy::needless_borrow,
+    clippy::obfuscated_if_else,
+    clippy::useless_conversion,
+)]
 pub(crate) mod parser;
 mod parser_activation;
 mod parser_session;

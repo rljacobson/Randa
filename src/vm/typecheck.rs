@@ -255,6 +255,7 @@ pub(super) fn run_partial_typecheck(
 /// top-level forms. The invariant is that constructor misuse, canonical successor-pattern
 /// recursion, malformed arithmetic forms, and invalid application shapes are diagnosed before
 /// generic undefined-name reporting.
+#[allow(clippy::too_many_arguments)]
 fn collect_formal_pattern_issues(
     heap: &mut Heap,
     expression: Value,
@@ -338,6 +339,7 @@ fn collect_formal_pattern_issues(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn collect_formal_pattern_issues_in_pattern(
     heap: &mut Heap,
     pattern: Value,

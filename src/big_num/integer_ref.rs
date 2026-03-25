@@ -952,7 +952,7 @@ mod tests {
         let min_exact = IntegerRef::from_i64(&mut heap, -(1i64 << 60) + 1);
         let positive_saturating = IntegerRef::decode_int_x_bytecode(&mut heap, &[0, 0, 0, 0, 1]);
         let negative_saturating =
-            IntegerRef::decode_int_x_bytecode(&mut heap, &[(SIGN_BIT_MASK as isize), 0, 0, 0, 1]);
+            IntegerRef::decode_int_x_bytecode(&mut heap, &[SIGN_BIT_MASK, 0, 0, 0, 1]);
 
         assert_eq!(max_exact.to_i64_lossy(&heap), (1i64 << 60) - 1);
         assert_eq!(min_exact.to_i64_lossy(&heap), -(1i64 << 60) + 1);
