@@ -8,6 +8,7 @@ use crate::data::api::{
     ApNodeRef, DataPair, DefinitionRef, FreeFormalBindingRef, HeapObjectProxy,
     IdentifierValueTypeData, IdentifierValueTypeKind, IdentifierValueTypeRef, TypeExprRef,
 };
+use crate::data::ATOM_LIMIT;
 use crate::vm::load::LoadScriptForm;
 use std::path::PathBuf;
 
@@ -581,6 +582,17 @@ fn load_file_accepts_declared_infix_constructor_application_in_formal() {
         vm.parser_diagnostics
     );
     assert!(vm.undefined_names.is_empty());
+
+    let first = vm
+        .heap
+        .get_identifier("first")
+        .expect("expected first identifier to exist");
+    let lowered = first
+        .get_value(&vm.heap)
+        .expect("expected first definition value to exist")
+        .get_ref();
+    assert_ne!(lowered, RawValue::from(Combinator::Undef));
+    assert_ne!(vm.heap[lowered].tag, Tag::Lambda);
 }
 
 #[test]
@@ -604,6 +616,17 @@ fn load_file_accepts_unparenthesized_declared_infix_constructor_application_in_f
         vm.parser_diagnostics
     );
     assert!(vm.undefined_names.is_empty());
+
+    let first = vm
+        .heap
+        .get_identifier("first")
+        .expect("expected first identifier to exist");
+    let lowered = first
+        .get_value(&vm.heap)
+        .expect("expected first definition value to exist")
+        .get_ref();
+    assert_ne!(lowered, RawValue::from(Combinator::Undef));
+    assert_ne!(vm.heap[lowered].tag, Tag::Lambda);
 }
 
 #[test]
@@ -623,6 +646,19 @@ fn load_file_accepts_ordinary_multi_argument_function_form() {
         vm.parser_diagnostics
     );
     assert!(vm.undefined_names.is_empty());
+
+    let id = vm
+        .heap
+        .get_identifier("id")
+        .expect("expected id identifier to exist");
+    let id_value = id
+        .get_value(&vm.heap)
+        .expect("expected id definition value to exist");
+    let lowered = id_value.get_ref();
+    assert_ne!(lowered, RawValue::from(Combinator::Undef));
+    if lowered >= ATOM_LIMIT {
+        assert_ne!(vm.heap[lowered].tag, Tag::Lambda);
+    }
 }
 
 #[test]
@@ -752,6 +788,86 @@ fn load_file_reports_unparenthesized_infix_name_value_head_before_generic_undefi
 
     let source_path = unique_test_path("unparenthesized_infix_name_value_head_precedes_undefined_name.m");
     std::fs::write(&source_path, "bad g x $merge y = missing\n")
+        .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::ValueHeadApplicationsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
+fn load_file_rejects_unparenthesized_infix_name_form_with_multi_argument_value_head_left_operand() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("unparenthesized_infix_name_multi_argument_value_head_left_operand.m");
+    std::fs::write(&source_path, "bad g h x $merge y = x\n")
+        .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::ValueHeadApplicationsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
+fn load_file_reports_unparenthesized_infix_name_multi_argument_value_head_before_generic_undefined_name() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("unparenthesized_infix_name_multi_argument_value_head_precedes_undefined_name.m");
+    std::fs::write(&source_path, "bad g h x $merge y = missing\n")
+        .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::ValueHeadApplicationsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
+fn load_file_rejects_unparenthesized_infix_name_form_with_repeated_name_headed_left_operand() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("unparenthesized_infix_name_repeated_head_left_operand.m");
+    std::fs::write(&source_path, "bad x (x y) $merge z = z\n")
+        .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::ValueHeadApplicationsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
+fn load_file_reports_unparenthesized_infix_name_repeated_head_before_generic_undefined_name() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("unparenthesized_infix_name_repeated_head_precedes_undefined_name.m");
+    std::fs::write(&source_path, "bad x (x y) $merge z = missing\n")
         .expect("failed to write source test file");
     let source_path_str = source_path.to_string_lossy().to_string();
 
@@ -3133,6 +3249,88 @@ fn typecheck_phase_rejects_infix_name_application_in_value_head_bucket() {
         result,
         Err(TypecheckError::ValueHeadApplicationsInFormals { count: 1 })
     ));
+}
+
+#[test]
+fn typecheck_phase_infix_name_value_head_left_operand_still_binds_interior_names() {
+    let mut vm = VM::new_for_tests();
+
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("infix_value_head_left_operand_binding.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        ConsList::EMPTY,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+
+    let f = vm.heap.make_empty_identifier("f");
+    let merge = vm.heap.make_empty_identifier("merge");
+    let g = vm.heap.make_empty_identifier("g");
+    let x = vm.heap.make_empty_identifier("x");
+    let y = vm.heap.make_empty_identifier("y");
+    let left_operand = vm.heap.apply_ref(g.into(), x.into());
+    let malformed_pattern = vm.heap.apply2(merge.into(), left_operand, y.into());
+    let xy_body = vm.heap.pair_ref(x.into(), y.into());
+    let body = vm.heap.pair_ref(g.into(), xy_body);
+    let lambda_body = vm.heap.lambda_ref(malformed_pattern.into(), body);
+    f.set_value_from_data(
+        &mut vm.heap,
+        IdentifierValueData::Arbitrary(lambda_body.into()),
+    );
+    current_file.push_item_onto_definienda(&mut vm.heap, f);
+
+    let inputs = typecheck::TypecheckBoundaryInputs::from_vm(&vm);
+    let result = typecheck::run_partial_typecheck(&mut vm.heap, inputs);
+
+    assert!(matches!(
+        &result.failure,
+        Some(TypecheckError::ValueHeadApplicationsInFormals { count: 1 })
+    ));
+    assert!(result.undefined_names.is_empty());
+}
+
+#[test]
+fn typecheck_phase_infix_name_repeated_head_left_operand_still_binds_interior_names() {
+    let mut vm = VM::new_for_tests();
+
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("infix_repeated_head_left_operand_binding.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        ConsList::EMPTY,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+
+    let f = vm.heap.make_empty_identifier("f");
+    let merge = vm.heap.make_empty_identifier("merge");
+    let x = vm.heap.make_empty_identifier("x");
+    let y = vm.heap.make_empty_identifier("y");
+    let z = vm.heap.make_empty_identifier("z");
+    let left_operand = vm.heap.apply_ref(x.into(), y.into());
+    let malformed_pattern = vm.heap.apply2(merge.into(), left_operand, z.into());
+    let yz_body = vm.heap.pair_ref(y.into(), z.into());
+    let body = vm.heap.pair_ref(x.into(), yz_body);
+    let lambda_body = vm.heap.lambda_ref(malformed_pattern.into(), body);
+    f.set_value_from_data(
+        &mut vm.heap,
+        IdentifierValueData::Arbitrary(lambda_body.into()),
+    );
+    current_file.push_item_onto_definienda(&mut vm.heap, f);
+
+    let inputs = typecheck::TypecheckBoundaryInputs::from_vm(&vm);
+    let result = typecheck::run_partial_typecheck(&mut vm.heap, inputs);
+
+    assert!(matches!(
+        &result.failure,
+        Some(TypecheckError::ValueHeadApplicationsInFormals { count: 1 })
+    ));
+    assert!(result.undefined_names.is_empty());
 }
 
 #[test]

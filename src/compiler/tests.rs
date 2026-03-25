@@ -45,6 +45,7 @@ fn parser_parses_top_level_function_form_and_lowers_to_lambdas() {
     };
     assert_eq!(payload.definitions.len(), 1);
     let definition = &payload.definitions[0];
+    assert_eq!(definition.identifier.get_name(&heap), "id");
     let outer_lambda_raw = definition.body;
     assert_eq!(heap[outer_lambda_raw].tag, Tag::Lambda);
     let inner_lambda_raw = heap[outer_lambda_raw].tail;
@@ -315,6 +316,7 @@ fn parser_parses_unparenthesized_top_level_infix_name_form() {
         panic!("expected top-level parse success");
     };
     assert_eq!(payload.definitions.len(), 1);
+    assert_eq!(payload.definitions[0].identifier.get_name(&heap), "bad");
 
     let lambda_raw = payload.definitions[0].body;
     assert_eq!(heap[lambda_raw].tag, Tag::Lambda);
@@ -401,6 +403,62 @@ fn parser_parses_unparenthesized_infix_name_form_with_non_identifier_left_operan
     assert_eq!(heap[left_operand_raw].tag, Tag::Ap);
     let malformed_head_raw = heap[left_operand_raw].head;
     assert_eq!(heap[malformed_head_raw].tag, Tag::Cons);
+}
+
+#[test]
+fn parser_parses_unparenthesized_infix_name_form_with_multi_argument_value_head_left_operand() {
+    let (heap, result) = run_parser(
+        "unparenthesized_infix_name_multi_argument_value_head_left_operand.m",
+        "bad g h x $merge y = x\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success");
+    };
+    assert_eq!(payload.definitions.len(), 1);
+
+    let outer_lambda_raw = payload.definitions[0].body;
+    assert_eq!(heap[outer_lambda_raw].tag, Tag::Lambda);
+    let infix_pattern_raw = heap[outer_lambda_raw].head;
+    assert_eq!(heap[infix_pattern_raw].tag, Tag::Ap);
+    let infix_operator_application_raw = heap[infix_pattern_raw].head;
+    assert_eq!(heap[infix_operator_application_raw].tag, Tag::Ap);
+
+    let left_operand_raw = heap[infix_operator_application_raw].tail;
+    assert_eq!(heap[left_operand_raw].tag, Tag::Ap);
+    let nested_left_operand_raw = heap[left_operand_raw].head;
+    assert_eq!(heap[nested_left_operand_raw].tag, Tag::Ap);
+    let head_identifier = IdentifierRecordRef::from_ref(heap[nested_left_operand_raw].head);
+    assert_eq!(head_identifier.get_name(&heap), "g");
+}
+
+#[test]
+fn parser_strips_repeated_name_wrapper_from_unparenthesized_infix_left_operand_application_head() {
+    let (heap, result) = run_parser(
+        "unparenthesized_infix_name_repeated_head_left_operand.m",
+        "bad x (x y) $merge z = z\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success");
+    };
+    assert_eq!(payload.definitions.len(), 1);
+
+    let outer_lambda_raw = payload.definitions[0].body;
+    assert_eq!(heap[outer_lambda_raw].tag, Tag::Lambda);
+    let infix_pattern_raw = heap[outer_lambda_raw].head;
+    assert_eq!(heap[infix_pattern_raw].tag, Tag::Ap);
+    let infix_operator_application_raw = heap[infix_pattern_raw].head;
+    assert_eq!(heap[infix_operator_application_raw].tag, Tag::Ap);
+
+    let left_operand_raw = heap[infix_operator_application_raw].tail;
+    assert_eq!(heap[left_operand_raw].tag, Tag::Ap);
+    let repeated_head_application_raw = heap[left_operand_raw].tail;
+    assert_eq!(heap[repeated_head_application_raw].tag, Tag::Ap);
+    let repeated_head_raw = heap[repeated_head_application_raw].head;
+    assert_eq!(heap[repeated_head_raw].tag, Tag::Id);
+    let repeated_head_identifier = IdentifierRecordRef::from_ref(repeated_head_raw);
+    assert_eq!(repeated_head_identifier.get_name(&heap), "x");
 }
 
 #[test]

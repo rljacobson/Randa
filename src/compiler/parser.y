@@ -492,25 +492,39 @@ include_export_item:
     ;
 
 top_level_definition_item:
-    Name top_level_definition_anchor Equal exp directive_terminators {
-        let identifier = IdentifierRecordRef::from_ref($1.into());
-        self.definition_payloads.push(ParserDefinitionPayload {
-          identifier,
-          body: $4.into(),
-          anchor: FileInfoRef::from_ref($2.into()),
-        });
-        self.last_identifier = identifier.get_ref();
-        $$ = NIL;
+    top_level_definition_lhs top_level_definition_anchor Equal exp directive_terminators {
+        let anchor = FileInfoRef::from_ref($2.into());
+        let (lowered_lhs, lowered_body) = self.heap.lower_function_form_lambdas($1, $4);
+        let lowered_identifier_ref: RawValue = lowered_lhs.into();
+        if lowered_identifier_ref < ATOM_LIMIT || self.heap[lowered_identifier_ref].tag != Tag::Id {
+          self.syntax("illegal top-level definition lhs\n");
+          $$ = NIL;
+        } else {
+          let identifier = IdentifierRecordRef::from_ref(lowered_identifier_ref);
+          self.definition_payloads.push(ParserDefinitionPayload {
+            identifier,
+            body: lowered_body.into(),
+            anchor,
+          });
+          self.last_identifier = identifier.get_ref();
+          $$ = NIL;
+        }
       }
-    | Name top_level_definition_parameters top_level_definition_anchor Equal exp directive_terminators {
-        let identifier = IdentifierRecordRef::from_ref($1.into());
-        let anchor = FileInfoRef::from_ref($3.into());
-        let mut body = $5;
+    ;
+
+top_level_definition_lhs:
+    Name { $$ = $1; }
+    | Name top_level_definition_parameters {
         let mut parameters: RawValue = $2.into();
-        if parameters != NIL_RAW {
-          let trailing_parameters = self.heap[parameters].tail;
-          if trailing_parameters != NIL_RAW {
-            let infix_parameter = Value::from(self.heap[parameters].head);
+        let mut source_order_parameters = Vec::new();
+        while parameters != NIL_RAW {
+          source_order_parameters.push(Value::from(self.heap[parameters].head));
+          parameters = self.heap[parameters].tail;
+        }
+        source_order_parameters.reverse();
+
+        if source_order_parameters.len() > 1 {
+          if let Some(infix_parameter) = source_order_parameters.last().copied() {
             let infix_parameter_ref = RawValue::from(infix_parameter);
             if infix_parameter_ref >= ATOM_LIMIT && self.heap[infix_parameter_ref].tag == Tag::Ap {
               let outer_application = ApNodeRef::from_ref(infix_parameter_ref);
@@ -519,26 +533,24 @@ top_level_definition_item:
                 let left = Value::from(operator_application.argument_raw(&self.heap));
                 let right = Value::from(outer_application.argument_raw(&self.heap));
 
-                let previous_parameter = Value::from(self.heap[trailing_parameters].head);
-                let combined_left = self.heap.apply_ref(self.top_level_application_head(previous_parameter), left);
+                let mut combined_left = source_order_parameters[0];
+                for argument in source_order_parameters[1..source_order_parameters.len() - 1].iter().copied() {
+                  combined_left = self.heap.apply_ref(self.top_level_application_head(combined_left), argument);
+                }
+                combined_left = self.heap.apply_ref(self.top_level_application_head(combined_left), left);
                 let combined_pattern = self.heap.apply2(operator, combined_left, right);
-                self.heap[parameters].head = combined_pattern.into();
-                self.heap[parameters].tail = self.heap[trailing_parameters].tail;
+                source_order_parameters.truncate(0);
+                source_order_parameters.push(combined_pattern);
               }
             }
           }
         }
-        while parameters != NIL_RAW {
-          body = self.heap.lambda_ref(self.heap[parameters].head.into(), body);
-          parameters = self.heap[parameters].tail;
+
+        let mut lhs = $1;
+        for parameter in source_order_parameters {
+          lhs = self.heap.apply_ref(lhs, parameter);
         }
-        self.definition_payloads.push(ParserDefinitionPayload {
-          identifier,
-          body: body.into(),
-          anchor,
-        });
-        self.last_identifier = identifier.get_ref();
-        $$ = NIL;
+        $$ = lhs;
       }
     ;
 
