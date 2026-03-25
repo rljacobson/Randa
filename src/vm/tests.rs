@@ -1067,6 +1067,89 @@ fn load_file_repeated_name_application_head_still_reaches_value_head_bucket() {
 }
 
 #[test]
+fn load_file_accepts_unparenthesized_declared_constructor_application_in_formal() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("unparenthesized_constructor_application_formal.m");
+    std::fs::write(
+        &source_path,
+        "maybe * ::= Nothing | Just *\nfromJust Just x = x\n",
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(
+        result.is_ok(),
+        "result={result:?} diagnostics={:?}",
+        vm.parser_diagnostics
+    );
+    assert!(vm.undefined_names.is_empty());
+}
+
+#[test]
+fn load_file_rejects_unparenthesized_value_head_application_chain_in_formal() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("unparenthesized_value_head_application_chain_formal.m");
+    std::fs::write(&source_path, "bad (g x) y = y\n")
+        .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::ValueHeadApplicationsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
+fn load_file_rejects_unparenthesized_repeated_name_head_application_chain_in_formal() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("unparenthesized_repeated_name_head_application_chain_formal.m");
+    std::fs::write(&source_path, "bad x x y = y\n")
+        .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::ValueHeadApplicationsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
+fn load_file_rejects_unparenthesized_non_identifier_head_application_chain_in_formal() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("unparenthesized_non_identifier_head_application_chain_formal.m");
+    std::fs::write(&source_path, "bad (x:xs) y = y\n")
+        .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::NonIdentifierApplicationHeadsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
 fn load_file_arithmetic_head_application_reaches_malformed_plus_application_error() {
     let mut vm = VM::new_for_tests();
     vm.initializing = false;
@@ -3593,6 +3676,130 @@ fn typecheck_phase_repeated_name_application_head_still_binds_argument_names() {
     assert!(matches!(
         &result.failure,
         Some(TypecheckError::ValueHeadApplicationsInFormals { count: 1 })
+    ));
+    assert!(result.undefined_names.is_empty());
+}
+
+#[test]
+fn typecheck_phase_unparenthesized_value_head_application_chain_still_binds_all_names() {
+    let mut vm = VM::new_for_tests();
+
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("unparenthesized_value_head_application_chain_binding.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        ConsList::EMPTY,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+
+    let f = vm.heap.make_empty_identifier("f");
+    let g = vm.heap.make_empty_identifier("g");
+    let x = vm.heap.make_empty_identifier("x");
+    let y = vm.heap.make_empty_identifier("y");
+    let inner_application = vm.heap.apply_ref(g.into(), x.into());
+    let malformed_pattern = vm.heap.apply_ref(inner_application, y.into());
+    let xy_body = vm.heap.pair_ref(x.into(), y.into());
+    let body = vm.heap.pair_ref(g.into(), xy_body);
+    let lambda_body = vm.heap.lambda_ref(malformed_pattern, body);
+    f.set_value_from_data(
+        &mut vm.heap,
+        IdentifierValueData::Arbitrary(lambda_body),
+    );
+    current_file.push_item_onto_definienda(&mut vm.heap, f);
+
+    let inputs = typecheck::TypecheckBoundaryInputs::from_vm(&vm);
+    let result = typecheck::run_partial_typecheck(&mut vm.heap, inputs);
+
+    assert!(matches!(
+        &result.failure,
+        Some(TypecheckError::ValueHeadApplicationsInFormals { count: 1 })
+    ));
+    assert!(result.undefined_names.is_empty());
+}
+
+#[test]
+fn typecheck_phase_unparenthesized_repeated_name_application_chain_still_binds_argument_name() {
+    let mut vm = VM::new_for_tests();
+
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("unparenthesized_repeated_name_application_chain_binding.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        ConsList::EMPTY,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+
+    let f = vm.heap.make_empty_identifier("f");
+    let x = vm.heap.make_empty_identifier("x");
+    let y = vm.heap.make_empty_identifier("y");
+    let repeated_head = vm.heap.cons_ref(Token::Constant.into(), x.into());
+    let malformed_pattern = vm.heap.apply_ref(repeated_head, y.into());
+    let body = vm.heap.pair_ref(x.into(), y.into());
+    let lambda_body = vm.heap.lambda_ref(malformed_pattern, body);
+    f.set_value_from_data(
+        &mut vm.heap,
+        IdentifierValueData::Arbitrary(lambda_body),
+    );
+    current_file.push_item_onto_definienda(&mut vm.heap, f);
+
+    let outer_lambda = vm.heap.lambda_ref(x.into(), lambda_body);
+    f.set_value_from_data(
+        &mut vm.heap,
+        IdentifierValueData::Arbitrary(outer_lambda),
+    );
+
+    let inputs = typecheck::TypecheckBoundaryInputs::from_vm(&vm);
+    let result = typecheck::run_partial_typecheck(&mut vm.heap, inputs);
+
+    assert!(matches!(
+        &result.failure,
+        Some(TypecheckError::ValueHeadApplicationsInFormals { count: 1 })
+    ));
+    assert!(result.undefined_names.is_empty());
+}
+
+#[test]
+fn typecheck_phase_unparenthesized_non_identifier_application_chain_still_binds_interior_names() {
+    let mut vm = VM::new_for_tests();
+
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("unparenthesized_non_identifier_application_chain_binding.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        ConsList::EMPTY,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+
+    let f = vm.heap.make_empty_identifier("f");
+    let x = vm.heap.make_empty_identifier("x");
+    let xs = vm.heap.make_empty_identifier("xs");
+    let y = vm.heap.make_empty_identifier("y");
+    let malformed_head = vm.heap.cons_ref(x.into(), xs.into());
+    let malformed_pattern = vm.heap.apply_ref(malformed_head, y.into());
+    let xs_y_body = vm.heap.pair_ref(xs.into(), y.into());
+    let body = vm.heap.pair_ref(x.into(), xs_y_body);
+    let lambda_body = vm.heap.lambda_ref(malformed_pattern, body);
+    f.set_value_from_data(
+        &mut vm.heap,
+        IdentifierValueData::Arbitrary(lambda_body),
+    );
+    current_file.push_item_onto_definienda(&mut vm.heap, f);
+
+    let inputs = typecheck::TypecheckBoundaryInputs::from_vm(&vm);
+    let result = typecheck::run_partial_typecheck(&mut vm.heap, inputs);
+
+    assert!(matches!(
+        &result.failure,
+        Some(TypecheckError::NonIdentifierApplicationHeadsInFormals { count: 1 })
     ));
     assert!(result.undefined_names.is_empty());
 }

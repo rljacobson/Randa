@@ -558,6 +558,96 @@ fn parser_strips_repeated_name_wrapper_from_application_head() {
 }
 
 #[test]
+fn parser_parses_unparenthesized_constructor_application_formal_chain() {
+    let (heap, result) = run_parser(
+        "unparenthesized_constructor_application_formal_chain.m",
+        "maybe * ::= Nothing | Just *\nfromJust Just x = x\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success");
+    };
+    assert_eq!(payload.definitions.len(), 1);
+
+    let lambda_raw = payload.definitions[0].body;
+    assert_eq!(heap[lambda_raw].tag, Tag::Lambda);
+    let pattern_raw = heap[lambda_raw].head;
+    assert_eq!(heap[pattern_raw].tag, Tag::Ap);
+    let head_raw = heap[pattern_raw].head;
+    assert_eq!(heap[head_raw].tag, Tag::Id);
+    let head_identifier = IdentifierRecordRef::from_ref(head_raw);
+    assert_eq!(head_identifier.get_name(&heap), "Just");
+    let argument_identifier = IdentifierRecordRef::from_ref(heap[pattern_raw].tail);
+    assert_eq!(argument_identifier.get_name(&heap), "x");
+}
+
+#[test]
+fn parser_parses_unparenthesized_value_head_application_chain_after_parenthesized_head() {
+    let (heap, result) = run_parser(
+        "unparenthesized_value_head_application_chain.m",
+        "bad (g x) y = y\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success");
+    };
+    assert_eq!(payload.definitions.len(), 1);
+
+    let lambda_raw = payload.definitions[0].body;
+    assert_eq!(heap[lambda_raw].tag, Tag::Lambda);
+    let pattern_raw = heap[lambda_raw].head;
+    assert_eq!(heap[pattern_raw].tag, Tag::Ap);
+    let inner_application_raw = heap[pattern_raw].head;
+    assert_eq!(heap[inner_application_raw].tag, Tag::Ap);
+    let head_identifier = IdentifierRecordRef::from_ref(heap[inner_application_raw].head);
+    assert_eq!(head_identifier.get_name(&heap), "g");
+}
+
+#[test]
+fn parser_parses_unparenthesized_repeated_name_head_application_chain() {
+    let (heap, result) = run_parser(
+        "unparenthesized_repeated_name_head_application_chain.m",
+        "bad x x y = y\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success");
+    };
+    assert_eq!(payload.definitions.len(), 1);
+
+    let outer_lambda_raw = payload.definitions[0].body;
+    assert_eq!(heap[outer_lambda_raw].tag, Tag::Lambda);
+    let inner_lambda_raw = heap[outer_lambda_raw].tail;
+    assert_eq!(heap[inner_lambda_raw].tag, Tag::Lambda);
+    let repeated_head_application_raw = heap[inner_lambda_raw].head;
+    assert_eq!(heap[repeated_head_application_raw].tag, Tag::Ap);
+    let head_raw = heap[repeated_head_application_raw].head;
+    assert_eq!(heap[head_raw].tag, Tag::Id);
+    let head_identifier = IdentifierRecordRef::from_ref(head_raw);
+    assert_eq!(head_identifier.get_name(&heap), "x");
+}
+
+#[test]
+fn parser_parses_unparenthesized_non_identifier_head_application_chain() {
+    let (heap, result) = run_parser(
+        "unparenthesized_non_identifier_head_application_chain.m",
+        "bad (x:xs) y = y\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success");
+    };
+    assert_eq!(payload.definitions.len(), 1);
+
+    let lambda_raw = payload.definitions[0].body;
+    assert_eq!(heap[lambda_raw].tag, Tag::Lambda);
+    let pattern_raw = heap[lambda_raw].head;
+    assert_eq!(heap[pattern_raw].tag, Tag::Ap);
+    let malformed_head_raw = heap[pattern_raw].head;
+    assert_eq!(heap[malformed_head_raw].tag, Tag::Cons);
+}
+
+#[test]
 fn parser_records_constructor_field_metadata_in_payloads() {
     let (_heap, result) = run_parser(
         "constructor_field_payloads.m",

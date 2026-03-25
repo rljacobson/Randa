@@ -61,6 +61,7 @@ use crate::{
         },
         ATOM_LIMIT,
         combinator::Combinator,
+        heap::is_capitalized,
         Heap,
         tag::Tag,
         Type,
@@ -546,8 +547,52 @@ top_level_definition_lhs:
           }
         }
 
-        let mut lhs = $1;
+        let mut grouped_parameters = Vec::new();
         for parameter in source_order_parameters {
+          let should_absorb = grouped_parameters.last().copied().is_some_and(|head| {
+            let head_ref = RawValue::from(head);
+            let head_can_absorb = if head_ref < ATOM_LIMIT || self.heap[head_ref].tag != Tag::Id {
+              true
+            } else {
+              is_capitalized(IdentifierRecordRef::from_ref(head_ref).get_name(&self.heap).as_str())
+            };
+
+            let parameter_ref = RawValue::from(parameter);
+            let parameter_is_application_atom = if parameter_ref < ATOM_LIMIT {
+              true
+            } else {
+              match self.heap[parameter_ref].tag {
+                Tag::Id | Tag::Cons | Tag::Pair | Tag::TCons => true,
+                Tag::Ap => {
+                  let application = ApNodeRef::from_ref(parameter_ref);
+                  application.function_application(&self.heap).is_none()
+                    || {
+                      let function_ref = application.function_raw(&self.heap);
+                      function_ref < ATOM_LIMIT
+                        || match self.heap[function_ref].tag {
+                          Tag::Id | Tag::Cons | Tag::Pair | Tag::TCons => true,
+                          Tag::Ap => ApNodeRef::from_ref(function_ref).function_application(&self.heap).is_none(),
+                          _ => false,
+                        }
+                    }
+                }
+                _ => false,
+              }
+            };
+
+            head_can_absorb && parameter_is_application_atom
+          });
+
+          if should_absorb {
+            let head = grouped_parameters.pop().unwrap();
+            grouped_parameters.push(self.heap.apply_ref(self.top_level_application_head(head), parameter));
+          } else {
+            grouped_parameters.push(parameter);
+          }
+        }
+
+        let mut lhs = $1;
+        for parameter in grouped_parameters {
           lhs = self.heap.apply_ref(lhs, parameter);
         }
         $$ = lhs;
