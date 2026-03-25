@@ -1856,7 +1856,7 @@ fn load_file_runs_include_export_directive_pipeline_and_commits_exports() {
     vm.initializing = false;
 
     let source_path = unique_test_path("include_export_directive_export_only.m");
-    std::fs::write(&source_path, "%export foo\n").expect("failed to write source test file");
+    std::fs::write(&source_path, "foo = 1\n%export foo\n").expect("failed to write source test file");
     let source_path_str = source_path.to_string_lossy().to_string();
 
     let result = vm.load_file(&source_path_str);
@@ -1949,12 +1949,36 @@ fn load_file_include_materialization_failure_leaves_no_authoritative_commit() {
 }
 
 #[test]
+fn load_file_export_of_missing_explicit_name_fails_before_commit() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("export_missing_explicit_name.m");
+    std::fs::write(&source_path, "%export foo\nbar = 1\n")
+        .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::ExportValidation(
+            ExportValidationError::UndefinedExportedIdentifier { name }
+        )) if name == "foo"
+    ));
+    assert_eq!(vm.exported_identifiers, NIL);
+    assert_eq!(vm.export_paths, NIL);
+    assert_eq!(vm.export_embargoes, NIL);
+    assert!(!vm.loading);
+}
+
+#[test]
 fn load_file_include_and_exportfile_success_commits_after_validation() {
     let mut vm = VM::new_for_tests();
     vm.initializing = false;
 
     let include_path = unique_test_path("committed_include_target.m");
-    std::fs::write(&include_path, "1").expect("failed to write include source test file");
+    std::fs::write(&include_path, "foo = 1\n").expect("failed to write include source test file");
     let include_path_str = include_path.to_string_lossy().to_string();
 
     let source_path = unique_test_path("directive_commit_success.m");
@@ -1994,6 +2018,75 @@ fn load_file_include_and_exportfile_success_commits_after_validation() {
         include_path_str
     );
     assert!(!vm.loading);
+}
+
+#[test]
+fn load_file_export_closure_adds_synonym_type_dependency() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("export_closure_synonym_dependency.m");
+    std::fs::write(
+        &source_path,
+        "thing == num\nid :: thing -> thing\nid x = x\n%export id\n",
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+    let exported = ConsList::<IdentifierRecordRef>::from_ref(vm.exported_identifiers.into());
+    let id = vm.heap.get_identifier("id").expect("expected id identifier");
+    let thing = vm.heap.get_identifier("thing").expect("expected thing identifier");
+    assert!(exported.contains(&vm.heap, id));
+    assert!(exported.contains(&vm.heap, thing));
+}
+
+#[test]
+fn load_file_export_closure_adds_algebraic_type_dependency_from_exported_value() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("export_closure_algebraic_value_dependency.m");
+    std::fs::write(
+        &source_path,
+        "maybe ::= Just num | Nothing\nunwrap :: maybe -> num\nunwrap x = 0\n%export unwrap\n",
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+    let exported = ConsList::<IdentifierRecordRef>::from_ref(vm.exported_identifiers.into());
+    let unwrap = vm.heap.get_identifier("unwrap").expect("expected unwrap identifier");
+    let maybe = vm.heap.get_identifier("maybe").expect("expected maybe type identifier");
+    assert!(exported.contains(&vm.heap, unwrap));
+    assert!(exported.contains(&vm.heap, maybe));
+}
+
+#[test]
+fn load_file_export_closure_adds_abstract_basis_dependency() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("export_closure_abstract_basis_dependency.m");
+    std::fs::write(
+        &source_path,
+        "base == num\nabstype thing with showthing :: base\nthing == base\nshowthing = 0\n%export thing\n",
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+    let exported = ConsList::<IdentifierRecordRef>::from_ref(vm.exported_identifiers.into());
+    let thing = vm.heap.get_identifier("thing").expect("expected thing identifier");
+    let base = vm.heap.get_identifier("base").expect("expected base identifier");
+    assert!(exported.contains(&vm.heap, thing));
+    assert!(exported.contains(&vm.heap, base));
 }
 
 #[test]
@@ -3959,6 +4052,16 @@ fn export_closure_phase_clears_exports_when_undefined_names_present() {
 fn export_closure_phase_keeps_exports_when_no_undefined_names() {
     let mut vm = VM::new_for_tests();
     vm.undefined_names = ConsList::EMPTY;
+    let exported_name = vm.heap.make_empty_identifier("exported_name");
+    let current_defs = ConsList::new(&mut vm.heap, exported_name);
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("exported_name.m").to_string_lossy().to_string(),
+        UNIX_EPOCH,
+        false,
+        current_defs,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
     let payload = export_payload(
         &mut vm,
         "exported_name.m",
@@ -3974,6 +4077,203 @@ fn export_closure_phase_keeps_exports_when_no_undefined_names() {
     assert!(result.is_ok());
     let committed = result.expect("expected committed export payload");
     assert_ne!(committed.exported_identifiers, NIL);
+}
+
+#[test]
+fn export_closure_phase_rejects_explicit_export_name_not_in_definienda() {
+    let mut vm = VM::new_for_tests();
+    vm.undefined_names = ConsList::EMPTY;
+    let current_name = vm.heap.make_empty_identifier("defined_here");
+    let current_defs = ConsList::new(&mut vm.heap, current_name);
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("defined_here.m").to_string_lossy().to_string(),
+        UNIX_EPOCH,
+        false,
+        current_defs,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+    let payload = export_payload(
+        &mut vm,
+        "defined_here.m",
+        1,
+        &["missing_export"],
+        &[],
+        false,
+        &[],
+    );
+
+    let result = vm.run_export_closure_phase_partial(Some(&payload), ConsList::EMPTY);
+
+    assert!(matches!(
+        result,
+        Err(ExportValidationError::UndefinedExportedIdentifier { name }) if name == "missing_export"
+    ));
+}
+
+#[test]
+fn export_closure_phase_accepts_explicit_export_name_from_materialized_include() {
+    let mut vm = VM::new_for_tests();
+    vm.undefined_names = ConsList::EMPTY;
+    let main_name = vm.heap.make_empty_identifier("main_name");
+    let current_defs = ConsList::new(&mut vm.heap, main_name);
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("main_export_driver.m").to_string_lossy().to_string(),
+        UNIX_EPOCH,
+        false,
+        current_defs,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+
+    let included_name = vm.heap.make_empty_identifier("included_name");
+    let include_defs = ConsList::new(&mut vm.heap, included_name);
+    let includee = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("included_export_target.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        include_defs,
+    );
+    let materialized_includees = ConsList::new(&mut vm.heap, includee);
+
+    let payload = export_payload(
+        &mut vm,
+        "main_export_driver.m",
+        1,
+        &["included_name"],
+        &[],
+        false,
+        &[],
+    );
+
+    let result = vm.run_export_closure_phase_partial(Some(&payload), materialized_includees);
+
+    let committed = result.expect("expected include-backed explicit export to succeed");
+    let exported = ConsList::<IdentifierRecordRef>::from_ref(committed.exported_identifiers.into())
+        .head(&vm.heap)
+        .expect("expected committed export id");
+    assert_eq!(vm.identifier_name(exported), "included_name");
+}
+
+#[test]
+fn export_closure_phase_deduplicates_explicit_and_path_expanded_exports() {
+    let mut vm = VM::new_for_tests();
+    vm.undefined_names = ConsList::EMPTY;
+    let current_name = vm.heap.make_empty_identifier("foo");
+    let current_defs = ConsList::new(&mut vm.heap, current_name);
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("duplicate_export_driver.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        current_defs,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+
+    let include_path = unique_test_path("duplicate_export_include.m");
+    let include_path_str = include_path.to_string_lossy().to_string();
+    let include_defs = ConsList::new(&mut vm.heap, current_name);
+    let includee = FileRecord::new(
+        &mut vm.heap,
+        include_path_str.clone(),
+        UNIX_EPOCH,
+        false,
+        include_defs,
+    );
+    let materialized_includees = ConsList::new(&mut vm.heap, includee);
+    let payload = export_payload(
+        &mut vm,
+        "duplicate_export_driver.m",
+        1,
+        &["foo"],
+        &[&include_path_str],
+        false,
+        &[],
+    );
+
+    let result = vm.run_export_closure_phase_partial(Some(&payload), materialized_includees);
+
+    let committed = result.expect("expected duplicate exports to collapse");
+    assert_eq!(
+        ConsList::<IdentifierRecordRef>::from_ref(committed.exported_identifiers.into())
+            .len(&vm.heap),
+        1
+    );
+}
+
+#[test]
+fn export_closure_phase_preserves_embargo_filtering_after_explicit_validation() {
+    let mut vm = VM::new_for_tests();
+    vm.undefined_names = ConsList::EMPTY;
+    let exported_name = vm.heap.make_empty_identifier("exported_name");
+    let current_defs = ConsList::new(&mut vm.heap, exported_name);
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("embargoed_export_driver.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        current_defs,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+    let payload = export_payload(
+        &mut vm,
+        "embargoed_export_driver.m",
+        1,
+        &["exported_name"],
+        &[],
+        false,
+        &["exported_name"],
+    );
+
+    let result = vm.run_export_closure_phase_partial(Some(&payload), ConsList::EMPTY);
+
+    let committed = result.expect("expected embargoed export path to succeed");
+    assert_eq!(committed.exported_identifiers, NIL);
+}
+
+#[test]
+fn export_closure_phase_clears_bereaved_risk_when_closed_export_keeps_required_typename() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("bereaved_risk_closed_export_ok.m");
+    std::fs::write(
+        &source_path,
+        "thing == num\nid :: thing -> thing\nid x = x\n%export id\n",
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+    assert!(!vm.unused_types);
+}
+
+#[test]
+fn export_closure_phase_sets_bereaved_risk_when_embargo_removes_required_typename() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("bereaved_risk_embargoed_typename.m");
+    std::fs::write(
+        &source_path,
+        "thing == num\nid :: thing -> thing\nid x = x\n%export id - thing\n",
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+    assert!(vm.unused_types);
 }
 
 #[test]

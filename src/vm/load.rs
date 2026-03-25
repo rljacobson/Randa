@@ -11,7 +11,7 @@ use crate::compiler::{
 use crate::compiler::{token::ParserLookahead, Token};
 use crate::data::api::{
     AlgebraicConstructorFieldParts, AlgebraicConstructorFieldRef,
-    AlgebraicConstructorMetadataParts, AlgebraicConstructorMetadataRef, ConsList,
+    AlgebraicConstructorMetadataParts, AlgebraicConstructorMetadataRef, ApNodeRef, ConsList,
     IdentifierValueTypeKind, TypeExprRef,
 };
 use std::io::Write;
@@ -737,13 +737,70 @@ impl VM {
         Ok(())
     }
 
+    /// Walks one active committed type-expression subtree and inserts referenced type identifiers into `dependencies`.
+    /// This exists so export closure uses one load-owned recursive dependency walk across datatype, synonym, algebraic-field, and abstract-basis type payloads.
+    /// The invariant is that only identifier roots whose datatype is `type` are inserted, while the existing active application/wrapper recursion shapes remain unchanged.
+    fn collect_export_type_dependencies_from_type_expr(
+        &mut self,
+        type_expr: TypeExprRef,
+        dependencies: &mut ConsList<IdentifierRecordRef>,
+    ) {
+        let raw_reference: RawValue = type_expr.value().into();
+        if raw_reference < ATOM_LIMIT {
+            return;
+        }
+
+        match self.heap[raw_reference].tag {
+            Tag::Id => {
+                let identifier = IdentifierRecordRef::from_ref(raw_reference);
+                if identifier.get_type_expr(&self.heap).is_builtin_type(Type::Type) {
+                    dependencies.insert_ordered(&mut self.heap, identifier);
+                }
+            }
+            Tag::Ap => {
+                let application = ApNodeRef::from_ref(raw_reference);
+                self.collect_export_type_dependencies_from_type_expr(
+                    TypeExprRef::new(application.function_raw(&self.heap).into()),
+                    dependencies,
+                );
+                self.collect_export_type_dependencies_from_type_expr(
+                    TypeExprRef::new(application.argument_raw(&self.heap).into()),
+                    dependencies,
+                );
+            }
+            Tag::Cons | Tag::Pair | Tag::TCons => {
+                self.collect_export_type_dependencies_from_type_expr(
+                    TypeExprRef::new(self.heap[raw_reference].head.into()),
+                    dependencies,
+                );
+                self.collect_export_type_dependencies_from_type_expr(
+                    TypeExprRef::new(self.heap[raw_reference].tail.into()),
+                    dependencies,
+                );
+            }
+            Tag::Label => {
+                self.collect_export_type_dependencies_from_type_expr(
+                    TypeExprRef::new(self.heap[raw_reference].tail.into()),
+                    dependencies,
+                );
+            }
+            Tag::Share => {
+                self.collect_export_type_dependencies_from_type_expr(
+                    TypeExprRef::new(self.heap[raw_reference].head.into()),
+                    dependencies,
+                );
+            }
+            _ => {}
+        }
+    }
+
     /// Applies export-closure gating after typecheck.
     ///
     /// C parity target: export-list checks gated by `ND`/undefined names.
     /// Current concrete behavior:
     /// - if there is no export list, this phase is a no-op,
     /// - if undefined names are present, drop exported_identifiers and return a typed blocking error,
-    /// - otherwise keep exported_identifiers unchanged and continue.
+    /// - otherwise validate explicit export ids against committed definienda, then keep one canonical export set and continue.
     ///
     /// This implementation is intentionally partial: deeper closure/dependency
     /// analysis (for example `deps`-style traversal) remains deferred.
@@ -777,10 +834,50 @@ impl VM {
             return Err(ExportValidationError::BlockedByUndefinedNames);
         }
 
-        let mut committed_exports = export.exported_ids.into();
+        let current_file_definienda = self
+            .files
+            .head(&self.heap)
+            .map(|file| file.get_definienda(&self.heap))
+            .unwrap_or(ConsList::EMPTY);
+        let mut exportable_definienda = ConsList::EMPTY;
+        let mut current_exportable = current_file_definienda;
+        while let Some(definiendum) = current_exportable.pop(&self.heap) {
+            exportable_definienda.insert_ordered(&mut self.heap, definiendum);
+        }
+        let mut includees = materialized_includees;
+        while let Some(includee) = includees.pop(&self.heap) {
+            let mut definienda = includee.get_definienda(&self.heap);
+            while let Some(definiendum) = definienda.pop(&self.heap) {
+                exportable_definienda.insert_ordered(&mut self.heap, definiendum);
+            }
+        }
+
+        let mut committed_exports = NIL;
+        let mut explicit_exports: ConsList<IdentifierRecordRef> = ConsList::from_ref(export.exported_ids);
+        while let Some(export_id) = explicit_exports.pop(&self.heap) {
+            if !exportable_definienda.contains(&self.heap, export_id) {
+                return Err(ExportValidationError::UndefinedExportedIdentifier {
+                    name: export_id.get_name(&self.heap),
+                });
+            }
+            committed_exports = ConsList::<Value>::insert_ordered_value(
+                &mut self.heap,
+                committed_exports,
+                export_id.into(),
+            );
+        }
+
         let mut export_paths: ConsList<Value> = ConsList::from_ref(export.pathname_requests);
         while let Some(entry) = export_paths.pop_value(&self.heap) {
             if entry == Combinator::Plus.into() {
+                let mut current_exports = current_file_definienda;
+                while let Some(definiendum) = current_exports.pop(&self.heap) {
+                    committed_exports = ConsList::<Value>::insert_ordered_value(
+                        &mut self.heap,
+                        committed_exports,
+                        definiendum.into(),
+                    );
+                }
                 continue;
             }
 
@@ -805,6 +902,69 @@ impl VM {
             }
         }
 
+        let mut closure_queue: ConsList<IdentifierRecordRef> =
+            ConsList::from_ref(committed_exports.into());
+        while let Some(export_id) = closure_queue.pop(&self.heap) {
+            let mut dependencies = ConsList::EMPTY;
+            let datatype = export_id.get_type_expr(&self.heap);
+            if !datatype.is_builtin_type(Type::Undefined) {
+                self.collect_export_type_dependencies_from_type_expr(datatype, &mut dependencies);
+            }
+
+            if let Some(value) = export_id.get_value(&self.heap) {
+                if let IdentifierValueData::Typed { value_type, .. } = value.get_data(&self.heap) {
+                    match value_type.get_identifier_value_type_kind(&self.heap) {
+                        IdentifierValueTypeKind::Synonym => {
+                            self.collect_export_type_dependencies_from_type_expr(
+                                value_type.synonym_rhs_type_expr(&self.heap),
+                                &mut dependencies,
+                            );
+                        }
+                        IdentifierValueTypeKind::Algebraic => {
+                            if let Some(mut constructors) =
+                                value_type.algebraic_constructor_metadata(&self.heap)
+                            {
+                                while let Some(constructor) = constructors.pop(&self.heap) {
+                                    let mut fields = constructor.fields(&self.heap);
+                                    while let Some(field) = fields.pop(&self.heap) {
+                                        self.collect_export_type_dependencies_from_type_expr(
+                                            field.type_expr(&self.heap),
+                                            &mut dependencies,
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        IdentifierValueTypeKind::Abstract => {
+                            if let Some(basis) = value_type.abstract_basis(&self.heap) {
+                                let basis_type = TypeExprRef::new(basis);
+                                if !basis_type.is_builtin_type(Type::Undefined) {
+                                    self.collect_export_type_dependencies_from_type_expr(
+                                        basis_type,
+                                        &mut dependencies,
+                                    );
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            while let Some(dependency) = dependencies.pop(&self.heap) {
+                let dependency_value: Value = dependency.into();
+                if !ConsList::<Value>::contains_value(&self.heap, committed_exports.into(), dependency_value)
+                {
+                    committed_exports = ConsList::<Value>::insert_ordered_value(
+                        &mut self.heap,
+                        committed_exports,
+                        dependency_value,
+                    );
+                    closure_queue.insert_ordered(&mut self.heap, dependency);
+                }
+            }
+        }
+
         let mut filtered_exports = NIL;
         let mut exported_identifiers: ConsList<Value> =
             ConsList::from_ref(committed_exports.into());
@@ -814,11 +974,87 @@ impl VM {
             }
         }
 
+        let filtered_exports = ConsList::<Value>::reversed_value(&mut self.heap, filtered_exports);
+
+        let mut current_file_type_identifiers = ConsList::EMPTY;
+        let mut current_file_types = current_file_definienda;
+        while let Some(definiendum) = current_file_types.pop(&self.heap) {
+            if definiendum.get_type_expr(&self.heap).is_builtin_type(Type::Type) {
+                current_file_type_identifiers.insert_ordered(&mut self.heap, definiendum);
+            }
+        }
+
+        if filtered_exports == NIL || current_file_type_identifiers.is_empty() {
+            self.unused_types = false;
+        } else {
+            let mut exported_type_identifiers = ConsList::EMPTY;
+            let mut referenced_type_identifiers = ConsList::EMPTY;
+            let mut exported = ConsList::<IdentifierRecordRef>::from_ref(filtered_exports.into());
+            while let Some(exported_identifier) = exported.pop(&self.heap) {
+                if exported_identifier.get_type_expr(&self.heap).is_builtin_type(Type::Type) {
+                    exported_type_identifiers.insert_ordered(&mut self.heap, exported_identifier);
+                }
+
+                let datatype = exported_identifier.get_type_expr(&self.heap);
+                if !datatype.is_builtin_type(Type::Undefined) {
+                    self.collect_export_type_dependencies_from_type_expr(
+                        datatype,
+                        &mut referenced_type_identifiers,
+                    );
+                }
+
+                if let Some(value) = exported_identifier.get_value(&self.heap) {
+                    if let IdentifierValueData::Typed { value_type, .. } = value.get_data(&self.heap)
+                    {
+                        match value_type.get_identifier_value_type_kind(&self.heap) {
+                            IdentifierValueTypeKind::Synonym => {
+                                self.collect_export_type_dependencies_from_type_expr(
+                                    value_type.synonym_rhs_type_expr(&self.heap),
+                                    &mut referenced_type_identifiers,
+                                );
+                            }
+                            IdentifierValueTypeKind::Algebraic => {
+                                if let Some(mut constructors) =
+                                    value_type.algebraic_constructor_metadata(&self.heap)
+                                {
+                                    while let Some(constructor) = constructors.pop(&self.heap) {
+                                        let mut fields = constructor.fields(&self.heap);
+                                        while let Some(field) = fields.pop(&self.heap) {
+                                            self.collect_export_type_dependencies_from_type_expr(
+                                                field.type_expr(&self.heap),
+                                                &mut referenced_type_identifiers,
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            IdentifierValueTypeKind::Abstract => {
+                                if let Some(basis) = value_type.abstract_basis(&self.heap) {
+                                    let basis_type = TypeExprRef::new(basis);
+                                    if !basis_type.is_builtin_type(Type::Undefined) {
+                                        self.collect_export_type_dependencies_from_type_expr(
+                                            basis_type,
+                                            &mut referenced_type_identifiers,
+                                        );
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+
+            let mut bereaved = current_file_type_identifiers
+                .difference(&mut self.heap, exported_type_identifiers);
+            let unreferenced_current_types = current_file_type_identifiers
+                .difference(&mut self.heap, referenced_type_identifiers);
+            bereaved = bereaved.difference(&mut self.heap, unreferenced_current_types);
+            self.unused_types = !bereaved.is_empty();
+        }
+
         Ok(CommittedDirectiveState {
-            exported_identifiers: ConsList::<Value>::reversed_value(
-                &mut self.heap,
-                filtered_exports,
-            ),
+            exported_identifiers: filtered_exports,
             export_paths: export.pathname_requests.into(),
             export_embargoes: export.embargoes.into(),
         })

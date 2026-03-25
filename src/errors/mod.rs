@@ -73,6 +73,8 @@ pub enum ExportValidationError {
     PathNotIncludedInScript { path: String },
     #[error("Illegal fileid in export list (ambiguous): {path}")]
     AmbiguousPathRequest { path: String },
+    #[error("Name in export list is not defined in this script or its included files: {name}")]
+    UndefinedExportedIdentifier { name: String },
     #[error("Export closure blocked by undefined names")]
     BlockedByUndefinedNames,
 }
