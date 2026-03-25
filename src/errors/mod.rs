@@ -88,8 +88,6 @@ pub enum IncludeDirectiveError {
     ModifierTargetNotFound { name: String },
     #[error("Include rename target already defined: {name}")]
     RenameDestinationClash { name: String },
-    #[error("Constructor renaming in %include modifiers is not yet supported: {name}")]
-    UnsupportedConstructorRename { name: String },
 }
 
 /// Reports semantic and type failures from the typecheck boundary in `src/vm/typecheck.rs`.

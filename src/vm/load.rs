@@ -660,16 +660,6 @@ impl VM {
                             let original_identifier = rewritten_definienda[matching_index];
                             let original_value_field = original_identifier.get_value_field(&self.heap);
                             let original_value_raw: RawValue = original_value_field.into();
-                            if original_value_raw >= ATOM_LIMIT
-                                && self.heap[original_value_raw].tag == Tag::Constructor
-                            {
-                                return Err(
-                                    IncludeDirectiveError::UnsupportedConstructorRename {
-                                        name: original_identifier.get_name(&self.heap),
-                                    }
-                                    .into(),
-                                );
-                            }
 
                             if rewritten_definienda.iter().enumerate().any(|(index, definiendum)| {
                                 index != matching_index
@@ -688,7 +678,91 @@ impl VM {
                             renamed_identifier
                                 .set_definition(&mut self.heap, original_definition);
                             renamed_identifier.set_datatype(&mut self.heap, original_datatype);
-                            self.heap[renamed_identifier.get_ref()].tail = original_value_raw;
+                            if let Some(original_value) = original_identifier.get_value(&self.heap) {
+                                match original_value.get_data(&self.heap) {
+                                    IdentifierValueData::Arbitrary(value)
+                                        if original_value_raw >= ATOM_LIMIT
+                                            && self.heap[original_value_raw].tag == Tag::Constructor =>
+                                    {
+                                        let constructor_value = ConstructorRef::from_ref(value.into());
+                                        let constructor_index =
+                                            constructor_value.constructor_index(&self.heap);
+                                        let renamed_constructor_value = ConstructorRef::new(
+                                            &mut self.heap,
+                                            constructor_index,
+                                            renamed_identifier.into(),
+                                        );
+                                        renamed_identifier.set_value_from_data(
+                                            &mut self.heap,
+                                            IdentifierValueData::Arbitrary(renamed_constructor_value.into()),
+                                        );
+
+                                        for definiendum in rewritten_definienda.iter() {
+                                            let Some(type_value) = definiendum.get_value(&self.heap) else {
+                                                continue;
+                                            };
+                                            let IdentifierValueData::Typed {
+                                                arity,
+                                                show_function,
+                                                value_type,
+                                            } = type_value.get_data(&self.heap) else {
+                                                continue;
+                                            };
+                                            if value_type.get_identifier_value_type_kind(&self.heap)
+                                                != IdentifierValueTypeKind::Algebraic
+                                            {
+                                                continue;
+                                            }
+
+                                            let Some(mut constructors) =
+                                                value_type.algebraic_constructor_metadata(&self.heap)
+                                            else {
+                                                continue;
+                                            };
+                                            let mut constructor_entries = Vec::new();
+                                            let mut changed = false;
+                                            while let Some(metadata) = constructors.pop(&self.heap) {
+                                                let mut parts = metadata.get_data(&self.heap);
+                                                if parts.constructor == original_identifier {
+                                                    parts.constructor = renamed_identifier;
+                                                    changed = true;
+                                                }
+                                                constructor_entries.push(parts);
+                                            }
+                                            if !changed {
+                                                continue;
+                                            }
+
+                                            let rebuilt_metadata = constructor_entries.iter().rev().fold(
+                                                NIL,
+                                                |metadata_list, entry| {
+                                                    let metadata_ref = AlgebraicConstructorMetadataRef::new(
+                                                        &mut self.heap,
+                                                        AlgebraicConstructorMetadataParts {
+                                                            constructor: entry.constructor,
+                                                            arity: entry.arity,
+                                                            fields: entry.fields,
+                                                        },
+                                                    );
+                                                    self.heap.cons_ref(metadata_ref.into(), metadata_list)
+                                                },
+                                            );
+                                            let rebuilt_value = IdentifierValueRef::from_type_identifier_parts(
+                                                &mut self.heap,
+                                                TypeIdentifierValueParts {
+                                                    arity,
+                                                    show_function: (show_function != Value::None)
+                                                        .then_some(show_function),
+                                                    kind: IdentifierValueTypeKind::Algebraic,
+                                                    info: rebuilt_metadata,
+                                                },
+                                            );
+                                            definiendum.set_value(&mut self.heap, rebuilt_value);
+                                        }
+                                    }
+                                    data => renamed_identifier.set_value_from_data(&mut self.heap, data),
+                                }
+                            }
                             rewritten_definienda[matching_index] = renamed_identifier;
                         }
                     }

@@ -5,7 +5,7 @@ use crate::compiler::{
     ParserTopLevelDirectivePayload, Token,
 };
 use crate::data::api::{
-    ApNodeRef, DataPair, DefinitionRef, FreeFormalBindingRef, HeapObjectProxy,
+    ApNodeRef, ConstructorRef, DataPair, DefinitionRef, FreeFormalBindingRef, HeapObjectProxy,
     IdentifierValueTypeData, IdentifierValueTypeKind, IdentifierValueTypeRef, TypeExprRef,
 };
 use crate::data::ATOM_LIMIT;
@@ -2460,6 +2460,143 @@ fn load_file_applies_include_rename_modifier_to_materialized_definienda() {
         names.push(vm.identifier_name(definiendum));
     }
     assert_eq!(names, vec!["renamed"]);
+}
+
+#[test]
+fn load_file_applies_include_constructor_rename_modifier_to_materialized_definienda_and_metadata() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let include_path = unique_test_path("constructor_rename_include_target.m");
+    std::fs::write(&include_path, "maybe * ::= Nothing | Just *\n")
+        .expect("failed to write include source test file");
+    let include_path_str = include_path.to_string_lossy().to_string();
+
+    let source_path = unique_test_path("constructor_rename_include_driver.m");
+    std::fs::write(
+        &source_path,
+        format!("%include \"{}\" Renamed / Just\n", include_path_str),
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+    let included_files = vm.files.rest(&vm.heap).expect("expected included file list tail");
+    let includee = included_files.head(&vm.heap).expect("expected included file");
+
+    let mut definienda = includee.get_definienda(&vm.heap);
+    let mut names = Vec::new();
+    while let Some(definiendum) = definienda.pop(&vm.heap) {
+        names.push(vm.identifier_name(definiendum));
+    }
+    assert!(names.contains(&"maybe".to_string()));
+    assert!(names.contains(&"Nothing".to_string()));
+    assert!(names.contains(&"Renamed".to_string()));
+    assert!(!names.contains(&"Just".to_string()));
+
+    let maybe = vm.heap.get_identifier("maybe").expect("expected maybe type identifier");
+    let maybe_value = maybe.get_value(&vm.heap).expect("expected typed algebraic value");
+    let IdentifierValueData::Typed { value_type, .. } = maybe_value.get_data(&vm.heap) else {
+        panic!("expected typed algebraic value")
+    };
+    let mut constructors = value_type
+        .algebraic_constructor_metadata(&vm.heap)
+        .expect("expected algebraic constructor metadata");
+    let nothing_metadata = constructors.pop(&vm.heap).expect("expected Nothing metadata");
+    let renamed_metadata = constructors.pop(&vm.heap).expect("expected Renamed metadata");
+    assert_eq!(nothing_metadata.constructor(&vm.heap).get_name(&vm.heap), "Nothing");
+    assert_eq!(renamed_metadata.constructor(&vm.heap).get_name(&vm.heap), "Renamed");
+
+    let renamed = vm.heap.get_identifier("Renamed").expect("expected renamed constructor");
+    let renamed_value = renamed.get_value(&vm.heap).expect("expected renamed constructor value");
+    let renamed_constructor = ConstructorRef::from_ref(renamed_value.get_ref());
+    assert_eq!(renamed_constructor.payload(&vm.heap), renamed.into());
+}
+
+#[test]
+fn load_file_accepts_formal_matching_renamed_included_constructor() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let include_path = unique_test_path("renamed_constructor_formal_include_target.m");
+    std::fs::write(&include_path, "maybe * ::= Nothing | Just *\n")
+        .expect("failed to write include source test file");
+    let include_path_str = include_path.to_string_lossy().to_string();
+
+    let source_path = unique_test_path("renamed_constructor_formal_driver.m");
+    std::fs::write(
+        &source_path,
+        format!("%include \"{}\" Renamed / Just\nfromRenamed (Renamed x) = x\n", include_path_str),
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+    assert!(vm.undefined_names.is_empty());
+}
+
+#[test]
+fn load_file_export_path_expansion_uses_renamed_included_constructor() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let include_path = unique_test_path("renamed_constructor_export_include_target.m");
+    std::fs::write(&include_path, "maybe * ::= Nothing | Just *\n")
+        .expect("failed to write include source test file");
+    let include_path_str = include_path.to_string_lossy().to_string();
+
+    let source_path = unique_test_path("renamed_constructor_export_driver.m");
+    std::fs::write(
+        &source_path,
+        format!("%include \"{}\" Renamed / Just\n%export \"{}\"\n", include_path_str, include_path_str),
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+    let exported = ConsList::<IdentifierRecordRef>::from_ref(vm.exported_identifiers.into());
+    let maybe = vm.heap.get_identifier("maybe").expect("expected maybe type identifier");
+    let nothing = vm.heap.get_identifier("Nothing").expect("expected Nothing constructor");
+    let renamed = vm.heap.get_identifier("Renamed").expect("expected Renamed constructor");
+    let just = vm.heap.get_identifier("Just").expect("expected original constructor identifier");
+    assert!(exported.contains(&vm.heap, maybe));
+    assert!(exported.contains(&vm.heap, nothing));
+    assert!(exported.contains(&vm.heap, renamed));
+    assert!(!exported.contains(&vm.heap, just));
+}
+
+#[test]
+fn load_file_rejects_include_constructor_rename_destination_clash() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let include_path = unique_test_path("constructor_rename_clash_include_target.m");
+    std::fs::write(&include_path, "maybe * ::= Nothing | Just *\n")
+        .expect("failed to write include source test file");
+    let include_path_str = include_path.to_string_lossy().to_string();
+
+    let source_path = unique_test_path("constructor_rename_clash_driver.m");
+    std::fs::write(
+        &source_path,
+        format!("%include \"{}\" Nothing / Just\n", include_path_str),
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::IncludeDirective(
+            IncludeDirectiveError::RenameDestinationClash { name }
+        )) if name == "Nothing"
+    ));
 }
 
 #[test]
