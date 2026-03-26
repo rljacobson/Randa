@@ -6,7 +6,8 @@ use crate::compiler::{
 };
 use crate::data::api::{
     ApNodeRef, ConstructorRef, DataPair, DefinitionRef, FreeFormalBindingRef, HeapObjectProxy,
-    IdentifierValueTypeData, IdentifierValueTypeKind, IdentifierValueTypeRef, TypeExprRef,
+    IdentifierDefinitionRef, IdentifierValueRef, IdentifierValueTypeData,
+    IdentifierValueTypeKind, IdentifierValueTypeRef, TypeExprRef,
 };
 use crate::data::ATOM_LIMIT;
 use crate::vm::load::LoadScriptForm;
@@ -3346,9 +3347,9 @@ fn parse_source_text_commits_abstype_after_prior_basis_binding() {
 }
 
 #[test]
-fn load_file_accepts_abstype_with_basis_and_showfunction() {
+fn load_file_accepts_abstype_with_basis_and_function_show_function() {
     let mut vm = VM::new_for_tests();
-    let source_path = unique_test_path("abstype_with_basis_and_showfunction.m");
+    let source_path = unique_test_path("abstype_with_basis_and_function_show_function.m");
     std::fs::write(&source_path, "abstype thing with showthing :: num\nthing == num\nshowthing = 0\n")
         .expect("failed to write source test file");
     let source_path_str = source_path.to_string_lossy().to_string();
@@ -5630,6 +5631,499 @@ fn codegen_phase_lowers_tuple_pattern_lambda_to_u_application() {
         .get_ref();
     assert_eq!(vm.heap[lowered_raw].tag, Tag::Ap);
     assert_eq!(vm.heap[lowered_raw].head, RawValue::from(Combinator::U));
+}
+
+#[test]
+fn codegen_phase_lowers_shared_top_level_body_to_shared_payload() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let payload = vm.heap.make_empty_identifier("payload");
+    let holder = vm.heap.make_empty_identifier("holder");
+    let shared = vm.heap.share_ref(payload.into(), Combinator::Nil.into());
+    let shared_raw = RawValue::from(shared);
+    holder.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(shared));
+
+    let definienda = ConsList::new(&mut vm.heap, holder);
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("codegen_shared_top_level_body.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        definienda,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+    vm.undefined_names = ConsList::EMPTY;
+
+    let result = vm.run_codegen_phase();
+
+    assert!(result.is_ok());
+    assert_eq!(
+        holder
+            .get_value(&vm.heap)
+            .expect("expected lowered shared top-level body")
+            .get_ref(),
+        payload.get_ref()
+    );
+    assert_eq!(vm.heap[shared_raw].head, payload.get_ref());
+    assert_eq!(vm.heap[shared_raw].tail, -1);
+}
+
+#[test]
+fn codegen_phase_lowers_shared_letrec_tries_body_through_existing_owned_subset() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let x = vm.heap.make_empty_identifier("x");
+    let y = vm.heap.make_empty_identifier("y");
+    let inner_x = vm.heap.make_empty_identifier("inner_x");
+    let inner_y = vm.heap.make_empty_identifier("inner_y");
+    let guard = vm.heap.make_empty_identifier("guard");
+    let holder = vm.heap.make_empty_identifier("holder");
+    let binder = vm.heap.pair_ref(x.into(), y.into());
+    let cond_body = vm.heap.apply2(Combinator::Cond.into(), guard.into(), inner_x.into());
+    let duplicated_inner = vm.heap.apply_ref(inner_x.into(), inner_y.into());
+    let guarded_body = vm.heap.apply_ref(cond_body, duplicated_inner);
+    let inner_binder = vm.heap.pair_ref(inner_x.into(), inner_y.into());
+    let fallible_alternative = vm.heap.lambda_ref(inner_binder, guarded_body);
+    let alternatives = vm.heap.cons_ref(fallible_alternative, Combinator::Nil.into());
+    let tries_body = vm.heap.tries_ref(holder.into(), alternatives);
+    let definition = DefinitionRef::new(&mut vm.heap, binder, Type::Undefined.into(), tries_body);
+    let definitions = vm.heap.cons_ref(definition.get_ref().into(), Combinator::Nil.into());
+    let letrec_body = vm.heap.letrec_ref(definitions, x.into());
+    let shared_body = vm.heap.share_ref(letrec_body, Combinator::Nil.into());
+    holder.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(shared_body));
+
+    let definienda = ConsList::new(&mut vm.heap, holder);
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("codegen_shared_letrec_tries_guarded.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        definienda,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+    vm.undefined_names = ConsList::EMPTY;
+
+    let result = vm.run_codegen_phase();
+
+    assert!(result.is_ok());
+    let lowered = holder
+        .get_value(&vm.heap)
+        .expect("expected lowered shared letrec tries body")
+        .get_ref()
+        .into();
+    let mut subscript_indices = Vec::new();
+    collect_subscript_indices(&vm.heap, lowered, &mut subscript_indices);
+    subscript_indices.sort();
+    assert_eq!(subscript_indices, vec![0, 1]);
+    assert!(subtree_contains_combinator(&vm.heap, lowered, Combinator::Try));
+    assert!(subtree_contains_combinator(&vm.heap, lowered, Combinator::BadCase));
+    assert!(subtree_contains_combinator(&vm.heap, lowered, Combinator::Cond));
+}
+
+#[test]
+fn codegen_phase_reuses_one_lowered_result_for_repeated_shared_tuple_lambda() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let x = vm.heap.make_empty_identifier("x");
+    let y = vm.heap.make_empty_identifier("y");
+    let holder = vm.heap.make_empty_identifier("holder");
+    let binder = vm.heap.pair_ref(x.into(), y.into());
+    let lambda = vm.heap.lambda_ref(binder, x.into());
+    let shared = vm.heap.share_ref(lambda, Combinator::Nil.into());
+    let shared_raw = RawValue::from(shared);
+    let pair = vm.heap.pair_ref(shared, shared);
+    holder.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(pair));
+
+    let definienda = ConsList::new(&mut vm.heap, holder);
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("codegen_shared_tuple_lambda_reuse.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        definienda,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+    vm.undefined_names = ConsList::EMPTY;
+
+    let result = vm.run_codegen_phase();
+
+    assert!(result.is_ok());
+    let lowered_pair = holder
+        .get_value(&vm.heap)
+        .expect("expected lowered pair containing shared tuple lambda")
+        .get_ref();
+    assert_eq!(vm.heap[lowered_pair].tag, Tag::Cons);
+    let lowered_head: Value = vm.heap[lowered_pair].head.into();
+    let lowered_tail: Value = vm.heap[lowered_pair].tail.into();
+    assert_eq!(lowered_head, lowered_tail);
+    assert!(RawValue::from(lowered_head) >= ATOM_LIMIT);
+    assert_eq!(vm.heap[RawValue::from(lowered_head)].tag, Tag::Ap);
+    assert_eq!(vm.heap[RawValue::from(lowered_head)].head, RawValue::from(Combinator::U));
+    assert_eq!(vm.heap[shared_raw].head, RawValue::from(lowered_head));
+    assert_eq!(vm.heap[shared_raw].tail, -1);
+}
+
+#[test]
+fn codegen_phase_leftfactors_all_active_g_alt_shapes_and_leaves_non_matches_unchanged() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let a = vm.heap.make_empty_identifier("a");
+    let b = vm.heap.make_empty_identifier("b");
+    let c = vm.heap.make_empty_identifier("c");
+    let d = vm.heap.make_empty_identifier("d");
+
+    let rule1_holder = vm.heap.make_empty_identifier("rule1_holder");
+    let rule2_holder = vm.heap.make_empty_identifier("rule2_holder");
+    let rule3_holder = vm.heap.make_empty_identifier("rule3_holder");
+    let rule4_holder = vm.heap.make_empty_identifier("rule4_holder");
+    let control_holder = vm.heap.make_empty_identifier("control_holder");
+
+    let seq_ab = vm.heap.apply2(Combinator::G_Seq.into(), a.into(), b.into());
+    let seq_ac = vm.heap.apply2(Combinator::G_Seq.into(), a.into(), c.into());
+    let seq_cd = vm.heap.apply2(Combinator::G_Seq.into(), c.into(), d.into());
+
+    let rule1_body = vm.heap.apply2(Combinator::G_Alt.into(), seq_ab, a.into());
+    let rule2_body = vm.heap.apply2(Combinator::G_Alt.into(), seq_ab, seq_ac);
+    let rule3_rhs = vm.heap.apply2(Combinator::G_Alt.into(), a.into(), d.into());
+    let rule3_body = vm.heap.apply2(Combinator::G_Alt.into(), seq_ab, rule3_rhs);
+    let rule4_rhs = vm.heap.apply2(Combinator::G_Alt.into(), seq_ac, d.into());
+    let rule4_body = vm.heap.apply2(Combinator::G_Alt.into(), seq_ab, rule4_rhs);
+    let control_body = vm.heap.apply2(Combinator::G_Alt.into(), seq_ab, seq_cd);
+
+    rule1_holder.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(rule1_body));
+    rule2_holder.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(rule2_body));
+    rule3_holder.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(rule3_body));
+    rule4_holder.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(rule4_body));
+    control_holder.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(control_body));
+
+    let mut definienda = ConsList::EMPTY;
+    for definiendum in [
+        control_holder,
+        rule4_holder,
+        rule3_holder,
+        rule2_holder,
+        rule1_holder,
+    ] {
+        definienda.push(&mut vm.heap, definiendum);
+    }
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("codegen_leftfactor_shapes.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        definienda,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+    vm.undefined_names = ConsList::EMPTY;
+
+    let result = vm.run_codegen_phase();
+
+    assert!(result.is_ok());
+
+    let rule1 = rule1_holder
+        .get_value(&vm.heap)
+        .expect("expected leftfactored rule1 body")
+        .get_ref()
+        .into();
+    let (rule1_head, rule1_args) = application_spine(&vm.heap, rule1);
+    assert_eq!(rule1_head, Combinator::G_Seq.into());
+    assert_eq!(rule1_args.len(), 2);
+    assert_eq!(rule1_args[0], a.into());
+    let (rule1_alt_head, rule1_alt_args) = application_spine(&vm.heap, rule1_args[1]);
+    assert_eq!(rule1_alt_head, Combinator::G_Alt.into());
+    assert_eq!(rule1_alt_args, vec![b.into(), Combinator::G_Unit.into()]);
+
+    let rule2 = rule2_holder
+        .get_value(&vm.heap)
+        .expect("expected leftfactored rule2 body")
+        .get_ref()
+        .into();
+    let (rule2_head, rule2_args) = application_spine(&vm.heap, rule2);
+    assert_eq!(rule2_head, Combinator::G_Seq.into());
+    assert_eq!(rule2_args.len(), 2);
+    assert_eq!(rule2_args[0], a.into());
+    let (rule2_alt_head, rule2_alt_args) = application_spine(&vm.heap, rule2_args[1]);
+    assert_eq!(rule2_alt_head, Combinator::G_Alt.into());
+    assert_eq!(rule2_alt_args, vec![b.into(), c.into()]);
+
+    let rule3 = rule3_holder
+        .get_value(&vm.heap)
+        .expect("expected leftfactored rule3 body")
+        .get_ref()
+        .into();
+    let (rule3_head, rule3_args) = application_spine(&vm.heap, rule3);
+    assert_eq!(rule3_head, Combinator::G_Alt.into());
+    assert_eq!(rule3_args.len(), 2);
+    assert_eq!(rule3_args[1], d.into());
+    let (rule3_seq_head, rule3_seq_args) = application_spine(&vm.heap, rule3_args[0]);
+    assert_eq!(rule3_seq_head, Combinator::G_Seq.into());
+    assert_eq!(rule3_seq_args[0], a.into());
+    let (rule3_inner_alt_head, rule3_inner_alt_args) = application_spine(&vm.heap, rule3_seq_args[1]);
+    assert_eq!(rule3_inner_alt_head, Combinator::G_Alt.into());
+    assert_eq!(rule3_inner_alt_args, vec![b.into(), Combinator::G_Unit.into()]);
+
+    let rule4 = rule4_holder
+        .get_value(&vm.heap)
+        .expect("expected leftfactored rule4 body")
+        .get_ref()
+        .into();
+    let (rule4_head, rule4_args) = application_spine(&vm.heap, rule4);
+    assert_eq!(rule4_head, Combinator::G_Alt.into());
+    assert_eq!(rule4_args.len(), 2);
+    assert_eq!(rule4_args[1], d.into());
+    let (rule4_seq_head, rule4_seq_args) = application_spine(&vm.heap, rule4_args[0]);
+    assert_eq!(rule4_seq_head, Combinator::G_Seq.into());
+    assert_eq!(rule4_seq_args[0], a.into());
+    let (rule4_inner_alt_head, rule4_inner_alt_args) = application_spine(&vm.heap, rule4_seq_args[1]);
+    assert_eq!(rule4_inner_alt_head, Combinator::G_Alt.into());
+    assert_eq!(rule4_inner_alt_args, vec![b.into(), c.into()]);
+
+    let control = control_holder
+        .get_value(&vm.heap)
+        .expect("expected preserved non-matching alternation body")
+        .get_ref()
+        .into();
+    let (control_head, control_args) = application_spine(&vm.heap, control);
+    assert_eq!(control_head, Combinator::G_Alt.into());
+    assert_eq!(control_args.len(), 2);
+    let (control_left_head, control_left_args) = application_spine(&vm.heap, control_args[0]);
+    assert_eq!(control_left_head, Combinator::G_Seq.into());
+    assert_eq!(control_left_args, vec![a.into(), b.into()]);
+    let (control_right_head, control_right_args) = application_spine(&vm.heap, control_args[1]);
+    assert_eq!(control_right_head, Combinator::G_Seq.into());
+    assert_eq!(control_right_args, vec![c.into(), d.into()]);
+}
+
+#[test]
+fn codegen_phase_lowers_builtin_show_nodes_for_num_bool_char_void_and_function_types() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let shownum_holder = vm.heap.make_empty_identifier("shownum_holder");
+    let bool_show_function_holder = vm.heap.make_empty_identifier("bool_show_function_holder");
+    let char_show_function_holder = vm.heap.make_empty_identifier("char_show_function_holder");
+    let void_show_function_holder = vm.heap.make_empty_identifier("void_show_function_holder");
+    let function_show_function_holder = vm.heap.make_empty_identifier("function_show_function_holder");
+
+    let shownum_body = vm.heap.show_ref(NIL, Type::Number.into());
+    let bool_show_function_body = vm.heap.show_ref(NIL, Type::Bool.into());
+    let char_show_function_body = vm.heap.show_ref(NIL, Type::Char.into());
+    let void_show_function_body = vm.heap.show_ref(NIL, Type::Void.into());
+    let function_type = vm.heap.arrow_type_ref(Type::Number.into(), Type::Bool.into());
+    let function_show_function_body = vm.heap.show_ref(NIL, function_type);
+
+    shownum_holder.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(shownum_body));
+    bool_show_function_holder.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(bool_show_function_body));
+    char_show_function_holder.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(char_show_function_body));
+    void_show_function_holder.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(void_show_function_body));
+    function_show_function_holder.set_value_from_data(
+        &mut vm.heap,
+        IdentifierValueData::Arbitrary(function_show_function_body),
+    );
+
+    let mut definienda = ConsList::EMPTY;
+    for definiendum in [
+        function_show_function_holder,
+        void_show_function_holder,
+        char_show_function_holder,
+        bool_show_function_holder,
+        shownum_holder,
+    ] {
+        definienda.push(&mut vm.heap, definiendum);
+    }
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("codegen_builtin_show_nodes.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        definienda,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+    vm.undefined_names = ConsList::EMPTY;
+
+    let result = vm.run_codegen_phase();
+
+    assert!(result.is_ok());
+    assert_eq!(
+        shownum_holder
+            .get_value(&vm.heap)
+            .expect("expected lowered shownum body")
+            .get_ref(),
+        RawValue::from(Combinator::ShowNum)
+    );
+    assert_eq!(
+        bool_show_function_holder
+            .get_value(&vm.heap)
+            .expect("expected lowered bool_show_function body")
+            .get_ref(),
+        vm.bool_show_function.get_ref()
+    );
+    assert_eq!(
+        char_show_function_holder
+            .get_value(&vm.heap)
+            .expect("expected lowered char_show_function body")
+            .get_ref(),
+        vm.char_show_function.get_ref()
+    );
+    assert_eq!(
+        void_show_function_holder
+            .get_value(&vm.heap)
+            .expect("expected lowered void_show_function body")
+            .get_ref(),
+        vm.void_show_function.get_ref()
+    );
+    assert_eq!(
+        function_show_function_holder
+            .get_value(&vm.heap)
+            .expect("expected lowered function_show_function body")
+            .get_ref(),
+        vm.function_show_function.get_ref()
+    );
+}
+
+#[test]
+fn codegen_phase_lowers_list_string_and_tuple_show_nodes() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let list_show_function_holder = vm.heap.make_empty_identifier("list_show_function_holder");
+    let string_show_function_holder = vm.heap.make_empty_identifier("string_show_function_holder");
+    let showtuple_holder = vm.heap.make_empty_identifier("showtuple_holder");
+
+    let list_num_type = vm.heap.list_type_ref(Type::Number.into());
+    let string_type = vm.heap.list_type_ref(Type::Char.into());
+    let tuple_type = vm.heap.pair_type_ref(Type::Bool.into(), Type::Number.into());
+
+    let list_show_function_body = vm.heap.show_ref(NIL, list_num_type);
+    let string_show_function_body = vm.heap.show_ref(NIL, string_type);
+    let showtuple_body = vm.heap.show_ref(NIL, tuple_type);
+
+    list_show_function_holder.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(list_show_function_body));
+    string_show_function_holder.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(string_show_function_body));
+    showtuple_holder.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(showtuple_body));
+
+    let mut definienda = ConsList::EMPTY;
+    for definiendum in [showtuple_holder, string_show_function_holder, list_show_function_holder] {
+        definienda.push(&mut vm.heap, definiendum);
+    }
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("codegen_composite_show_nodes.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        definienda,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+    vm.undefined_names = ConsList::EMPTY;
+
+    let result = vm.run_codegen_phase();
+
+    assert!(result.is_ok());
+
+    let list_show_function = list_show_function_holder
+        .get_value(&vm.heap)
+        .expect("expected lowered list_show_function body")
+        .get_ref()
+        .into();
+    let (list_show_function_head, list_show_function_args) = application_spine(&vm.heap, list_show_function);
+    assert_eq!(list_show_function_head, vm.list_show_function.into());
+    assert_eq!(list_show_function_args, vec![Combinator::ShowNum.into()]);
+
+    assert_eq!(
+        string_show_function_holder
+            .get_value(&vm.heap)
+            .expect("expected lowered string_show_function body")
+            .get_ref(),
+        vm.string_show_function.get_ref()
+    );
+
+    let showtuple = showtuple_holder
+        .get_value(&vm.heap)
+        .expect("expected lowered showtuple body")
+        .get_ref()
+        .into();
+    let (showtuple_head, showtuple_args) = application_spine(&vm.heap, showtuple);
+    assert_eq!(showtuple_head, vm.paren_show_function.into());
+    assert_eq!(showtuple_args.len(), 1);
+    let (pair_show_function_head, pair_show_function_args) = application_spine(&vm.heap, showtuple_args[0]);
+    assert_eq!(pair_show_function_head, vm.pair_show_function.into());
+    assert_eq!(pair_show_function_args, vec![vm.bool_show_function.into(), Combinator::ShowNum.into()]);
+}
+
+#[test]
+fn codegen_phase_lowers_attached_type_show_functions_through_committed_identity() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let showthing = vm.intern_identifier("showThing");
+    let thing_type = IdentifierValueTypeRef::new(
+        &mut vm.heap,
+        IdentifierValueTypeData::Abstract { basis: NIL },
+    );
+    let thing_type_value = IdentifierValueRef::new(
+        &mut vm.heap,
+        IdentifierValueData::Typed {
+            arity: 1,
+            show_function: showthing.into(),
+            value_type: thing_type,
+        },
+    );
+    let thing = IdentifierRecordRef::new(
+        &mut vm.heap,
+        "Thing".to_string(),
+        IdentifierDefinitionRef::undefined(),
+        Type::Type.into(),
+        Some(thing_type_value),
+    );
+
+    let holder = vm.heap.make_empty_identifier("show_attached_holder");
+    let applied_type = vm.heap.apply_ref(thing.into(), Type::Number.into());
+    let attached_show_body = vm.heap.show_ref(NIL, applied_type);
+    holder.set_value_from_data(
+        &mut vm.heap,
+        IdentifierValueData::Arbitrary(attached_show_body),
+    );
+
+    let definienda = ConsList::new(&mut vm.heap, holder);
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("codegen_attached_show_node.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        definienda,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+    vm.undefined_names = ConsList::EMPTY;
+
+    let result = vm.run_codegen_phase();
+
+    assert!(result.is_ok());
+    let lowered = holder
+        .get_value(&vm.heap)
+        .expect("expected lowered attached show body")
+        .get_ref()
+        .into();
+    let (head, args) = application_spine(&vm.heap, lowered);
+    assert_eq!(head, showthing.into());
+    assert_eq!(args, vec![vm.internal_number_show_function.into()]);
 }
 
 #[test]

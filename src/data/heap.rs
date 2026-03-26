@@ -794,7 +794,7 @@ impl Heap {
     }
 
     pub fn arrow_type_ref(&mut self, arg1: Value, arg2: Value) -> Value {
-        Value::Reference(self.arrow_type(arg1, arg2))
+        self.arrow_type(arg1, arg2).into()
     }
 
     fn arrow2_type(&mut self, arg1: Value, arg2: Value, arg3: Value) -> RawValue {
@@ -803,7 +803,7 @@ impl Heap {
     }
 
     pub fn arrow2_type_ref(&mut self, arg1: Value, arg2: Value, arg3: Value) -> Value {
-        Value::Reference(self.arrow2_type(arg1, arg2, arg3))
+        self.arrow2_type(arg1, arg2, arg3).into()
     }
 
     fn arrow3_type(&mut self, arg1: Value, arg2: Value, arg3: Value, arg4: Value) -> RawValue {
@@ -812,7 +812,7 @@ impl Heap {
     }
 
     pub fn arrow3_type_ref(&mut self, arg1: Value, arg2: Value, arg3: Value, arg4: Value) -> Value {
-        Value::Reference(self.arrow3_type(arg1, arg2, arg3, arg4))
+        self.arrow3_type(arg1, arg2, arg3, arg4).into()
     }
 
     fn arrow4_type(
@@ -835,7 +835,7 @@ impl Heap {
         arg4: Value,
         arg5: Value,
     ) -> Value {
-        Value::Reference(self.arrow4_type(arg1, arg2, arg3, arg4, arg5))
+        self.arrow4_type(arg1, arg2, arg3, arg4, arg5).into()
     }
 
     fn list_type(&mut self, arg: Value) -> RawValue {
@@ -843,7 +843,7 @@ impl Heap {
     }
 
     pub fn list_type_ref(&mut self, arg: Value) -> Value {
-        Value::Reference(self.list_type(arg))
+        self.list_type(arg).into()
     }
 
     fn pair_type(&mut self, arg1: Value, arg2: Value) -> RawValue {
@@ -852,7 +852,7 @@ impl Heap {
     }
 
     pub fn pair_type_ref(&mut self, arg1: Value, arg2: Value) -> Value {
-        Value::Reference(self.pair_type(arg1, arg2))
+        self.pair_type(arg1, arg2).into()
     }
 
     // endregion

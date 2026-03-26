@@ -164,7 +164,7 @@ pub struct VM {
 
     The "definienda" is itself a cons list of items (types, identifiers, etc.) that are defined in the current file.
     (A definiendum is a term that is being defined or clarified. The plural form of definiendum is definienda.)
-     */
+    */
     files: ConsList<FileRecord>,
     old_files: ConsList<FileRecord>, // most recent set of sources, in case of interrupted or failed compilation
     // List of file groups to unload if `mkincludes` is interrupted (Miranda's `ld_stuff`).
@@ -192,15 +192,15 @@ pub struct VM {
     main_id: IdentifierRecordRef,
     message: IdentifierRecordRef,
     showabstract: IdentifierRecordRef,
-    showbool: IdentifierRecordRef,
-    showchar: IdentifierRecordRef,
-    showfunction: IdentifierRecordRef,
-    showlist: IdentifierRecordRef,
-    shownum1: IdentifierRecordRef,
-    showpair: IdentifierRecordRef,
-    showparen: IdentifierRecordRef,
-    showstring: IdentifierRecordRef,
-    showvoid: IdentifierRecordRef,
+    bool_show_function: IdentifierRecordRef,
+    char_show_function: IdentifierRecordRef,
+    function_show_function: IdentifierRecordRef,
+    list_show_function: IdentifierRecordRef,
+    internal_number_show_function: IdentifierRecordRef,
+    pair_show_function: IdentifierRecordRef,
+    paren_show_function: IdentifierRecordRef,
+    string_show_function: IdentifierRecordRef,
+    void_show_function: IdentifierRecordRef,
     showwhat: IdentifierRecordRef,
     stdout: Value,
 
@@ -356,15 +356,15 @@ impl VM {
             main_id: IdentifierRecordRef::UNINITIALIZED,
             message: IdentifierRecordRef::UNINITIALIZED,
             showabstract: IdentifierRecordRef::UNINITIALIZED,
-            showbool: IdentifierRecordRef::UNINITIALIZED,
-            showchar: IdentifierRecordRef::UNINITIALIZED,
-            showfunction: IdentifierRecordRef::UNINITIALIZED,
-            showlist: IdentifierRecordRef::UNINITIALIZED,
-            shownum1: IdentifierRecordRef::UNINITIALIZED,
-            showpair: IdentifierRecordRef::UNINITIALIZED,
-            showparen: IdentifierRecordRef::UNINITIALIZED,
-            showstring: IdentifierRecordRef::UNINITIALIZED,
-            showvoid: IdentifierRecordRef::UNINITIALIZED,
+            bool_show_function: IdentifierRecordRef::UNINITIALIZED,
+            char_show_function: IdentifierRecordRef::UNINITIALIZED,
+            function_show_function: IdentifierRecordRef::UNINITIALIZED,
+            list_show_function: IdentifierRecordRef::UNINITIALIZED,
+            internal_number_show_function: IdentifierRecordRef::UNINITIALIZED,
+            pair_show_function: IdentifierRecordRef::UNINITIALIZED,
+            paren_show_function: IdentifierRecordRef::UNINITIALIZED,
+            string_show_function: IdentifierRecordRef::UNINITIALIZED,
+            void_show_function: IdentifierRecordRef::UNINITIALIZED,
             showwhat: IdentifierRecordRef::UNINITIALIZED,
             stdout: Value::Uninitialized,
             #[cfg(test)]

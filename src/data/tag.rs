@@ -17,13 +17,13 @@ pub enum Tag {
     Double = 1,
     DataPair = 2,
     FileInfo = 3, // `FileInfo` differs from `DataPair` in that `str&` in hd will be
-    // made relative to current directory on dump/undump
-    TypeVar = 4, // Type Variable (`TVAR`)
-    Int = 5,     // Integer
+                  // made relative to current directory on dump/undump
+    TypeVar = 4,  // Type Variable (`TVAR`)
+    Int = 5,      // Integer
     Constructor = 6,
-    StrCons = 7, // String Cons
-    Id = 8,      // Identifier
-    Ap = 9,      // Apply
+    StrCons = 7,  // String Cons
+    Id = 8,       // Identifier
+    Ap = 9,       // Apply
     Lambda = 10,
     Cons = 11,
     Tries = 12,
