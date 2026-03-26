@@ -3,20 +3,22 @@ use super::*;
 use crate::compiler::{
     parser::Parser, HereInfo, Lexer, ParserActivation, ParserConstructorPayload,
     ParserDeferredState, ParserDefinitionPayload, ParserEntryMode, ParserFreeBindingPayload,
-    ParserIncludeBindingPayload, ParserIncludeModifierPayload, ParserRunDiagnostics,
-    ParserRunResult, ParserSessionState, ParserSpecificationPayload, ParserSupportError,
-    ParserTopLevelDirectivePayload, ParserTopLevelScriptPayload, ParserTypeDeclarationPayload,
-    ParserVmContext,
+    ParserIncludeBindingPayload, ParserIncludeDirectivePayload, ParserIncludeModifierPayload,
+    ParserRunDiagnostics, ParserRunResult, ParserSessionState, ParserSpecificationPayload,
+    ParserSupportError, ParserTopLevelDirectivePayload, ParserTopLevelScriptPayload,
+    ParserTypeDeclarationPayload, ParserVmContext,
 };
 use crate::compiler::{token::ParserLookahead, Token};
-use crate::data::api::{
-    AlgebraicConstructorFieldParts, AlgebraicConstructorFieldRef,
-    AlgebraicConstructorMetadataParts, AlgebraicConstructorMetadataRef, ApNodeRef, ConsList,
-    IdentifierValueTypeKind, TypeExprRef,
+use crate::data::{
+    api::{
+        AlgebraicConstructorFieldParts, AlgebraicConstructorFieldRef,
+        AlgebraicConstructorMetadataParts, AlgebraicConstructorMetadataRef, ApNodeRef, ConsList,
+        IdentifierValueTypeKind, TypeExprRef,
+    },
+    ATOM_LIMIT,
 };
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use crate::data::ATOM_LIMIT;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(super) enum LoadScriptForm {
@@ -491,48 +493,31 @@ impl VM {
         Ok(())
     }
 
-    /// Applies the include-expansion phase for the current load cycle.
-    ///
-    /// C parity target: `files=append1(files,mkincludes(included_files)),included_files=NIL; ld_stuff=NIL;`
-    /// from `loadfile`.
-    /// Current concrete behavior:
-    /// - appends currently tracked `included_files` into `files` in list order,
-    /// - for parser-fed include requests, reads and parses include source into real include file records,
-    /// - applies the active rename/suppress modifier subset over materialized include definienda before commit,
-    /// - commits includees only after the whole request set succeeds,
-    /// - clears `included_files` after append,
-    /// - clears `include_rollback_files` bookkeeping for interrupted include loads.
-    ///
-    /// Fuller recursive include compilation/load parity and deeper imported-definition semantics remain deferred.
-    pub(super) fn run_mkincludes_phase(
+    /// Appends one staged include file graph to `target` in front-first order.
+    /// This exists so recursive include compilation keeps one load-owned append seam instead of open-coding list walks at each nesting level.
+    /// The invariant is that the relative order of the staged file graph is preserved in the destination list.
+    fn append_file_graph(
         &mut self,
-        directive_payload: Option<&ParserTopLevelDirectivePayload>,
-    ) -> Result<ConsList<FileRecord>, LoadFileError> {
-        let Some(directive_payload) = directive_payload else {
-            if self.included_files.is_empty() {
-                self.include_rollback_files = ConsList::EMPTY;
-                return Ok(ConsList::EMPTY);
-            }
-
-            let materialized_includees = self.included_files;
-            let mut included_files = self.included_files;
-            while let Some(includee) = included_files.pop(&self.heap) {
-                self.files.append(&mut self.heap, includee);
-            }
-
-            self.included_files = ConsList::EMPTY;
-            self.include_rollback_files = ConsList::EMPTY;
-            return Ok(materialized_includees);
-        };
-
-        if directive_payload.include_requests.is_empty() {
-            self.include_rollback_files = ConsList::EMPTY;
-            return Ok(ConsList::EMPTY);
+        target: &mut ConsList<FileRecord>,
+        mut graph: ConsList<FileRecord>,
+    ) {
+        while let Some(file) = graph.pop(&self.heap) {
+            target.append(&mut self.heap, file);
         }
+    }
 
-        let mut materialized_includees = ConsList::EMPTY;
-        let outer_free_identifiers = self.free_identifiers;
-        for include_request in &directive_payload.include_requests {
+    /// Compiles one parser-fed include request into a staged file graph without authoritative append.
+    /// This exists so recursive include compilation can reuse the active load/typecheck/codegen subset for direct and nested include targets without routing through `load_file`.
+    /// The invariant is that syntax, binding, nested-include, export-validation, typecheck, and codegen failures all stop before the staged graph is appended to authoritative VM state.
+    fn compile_include_request(
+        &mut self,
+        include_request: &ParserIncludeDirectivePayload,
+        outer_free_identifiers: ConsList<FreeFormalBindingRef>,
+    ) -> Result<ConsList<FileRecord>, LoadFileError> {
+        let saved_free_binding_sets = self.free_binding_sets;
+        let saved_unused_types = self.unused_types;
+
+        let result = (|| {
             let path = self
                 .heap
                 .resolve_string(include_request.target_path.into())
@@ -560,26 +545,23 @@ impl VM {
                     source,
                 }
             })?;
-            let parse_outcome = match self.parse_source_text(&path, &source_text, modified_time, false) {
-                Ok(parse_outcome) => parse_outcome,
-                Err(error) => {
-                    self.free_identifiers = outer_free_identifiers;
-                    return Err(error);
-                }
-            };
+            let parse_outcome = self.parse_source_text(&path, &source_text, modified_time, false)?;
             if parse_outcome.status == ParsePhaseStatus::SyntaxError {
-                self.free_identifiers = outer_free_identifiers;
                 return Err(IncludeDirectiveError::SyntaxErrorsPresent { path }.into());
             }
 
-            if !include_request.bindings.is_empty() {
+            if include_request.bindings.is_empty() {
+                self.detritus_parameter_bindings = ConsList::EMPTY;
+                self.missing_parameter_bindings = ConsList::EMPTY;
+            } else {
                 let mut include_formal_bindings: ConsList<FreeFormalBindingRef> = ConsList::EMPTY;
                 if let Some(top_level_payload) = parse_outcome.top_level_payload.as_ref() {
                     for free_binding in &top_level_payload.free_bindings {
-                        let original_name = IdentifierDefinitionRef::alias_metadata_from_source_identifier(
-                            &mut self.heap,
-                            free_binding.identifier,
-                        );
+                        let original_name =
+                            IdentifierDefinitionRef::alias_metadata_from_source_identifier(
+                                &mut self.heap,
+                                free_binding.identifier,
+                            );
                         let formal_binding = FreeFormalBindingRef::new(
                             &mut self.heap,
                             free_binding.identifier,
@@ -597,33 +579,82 @@ impl VM {
                 let actuals = self.lower_include_binding_actuals(&include_request.bindings);
                 self.bindparams(sorted_formals.into(), actuals);
                 if !self.detritus_parameter_bindings.is_empty() {
-                    self.free_identifiers = outer_free_identifiers;
                     return Err(TypecheckError::InvalidFreeBindings {
                         count: self.detritus_parameter_bindings.len(&self.heap),
                     }
                     .into());
                 }
                 if !self.missing_parameter_bindings.is_empty() {
-                    self.free_identifiers = outer_free_identifiers;
                     return Err(TypecheckError::MissingFreeBindings {
                         count: self.missing_parameter_bindings.len(&self.heap),
                     }
                     .into());
                 }
             }
+            let include_detritus_parameter_bindings = self.detritus_parameter_bindings;
+            let include_missing_parameter_bindings = self.missing_parameter_bindings;
+
+            let directive_payload = parse_outcome
+                .top_level_payload
+                .as_ref()
+                .map(|payload| &payload.directives);
+            self.validate_exportfile_bindings_partial(directive_payload)?;
+
+            let mut nested_includees = ConsList::EMPTY;
+            if let Some(directive_payload) = directive_payload {
+                for nested_include_request in &directive_payload.include_requests {
+                    let nested_graph =
+                        self.compile_include_request(nested_include_request, outer_free_identifiers)?;
+                    self.append_file_graph(&mut nested_includees, nested_graph);
+                }
+            }
+
+            self.detritus_parameter_bindings = include_detritus_parameter_bindings;
+            self.missing_parameter_bindings = include_missing_parameter_bindings;
             self.free_identifiers = outer_free_identifiers;
 
-            let mut parsed_includees = parse_outcome.files;
-            while let Some(includee) = parsed_includees.pop(&self.heap) {
-                let mut definienda = includee.get_definienda(&self.heap);
+            let current_file = parse_outcome.files.head(&self.heap);
+            let current_file_definienda = current_file
+                .map(|file| file.get_definienda(&self.heap))
+                .unwrap_or(ConsList::EMPTY);
+            let typecheck_result = super::typecheck::run_partial_typecheck(
+                &mut self.heap,
+                super::typecheck::TypecheckBoundaryInputs {
+                    current_file,
+                    detritus_parameter_bindings: include_detritus_parameter_bindings,
+                    missing_parameter_bindings: include_missing_parameter_bindings,
+                },
+            );
+            if let Some(failure) = typecheck_result.failure {
+                return Err(failure.into());
+            }
+
+            self.run_export_closure_phase_partial_for_definienda(
+                directive_payload,
+                current_file_definienda,
+                nested_includees,
+            )?;
+
+            let mut compiled_include_graph = parse_outcome.files;
+            self.append_file_graph(&mut compiled_include_graph, nested_includees);
+            let codegen_result = super::codegen::run_partial_codegen(
+                &mut self.heap,
+                super::codegen::CodegenBoundaryInputs {
+                    files: compiled_include_graph,
+                    current_file,
+                    initializing: self.initializing,
+                    undefined_names: typecheck_result.undefined_names,
+                },
+            );
+            if let Some(failure) = codegen_result.failure {
+                return Err(failure.into());
+            }
+
+            if let Some(current_file) = current_file {
+                let mut definienda = current_file.get_definienda(&self.heap);
                 let mut rewritten_definienda: Vec<IdentifierRecordRef> = Vec::new();
                 while let Some(definiendum) = definienda.pop(&self.heap) {
                     rewritten_definienda.push(definiendum);
-                }
-
-                if include_request.modifiers.is_empty() {
-                    materialized_includees.append(&mut self.heap, includee);
-                    continue;
                 }
 
                 for modifier in &include_request.modifiers {
@@ -672,11 +703,9 @@ impl VM {
                             }
 
                             let renamed_identifier = self.intern_identifier(renamed_name.as_str());
-
                             let original_definition = original_identifier.get_definition(&self.heap);
                             let original_datatype = original_identifier.get_datatype(&self.heap);
-                            renamed_identifier
-                                .set_definition(&mut self.heap, original_definition);
+                            renamed_identifier.set_definition(&mut self.heap, original_definition);
                             renamed_identifier.set_datatype(&mut self.heap, original_datatype);
                             if let Some(original_value) = original_identifier.get_value(&self.heap) {
                                 match original_value.get_data(&self.heap) {
@@ -768,12 +797,69 @@ impl VM {
                     }
                 }
 
-                includee.clear_definienda(&mut self.heap);
+                current_file.clear_definienda(&mut self.heap);
                 for definiendum in rewritten_definienda.into_iter().rev() {
-                    includee.push_item_onto_definienda(&mut self.heap, definiendum);
+                    current_file.push_item_onto_definienda(&mut self.heap, definiendum);
                 }
-                materialized_includees.append(&mut self.heap, includee);
             }
+
+            Ok(compiled_include_graph)
+        })();
+
+        self.free_identifiers = outer_free_identifiers;
+        if result.is_err() {
+            self.free_binding_sets = saved_free_binding_sets;
+        }
+        self.unused_types = saved_unused_types;
+
+        result
+    }
+
+    /// Applies the include-expansion phase for the current load cycle.
+    ///
+    /// C parity target: `files=append1(files,mkincludes(included_files)),included_files=NIL; ld_stuff=NIL;`
+    /// from `loadfile`.
+    /// Current concrete behavior:
+    /// - appends currently tracked `included_files` into `files` in list order,
+    /// - for parser-fed include requests, compiles include source into staged file graphs through the active parse/typecheck/codegen subset,
+    /// - applies the active rename/suppress modifier subset to the direct include target after nested include compilation,
+    /// - commits includees only after the whole request set succeeds,
+    /// - clears `included_files` after append,
+    /// - clears `include_rollback_files` bookkeeping for interrupted include loads.
+    ///
+    /// Fuller include-sharing/typeclash parity and deeper imported-definition semantics remain deferred.
+    pub(super) fn run_mkincludes_phase(
+        &mut self,
+        directive_payload: Option<&ParserTopLevelDirectivePayload>,
+    ) -> Result<ConsList<FileRecord>, LoadFileError> {
+        let Some(directive_payload) = directive_payload else {
+            if self.included_files.is_empty() {
+                self.include_rollback_files = ConsList::EMPTY;
+                return Ok(ConsList::EMPTY);
+            }
+
+            let materialized_includees = self.included_files;
+            let mut included_files = self.included_files;
+            while let Some(includee) = included_files.pop(&self.heap) {
+                self.files.append(&mut self.heap, includee);
+            }
+
+            self.included_files = ConsList::EMPTY;
+            self.include_rollback_files = ConsList::EMPTY;
+            return Ok(materialized_includees);
+        };
+
+        if directive_payload.include_requests.is_empty() {
+            self.include_rollback_files = ConsList::EMPTY;
+            return Ok(ConsList::EMPTY);
+        }
+
+        let mut materialized_includees = ConsList::EMPTY;
+        let outer_free_identifiers = self.free_identifiers;
+        for include_request in &directive_payload.include_requests {
+            let compiled_include_graph =
+                self.compile_include_request(include_request, outer_free_identifiers)?;
+            self.append_file_graph(&mut materialized_includees, compiled_include_graph);
         }
 
         let mut includees_to_append = materialized_includees;
@@ -883,6 +969,27 @@ impl VM {
         directive_payload: Option<&ParserTopLevelDirectivePayload>,
         materialized_includees: ConsList<FileRecord>,
     ) -> Result<CommittedDirectiveState, ExportValidationError> {
+        let current_file_definienda = self
+            .files
+            .head(&self.heap)
+            .map(|file| file.get_definienda(&self.heap))
+            .unwrap_or(ConsList::EMPTY);
+        self.run_export_closure_phase_partial_for_definienda(
+            directive_payload,
+            current_file_definienda,
+            materialized_includees,
+        )
+    }
+
+    /// Applies export-closure gating over one staged current-file definienda set.
+    /// This exists so recursive include compilation can reuse the active export-validation owner without rebinding authoritative VM file state.
+    /// The invariant is that explicit export-id validation and type-driven closure read only the supplied current-file definienda plus the staged include graph.
+    fn run_export_closure_phase_partial_for_definienda(
+        &mut self,
+        directive_payload: Option<&ParserTopLevelDirectivePayload>,
+        current_file_definienda: ConsList<IdentifierRecordRef>,
+        materialized_includees: ConsList<FileRecord>,
+    ) -> Result<CommittedDirectiveState, ExportValidationError> {
         let Some(directive_payload) = directive_payload else {
             if self.exported_identifiers == NIL {
                 return Ok(CommittedDirectiveState::default());
@@ -907,12 +1014,6 @@ impl VM {
         if !self.undefined_names.is_empty() {
             return Err(ExportValidationError::BlockedByUndefinedNames);
         }
-
-        let current_file_definienda = self
-            .files
-            .head(&self.heap)
-            .map(|file| file.get_definienda(&self.heap))
-            .unwrap_or(ConsList::EMPTY);
         let mut exportable_definienda = ConsList::EMPTY;
         let mut current_exportable = current_file_definienda;
         while let Some(definiendum) = current_exportable.pop(&self.heap) {

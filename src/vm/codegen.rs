@@ -9,10 +9,10 @@ use crate::data::{
 };
 
 pub(super) struct CodegenBoundaryInputs {
-    files: ConsList<FileRecord>,
-    current_file: Option<FileRecord>,
-    initializing: bool,
-    undefined_names: ConsList<IdentifierRecordRef>,
+    pub(super) files: ConsList<FileRecord>,
+    pub(super) current_file: Option<FileRecord>,
+    pub(super) initializing: bool,
+    pub(super) undefined_names: ConsList<IdentifierRecordRef>,
 }
 
 impl CodegenBoundaryInputs {

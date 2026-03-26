@@ -2664,6 +2664,179 @@ fn load_file_include_modifier_failure_leaves_no_authoritative_commit() {
 }
 
 #[test]
+fn load_file_materializes_nested_include_graph_in_source_order() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let leaf_path = unique_test_path("nested_include_leaf.m");
+    std::fs::write(&leaf_path, "leaf = 1\n").expect("failed to write leaf include source test file");
+    let leaf_path_str = leaf_path.to_string_lossy().to_string();
+
+    let middle_path = unique_test_path("nested_include_middle.m");
+    std::fs::write(
+        &middle_path,
+        format!("%include \"{}\"\nmiddle = 2\n", leaf_path_str),
+    )
+    .expect("failed to write middle include source test file");
+    let middle_path_str = middle_path.to_string_lossy().to_string();
+
+    let source_path = unique_test_path("nested_include_driver.m");
+    std::fs::write(&source_path, format!("%include \"{}\"\nroot = 3\n", middle_path_str))
+        .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+    let mut files = vm.files;
+    let mut file_names = Vec::new();
+    while let Some(file) = files.pop(&vm.heap) {
+        file_names.push(file.get_file_name(&vm.heap));
+    }
+    assert_eq!(file_names, vec![source_path_str, middle_path_str, leaf_path_str]);
+}
+
+#[test]
+fn load_file_nested_include_failure_leaves_no_authoritative_commit() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let missing_leaf_path = unique_test_path("missing_nested_leaf.m");
+    let missing_leaf_path_str = missing_leaf_path.to_string_lossy().to_string();
+
+    let middle_path = unique_test_path("missing_nested_middle.m");
+    std::fs::write(
+        &middle_path,
+        format!("%include \"{}\"\nmiddle = 2\n", missing_leaf_path_str),
+    )
+    .expect("failed to write middle include source test file");
+    let middle_path_str = middle_path.to_string_lossy().to_string();
+
+    let source_path = unique_test_path("missing_nested_driver.m");
+    std::fs::write(&source_path, format!("%include \"{}\"\n", middle_path_str))
+        .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::SourceInput(SourceInputError::MissingFile { path }))
+            if path == missing_leaf_path_str
+    ));
+    assert_eq!(vm.files.len(&vm.heap), 1);
+    assert_eq!(vm.exported_identifiers, NIL);
+    assert_eq!(vm.export_paths, NIL);
+    assert_eq!(vm.export_embargoes, NIL);
+}
+
+#[test]
+fn load_file_typechecks_include_target_before_parent_commit() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let include_path = unique_test_path("typecheck_include_target.m");
+    std::fs::write(&include_path, "foo = missing\n")
+        .expect("failed to write include source test file");
+    let include_path_str = include_path.to_string_lossy().to_string();
+
+    let source_path = unique_test_path("typecheck_include_driver.m");
+    std::fs::write(&source_path, format!("%include \"{}\"\n", include_path_str))
+        .expect("failed to write source test file");
+    let result = vm.load_file(&source_path.to_string_lossy());
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(TypecheckError::UndefinedNames { count: 1 }))
+    ));
+    assert_eq!(vm.files.len(&vm.heap), 1);
+}
+
+#[test]
+fn load_file_lowers_include_target_definition_during_include_compilation() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let include_path = unique_test_path("codegen_include_target.m");
+    std::fs::write(&include_path, "id x = x\n")
+        .expect("failed to write include source test file");
+    let include_path_str = include_path.to_string_lossy().to_string();
+
+    let source_path = unique_test_path("codegen_include_driver.m");
+    std::fs::write(&source_path, format!("%include \"{}\"\n", include_path_str))
+        .expect("failed to write source test file");
+
+    let result = vm.load_file(&source_path.to_string_lossy());
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+    let id = vm.heap.get_identifier("id").expect("expected included id identifier");
+    assert_eq!(
+        id.get_value(&vm.heap)
+            .expect("expected lowered included id body")
+            .get_ref(),
+        RawValue::from(Combinator::I)
+    );
+}
+
+#[test]
+fn load_file_preserves_parent_include_bindings_and_modifier_scope_over_nested_include_graph() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let leaf_path = unique_test_path("nested_modifier_leaf.m");
+    std::fs::write(&leaf_path, "leaf = 1\n").expect("failed to write leaf include source test file");
+    let leaf_path_str = leaf_path.to_string_lossy().to_string();
+
+    let middle_path = unique_test_path("nested_modifier_middle.m");
+    std::fs::write(
+        &middle_path,
+        format!(
+            "%free {{ x :: num }}\n%include \"{}\"\nfoo = x\nbar = 2\n",
+            leaf_path_str
+        ),
+    )
+    .expect("failed to write middle include source test file");
+    let middle_path_str = middle_path.to_string_lossy().to_string();
+
+    let source_path = unique_test_path("nested_modifier_driver.m");
+    std::fs::write(
+        &source_path,
+        format!(
+            "%include \"{}\" {{ x = 42 }} renamed / foo -bar\n",
+            middle_path_str
+        ),
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+    let mut files = vm.files;
+    let driver = files.pop(&vm.heap).expect("expected driver file");
+    let middle = files.pop(&vm.heap).expect("expected direct include file");
+    let leaf = files.pop(&vm.heap).expect("expected nested include file");
+    assert_eq!(driver.get_file_name(&vm.heap), source_path_str);
+    assert_eq!(middle.get_file_name(&vm.heap), middle_path_str);
+    assert_eq!(leaf.get_file_name(&vm.heap), leaf_path_str);
+
+    let mut middle_definienda = middle.get_definienda(&vm.heap);
+    let mut middle_names = Vec::new();
+    while let Some(definiendum) = middle_definienda.pop(&vm.heap) {
+        middle_names.push(vm.identifier_name(definiendum));
+    }
+    middle_names.sort();
+    assert_eq!(middle_names, vec!["renamed", "x"]);
+
+    let mut leaf_definienda = leaf.get_definienda(&vm.heap);
+    let mut leaf_names = Vec::new();
+    while let Some(definiendum) = leaf_definienda.pop(&vm.heap) {
+        leaf_names.push(vm.identifier_name(definiendum));
+    }
+    assert_eq!(leaf_names, vec!["leaf"]);
+}
+
+#[test]
 fn load_file_lowers_identity_definition_body_during_codegen() {
     let mut vm = VM::new_for_tests();
     vm.initializing = false;

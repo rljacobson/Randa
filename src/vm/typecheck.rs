@@ -9,9 +9,9 @@ use crate::data::heap::is_capitalized;
 use crate::data::{Combinator, Heap, RawValue, Tag, Type, Value, ATOM_LIMIT};
 
 pub(super) struct TypecheckBoundaryInputs {
-    current_file: Option<FileRecord>,
-    detritus_parameter_bindings: ConsList<Value>,
-    missing_parameter_bindings: ConsList<Value>,
+    pub(super) current_file: Option<FileRecord>,
+    pub(super) detritus_parameter_bindings: ConsList<Value>,
+    pub(super) missing_parameter_bindings: ConsList<Value>,
 }
 
 impl TypecheckBoundaryInputs {
@@ -885,7 +885,7 @@ fn classify_committed_formal_pattern(heap: &Heap, pattern: Value) -> CommittedFo
 }
 
 // Todo: promote this raw heap-shape natural-integer check to a bigint-owned query once `IntegerRef`
-// exposes a crate-visible Miranda `isnat` predicate.
+//       exposes a crate-visible Miranda `isnat` predicate.
 fn canonical_successor_pattern(
     heap: &Heap,
     head: Value,
