@@ -550,6 +550,16 @@ impl VM {
                 return Err(IncludeDirectiveError::SyntaxErrorsPresent { path }.into());
             }
 
+            if let Some(current_file) = parse_outcome.files.head(&self.heap) {
+                let include_has_free_bindings = parse_outcome
+                    .top_level_payload
+                    .as_ref()
+                    .is_some_and(|payload| !payload.free_bindings.is_empty());
+                if !include_has_free_bindings {
+                    current_file.set_shareable(&mut self.heap, true);
+                }
+            }
+
             if include_request.bindings.is_empty() {
                 self.detritus_parameter_bindings = ConsList::EMPTY;
                 self.missing_parameter_bindings = ConsList::EMPTY;
@@ -815,6 +825,85 @@ impl VM {
         result
     }
 
+    /// Reuses earlier staged definition identities for one repeated shareable include graph. This
+    /// exists so `run_mkincludes_phase` keeps repeated-include sharing and non-synonym typeclash
+    /// detection in one load-owned seam before authoritative append. The invariant is that only
+    /// shareable file records from the same source path and modification time participate,
+    /// non-type definienda in later copies reuse earlier identifier identities, non-synonym
+    /// repeated types fail before commit, and staged file order remains unchanged.
+    fn share_staged_include_graph_definitions(
+        &mut self,
+        repeated_graph: ConsList<FileRecord>,
+        staged_includees: ConsList<FileRecord>,
+    ) -> Result<(), IncludeDirectiveError> {
+        let mut repeated_files = repeated_graph;
+        while let Some(repeated_file) = repeated_files.pop(&self.heap) {
+            if !repeated_file.is_shareable(&self.heap) {
+                continue;
+            }
+
+            let repeated_name = repeated_file.get_file_name(&self.heap);
+            let repeated_modified = repeated_file.get_last_modified(&self.heap);
+            let mut prior_files = staged_includees;
+            while let Some(prior_file) = prior_files.pop(&self.heap) {
+                if !prior_file.is_shareable(&self.heap)
+                    || prior_file.get_file_name(&self.heap) != repeated_name
+                    || prior_file.get_last_modified(&self.heap) != repeated_modified
+                {
+                    continue;
+                }
+
+                let mut repeated_definienda = repeated_file.get_definienda(&self.heap);
+                let mut prior_definienda = prior_file.get_definienda(&self.heap);
+                let mut repeated_type_clashes = Vec::new();
+                while let (Some(repeated_definiendum), Some(prior_definiendum)) = (
+                    repeated_definienda.pop(&self.heap),
+                    prior_definienda.pop(&self.heap),
+                ) {
+                    if repeated_definiendum == prior_definiendum {
+                        continue;
+                    }
+
+                    if repeated_definiendum
+                        .get_type_expr(&self.heap)
+                        .is_builtin_type(Type::Type)
+                    {
+                        let repeated_kind = repeated_definiendum
+                            .get_value(&self.heap)
+                            .and_then(|value| value.typed_kind(&self.heap));
+                        if repeated_kind.is_some_and(|kind| kind != IdentifierValueTypeKind::Synonym)
+                        {
+                            let prior_name = prior_definiendum.get_name(&self.heap);
+                            if !repeated_type_clashes.contains(&prior_name) {
+                                repeated_type_clashes.push(prior_name);
+                            }
+
+                            let repeated_name = repeated_definiendum.get_name(&self.heap);
+                            if !repeated_type_clashes.contains(&repeated_name) {
+                                repeated_type_clashes.push(repeated_name);
+                            }
+                        }
+                        continue;
+                    }
+
+                    repeated_definiendum.set_value(
+                        &mut self.heap,
+                        IdentifierValueRef::from_ref(prior_definiendum.get_ref()),
+                    );
+                }
+
+                if !repeated_type_clashes.is_empty() {
+                    return Err(IncludeDirectiveError::RepeatedTypeClash {
+                        path: repeated_file.get_file_name(&self.heap),
+                        names: repeated_type_clashes,
+                    });
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Applies the include-expansion phase for the current load cycle.
     ///
     /// C parity target: `files=append1(files,mkincludes(included_files)),included_files=NIL; ld_stuff=NIL;`
@@ -823,6 +912,7 @@ impl VM {
     /// - appends currently tracked `included_files` into `files` in list order,
     /// - for parser-fed include requests, compiles include source into staged file graphs through the active parse/typecheck/codegen subset,
     /// - applies the active rename/suppress modifier subset to the direct include target after nested include compilation,
+    /// - reuses earlier staged definition identities for repeated shareable include components,
     /// - commits includees only after the whole request set succeeds,
     /// - clears `included_files` after append,
     /// - clears `include_rollback_files` bookkeeping for interrupted include loads.
@@ -859,6 +949,10 @@ impl VM {
         for include_request in &directive_payload.include_requests {
             let compiled_include_graph =
                 self.compile_include_request(include_request, outer_free_identifiers)?;
+            self.share_staged_include_graph_definitions(
+                compiled_include_graph,
+                materialized_includees,
+            )?;
             self.append_file_graph(&mut materialized_includees, compiled_include_graph);
         }
 

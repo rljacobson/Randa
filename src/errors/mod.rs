@@ -88,6 +88,8 @@ pub enum IncludeDirectiveError {
     ModifierTargetNotFound { name: String },
     #[error("Include rename target already defined: {name}")]
     RenameDestinationClash { name: String },
+    #[error("Included file defines repeated non-synonym types in one scope: {path} ({names:?})")]
+    RepeatedTypeClash { path: String, names: Vec<String> },
 }
 
 /// Reports semantic and type failures from the typecheck boundary in `src/vm/typecheck.rs`.

@@ -2431,6 +2431,258 @@ fn load_file_preserves_parameterized_include_request_order() {
 }
 
 #[test]
+fn load_file_shares_repeated_shareable_include_definition_identity_across_renamed_copy() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let include_path = unique_test_path("shared_include_target.m");
+    std::fs::write(&include_path, "foo = 1\n")
+        .expect("failed to write include source test file");
+    let include_path_str = include_path.to_string_lossy().to_string();
+
+    let source_path = unique_test_path("shared_include_driver.m");
+    std::fs::write(
+        &source_path,
+        format!(
+            "%include \"{}\"\n%include \"{}\" renamed / foo\n",
+            include_path_str, include_path_str,
+        ),
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+    let mut included_files = vm.files.rest(&vm.heap).expect("expected included file list tail");
+    let first_includee = included_files.pop(&vm.heap).expect("expected first included file");
+    let first_foo = first_includee
+        .get_definienda(&vm.heap)
+        .head(&vm.heap)
+        .expect("expected first include definiendum");
+    let renamed = vm
+        .heap
+        .get_identifier("renamed")
+        .expect("expected renamed included identifier");
+    assert_eq!(
+        renamed
+            .get_value(&vm.heap)
+            .expect("expected renamed included value")
+            .get_ref(),
+        first_foo.get_ref()
+    );
+}
+
+#[test]
+fn load_file_preserves_include_order_after_repeated_shareable_include_sharing() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let shared_path = unique_test_path("shared_include_order_target.m");
+    std::fs::write(&shared_path, "foo = 1\n").expect("failed to write shared include source test file");
+    let shared_path_str = shared_path.to_string_lossy().to_string();
+
+    let distinct_path = unique_test_path("distinct_include_order_target.m");
+    std::fs::write(&distinct_path, "bar = 2\n")
+        .expect("failed to write distinct include source test file");
+    let distinct_path_str = distinct_path.to_string_lossy().to_string();
+
+    let source_path = unique_test_path("shared_include_order_driver.m");
+    std::fs::write(
+        &source_path,
+        format!(
+            "%include \"{}\"\n%include \"{}\"\n%include \"{}\" renamed / foo\n",
+            shared_path_str, distinct_path_str, shared_path_str,
+        ),
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+    let mut files = vm.files;
+    let mut file_names = Vec::new();
+    while let Some(file) = files.pop(&vm.heap) {
+        file_names.push(file.get_file_name(&vm.heap));
+    }
+    assert_eq!(
+        file_names,
+        vec![
+            source_path_str,
+            shared_path_str.clone(),
+            distinct_path_str,
+            shared_path_str,
+        ]
+    );
+}
+
+#[test]
+fn load_file_does_not_share_unshareable_current_script_include_components() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let include_path = unique_test_path("unshareable_include_target.m");
+    std::fs::write(&include_path, "%free { x :: num }\nfoo = x\n")
+        .expect("failed to write include source test file");
+    let include_path_str = include_path.to_string_lossy().to_string();
+
+    let source_path = unique_test_path("unshareable_include_driver.m");
+    std::fs::write(
+        &source_path,
+        format!(
+            "%include \"{}\" {{ x = 1 }}\n%include \"{}\" {{ x = 2 }} renamed / foo\n",
+            include_path_str, include_path_str,
+        ),
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+    let foo = vm.heap.get_identifier("foo").expect("expected first included foo identifier");
+    let renamed = vm
+        .heap
+        .get_identifier("renamed")
+        .expect("expected renamed included identifier");
+    assert_ne!(
+        renamed
+            .get_value(&vm.heap)
+            .expect("expected renamed included value")
+            .get_ref(),
+        foo.get_ref()
+    );
+}
+
+#[test]
+fn load_file_rejects_repeated_non_synonym_type_copies_from_same_include_file() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let include_path = unique_test_path("typeclash_include_target.m");
+    std::fs::write(
+        &include_path,
+        "abstype thing with showthing :: num\nthing == num\nshowthing = 0\n",
+    )
+    .expect("failed to write include source test file");
+    let include_path_str = include_path.to_string_lossy().to_string();
+
+    let source_path = unique_test_path("typeclash_include_driver.m");
+    std::fs::write(
+        &source_path,
+        format!(
+            "%include \"{}\"\n%include \"{}\" other / thing\n%export thing other\n",
+            include_path_str, include_path_str,
+        ),
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::IncludeDirective(IncludeDirectiveError::RepeatedTypeClash {
+            path,
+            names,
+        })) if path == include_path_str && names.contains(&"thing".to_string()) && names.contains(&"other".to_string())
+    ));
+    assert_eq!(vm.files.len(&vm.heap), 1);
+    assert_eq!(vm.exported_identifiers, NIL);
+    assert_eq!(vm.export_paths, NIL);
+    assert_eq!(vm.export_embargoes, NIL);
+}
+
+#[test]
+fn load_file_allows_repeated_synonym_type_copies_from_same_include_file() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let include_path = unique_test_path("synonym_include_target.m");
+    std::fs::write(&include_path, "thing == num\n")
+        .expect("failed to write include source test file");
+    let include_path_str = include_path.to_string_lossy().to_string();
+
+    let source_path = unique_test_path("synonym_include_driver.m");
+    std::fs::write(
+        &source_path,
+        format!(
+            "%include \"{}\"\n%include \"{}\" other / thing\n%export thing other\n",
+            include_path_str, include_path_str,
+        ),
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+    let thing = vm
+        .heap
+        .get_identifier("thing")
+        .expect("expected first synonym type identifier");
+    let other = vm
+        .heap
+        .get_identifier("other")
+        .expect("expected renamed synonym type identifier");
+    assert_eq!(
+        thing.get_value(&vm.heap).and_then(|value| value.typed_kind(&vm.heap)),
+        Some(IdentifierValueTypeKind::Synonym)
+    );
+    assert_eq!(
+        other.get_value(&vm.heap).and_then(|value| value.typed_kind(&vm.heap)),
+        Some(IdentifierValueTypeKind::Synonym)
+    );
+}
+
+#[test]
+fn load_file_exports_repeated_shared_include_definitions_coherently() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let include_path = unique_test_path("shared_export_include_target.m");
+    std::fs::write(&include_path, "foo = 1\n")
+        .expect("failed to write include source test file");
+    let include_path_str = include_path.to_string_lossy().to_string();
+
+    let source_path = unique_test_path("shared_export_include_driver.m");
+    std::fs::write(
+        &source_path,
+        format!(
+            "%include \"{}\"\n%include \"{}\" renamed / foo\n%export foo renamed\n",
+            include_path_str, include_path_str,
+        ),
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+    let exported = ConsList::<IdentifierRecordRef>::from_ref(vm.exported_identifiers.into());
+    let renamed = vm
+        .heap
+        .get_identifier("renamed")
+        .expect("expected renamed included identifier");
+    let mut included_files = vm.files.rest(&vm.heap).expect("expected included file list tail");
+    let first_includee = included_files.pop(&vm.heap).expect("expected first included file");
+    let first_foo = first_includee
+        .get_definienda(&vm.heap)
+        .head(&vm.heap)
+        .expect("expected first include definiendum");
+    assert!(exported.contains(&vm.heap, first_foo));
+    assert!(exported.contains(&vm.heap, renamed));
+    assert_eq!(
+        renamed
+            .get_value(&vm.heap)
+            .expect("expected renamed included value")
+            .get_ref(),
+        first_foo.get_ref()
+    );
+}
+
+#[test]
 fn load_file_applies_include_rename_modifier_to_materialized_definienda() {
     let mut vm = VM::new_for_tests();
     vm.initializing = false;
