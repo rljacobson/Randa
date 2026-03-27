@@ -493,7 +493,7 @@ include_export_item:
     ;
 
 top_level_definition_item:
-    top_level_definition_lhs top_level_definition_anchor Equal exp directive_terminators {
+    top_level_definition_lhs top_level_definition_anchor Equal top_level_rhs directive_terminators {
         let anchor = FileInfoRef::from_ref($2.into());
         let (lowered_lhs, lowered_body) = self.heap.lower_function_form_lambdas($1, $4);
         let lowered_identifier_ref: RawValue = lowered_lhs.into();
@@ -510,6 +510,104 @@ top_level_definition_item:
           self.last_identifier = identifier.get_ref();
           $$ = NIL;
         }
+      }
+    ;
+
+top_level_rhs:
+    cases Where top_level_local_definitions {
+        let composed_cases = self.compose_cases($1);
+        $$ = self.build_local_block($3, composed_cases);
+      }
+    | exp Where top_level_local_definitions {
+        $$ = self.build_local_block($3, $1);
+      }
+    | non_where_rhs { $$ = $1; }
+    ;
+
+top_level_local_definitions:
+    top_level_local_definition {
+        let definition_value = $1;
+        if definition_value == NIL {
+          $$ = NIL;
+        } else {
+          let definition = DefinitionRef::from_ref(definition_value.into());
+          let lhs_value = definition.lhs_value(&self.heap);
+          let body_value = definition.body_value(&self.heap);
+          let initial_alternatives = self.heap.cons_ref(body_value, NIL);
+          let wrapped_body = self.heap.tries_ref(lhs_value, initial_alternatives);
+          definition.set_body_value(&mut self.heap, wrapped_body);
+          if self.local_lhs_bound_identifiers(lhs_value).is_empty() {
+            self.syntax("illegal lhs for local definition\n");
+          }
+          $$ = self.heap.cons_ref(definition_value, NIL);
+        }
+      }
+    | top_level_local_definitions separator top_level_local_definition {
+        let prior_definitions = $1;
+        let new_definition_value = $3;
+        if new_definition_value == NIL {
+          $$ = prior_definitions;
+        } else if prior_definitions == NIL {
+          $$ = self.heap.cons_ref(new_definition_value, NIL);
+        } else {
+          let new_definition = DefinitionRef::from_ref(new_definition_value.into());
+          let head_definition = DefinitionRef::from_ref(self.heap[RawValue::from(prior_definitions)].head);
+          let new_lhs = new_definition.lhs_value(&self.heap);
+          if new_lhs == head_definition.lhs_value(&self.heap) {
+            $$ = prior_definitions;
+            let head_body = head_definition.body_value(&self.heap);
+            if !self.is_fallible_local_rhs(head_body) {
+              let lhs_name = if let Value::Reference(_) = new_lhs {
+                IdentifierRecordRef::from_ref(RawValue::from(new_lhs)).get_name(&self.heap)
+              } else {
+                String::from("<pattern>")
+              };
+              self.syntax(&format!("unreachable case in defn of \"{}\"\n", lhs_name));
+            }
+            let head_body_raw = RawValue::from(head_body);
+            let alternatives = self.heap[head_body_raw].tail;
+            self.heap[head_body_raw].tail = self.heap.cons_ref(
+              new_definition.body_value(&self.heap),
+              alternatives.into(),
+            ).into();
+          } else {
+            let binders = self.local_lhs_bound_identifiers(new_lhs);
+            if binders.is_empty() {
+              self.syntax("illegal lhs for local definition\n");
+            }
+            for binder in &binders {
+              if self.local_definition_group_contains_binder(prior_definitions, *binder) {
+                self.syntax(&format!("nameclash, \"{}\" already defined\n", binder.get_name(&self.heap)));
+                break;
+              }
+            }
+            let initial_alternatives = self.heap.cons_ref(new_definition.body_value(&self.heap), NIL);
+            let wrapped_body = self.heap.tries_ref(new_lhs, initial_alternatives);
+            new_definition.set_body_value(&mut self.heap, wrapped_body);
+            $$ = self.heap.cons_ref(new_definition_value, prior_definitions);
+          }
+        }
+      }
+    | top_level_local_definitions separator { $$ = $1; }
+    ;
+
+top_level_local_definition:
+    top_level_definition_lhs top_level_definition_anchor Equal non_where_rhs {
+        let (lowered_lhs, lowered_body) = self.heap.lower_function_form_lambdas($1, $4);
+        let labeled_body = self.heap.label_ref($2, lowered_body);
+        $$ = DefinitionRef::new(&mut self.heap, lowered_lhs, Type::Undefined.into(), labeled_body).into();
+      }
+    | spec {
+        self.syntax("`::' encountered in local defs\n");
+        $$ = NIL;
+      }
+    | typeform here EqualEqual {
+        self.syntax("`==' encountered in local defs\n");
+        $$ = NIL;
+      }
+    | typeform here Colon2Equal {
+        self.syntax("`::=' encountered in local defs\n");
+        $$ = NIL;
       }
     ;
 
@@ -1147,39 +1245,55 @@ eqop:
     ;
 
 rhs:
-    cases Where ldefs { $$ = block($3, compose($1), 0); }
-    | exp Where ldefs { $$ = block($3, $1, 0); }
+    cases Where ldefs {
+        let composed_cases = self.compose_cases($1);
+        $$ = self.build_local_block($3, composed_cases);
+      }
+    | exp Where ldefs { $$ = self.build_local_block($3, $1); }
     | non_where_rhs { $$ = $1; }
     ;
 
 non_where_rhs:
     exp { $$ = $1; }
-    | cases { $$ = compose($1); }
+    | cases { $$ = self.compose_cases($1); }
     ;
 
 cases:
-    exp Comma if exp { $$ = self.heap.cons_ref(self.heap.apply2(Combinator::Cond.into(), $4, $1).into(), NIL); }
+    exp Comma if exp {
+        let guarded = self.heap.apply2(Combinator::Cond.into(), $4, $1);
+        $$ = self.heap.cons_ref(guarded, NIL);
+      }
     | exp Comma Otherwise {
         let ow = self.heap.apply_ref(Token::Otherwise.into(), $1);
         $$ = self.heap.cons_ref(ow, NIL);
-    }
+      }
     | cases reindent ElseEqual alt {
         $$ = self.heap.cons_ref($4, $1);
-        let case_head = self.heap[$1].head;
-        if self.heap[case_head].head == Token::Otherwise.into() {
-          syntax("\"otherwise\" must be last case\n");
+        let prior_case: Value = self.heap[RawValue::from($1)].head.into();
+        let prior_case_raw = RawValue::from(prior_case);
+        if prior_case_raw >= ATOM_LIMIT
+          && self.heap[prior_case_raw].tag == Tag::Ap
+          && ApNodeRef::from_ref(prior_case_raw).function_raw(&self.heap) == RawValue::from(Token::Otherwise.into_value())
+        {
+          self.syntax("\"otherwise\" must be last case\n");
         }
       }
     ;
 
 alt:
     here exp {
-        errs=$1;
-        syntax("obsolete syntax, \", otherwise\" missing\n");
-        $$ = self.heap.apply_ref(Token::Otherwise.into(), self.heap.label_ref($1, $2));
+        self.syntax("obsolete syntax, \", otherwise\" missing\n");
+        let labeled = self.heap.label_ref($1, $2);
+        $$ = self.heap.apply_ref(Token::Otherwise.into(), labeled);
       }
-    | here exp Comma if exp { $$ = self.heap.label_ref($1, self.heap.apply2(Combinator::Cond.into(), $5, $2)); }
-    | here exp Comma Otherwise { $$ = self.heap.apply_ref(Token::Otherwise.into(), self.heap.label_ref($1, $2)); }
+    | here exp Comma if exp {
+        let guarded = self.heap.apply2(Combinator::Cond.into(), $5, $2);
+        $$ = self.heap.label_ref($1, guarded);
+      }
+    | here exp Comma Otherwise {
+        let labeled = self.heap.label_ref($1, $2);
+        $$ = self.heap.apply_ref(Token::Otherwise.into(), labeled);
+      }
     ;
 
 if:
@@ -1193,7 +1307,7 @@ if:
 indent:
     /* empty */ {
         if !self.syntax_error_found {
-          self.yylexer.set_left_margin_partial();
+          self.yylexer.push_layout_margin();
         }
         $$ = NIL;
       }
@@ -1204,6 +1318,7 @@ indent:
 
 outdent:
     separator {
+        self.yylexer.pop_layout_margin();
         $$ = NIL;
       }
     ;
@@ -1692,36 +1807,18 @@ defs:
 
 def:
     v act2 indent Equal here exp Where ldefs outdent {
-        let mut l = $1;
-        let mut r = block($8, $6, 0);
-        let f = head(l);
-        if self.heap[f].tag==Tag::Id && !isconstructor(f) {
-          /* fnform defn */
-          while self.heap[l].tag==Tag::Ap {
-            r = lambda(self.heap[l].tail, r);
-            l = self.heap[l].head;
-          }
-        }
-        r = self.heap.label_ref($5, r);
-        declare(l, r);
-        self.last_identifier = l.into();
+        let body = self.build_local_block($8, $6);
+        let (lowered_lhs, lowered_body) = self.heap.lower_function_form_lambdas($1, body);
+        let labeled_body = self.heap.label_ref($5, lowered_body);
+        declare(lowered_lhs, labeled_body);
+        self.last_identifier = lowered_lhs.into();
       }
 
     | v act2 indent Equal here non_where_rhs outdent {
-        let mut l = $1;
-        let mut r = $6;
-        let f = head(l);
-        if self.heap[f].tag==Tag::Id && !isconstructor(f) {
-          /* fnform defn */
-          while self.heap[l].tag==Tag::Ap {
-            r = lambda(self.heap[l].tail, r);
-            l = self.heap[l].head;
-          }
-        }
-        r = self.heap.label_ref($5, r);
-        /* to help locate type errors */
-        declare(l, r);
-        self.last_identifier = l.into();
+        let (lowered_lhs, lowered_body) = self.heap.lower_function_form_lambdas($1, $6);
+        let labeled_body = self.heap.label_ref($5, lowered_body);
+        declare(lowered_lhs, labeled_body);
+        self.last_identifier = lowered_lhs.into();
       }
 
     | spec {
@@ -2152,104 +2249,84 @@ act2:
 
 ldefs:
     ldef {
-        $$ = self.heap.cons_ref($1, NIL);
         let definition = DefinitionRef::from_ref($1.into());
-        definition.set_body_value(
-          &mut self.heap,
-          self.heap.tries_ref(
-            definition.lhs_value(&self.heap),
-            self.heap.cons_ref(definition.body_value(&self.heap), NIL),
-          ),
+        let initial_alternatives = self.heap.cons_ref(definition.body_value(&self.heap), NIL);
+        let wrapped_body = self.heap.tries_ref(
+          definition.lhs_value(&self.heap),
+          initial_alternatives,
         );
-        let definition_body = definition.body_value(&self.heap);
-        if (!SYNERR && get_ids(definition.lhs_value(&self.heap).into())==NIL) {
-          errs = hd[hd[tl[definition_body.into()]]];
-          syntax("illegal lhs for local definition\n");
+        definition.set_body_value(&mut self.heap, wrapped_body);
+        if self.local_lhs_bound_identifiers(definition.lhs_value(&self.heap)).is_empty() {
+          self.syntax("illegal lhs for local definition\n");
         }
+        $$ = self.heap.cons_ref($1, NIL);
       }
     | ldefs ldef {
         let new_definition = DefinitionRef::from_ref($2.into());
-        let head_definition = DefinitionRef::from_ref(self.heap[$1].head);
-        if(new_definition.lhs_value(&self.heap) == head_definition.lhs_value(&self.heap) /*&&dval(self.heap[$1].head)!=UNDEF*/) {
+        let head_definition = DefinitionRef::from_ref(self.heap[RawValue::from($1)].head);
+        if new_definition.lhs_value(&self.heap) == head_definition.lhs_value(&self.heap) {
           $$ = $1;
-          let head_body_raw: RawValue = head_definition.body_value(&self.heap).into();
-          if (!fallible(self.heap[self.heap[head_body_raw]])) {
-            errs = self.heap[new_definition.body_value(&self.heap).into()].head;
-            printf(
-              "%ssyntax error: unreachable case in defn of \"%s\"\n",
-              if echoing {"\n"} else {""},
-              get_id(new_definition.lhs_value(&self.heap).into())
-            );
-            acterror();
+          let head_body = head_definition.body_value(&self.heap);
+          if !self.is_fallible_local_rhs(head_body) {
+            let new_lhs = new_definition.lhs_value(&self.heap);
+            let lhs_name = if let Value::Reference(_) = new_lhs {
+              IdentifierRecordRef::from_ref(RawValue::from(new_lhs)).get_name(&self.heap)
+            } else {
+              String::from("<pattern>")
+            };
+            self.syntax(&format!("unreachable case in defn of \"{}\"\n", lhs_name));
           }
-          self.heap[self.heap[head_body_raw].tail] = self.heap.cons_ref(
+          let head_body_raw = RawValue::from(head_body);
+          let alternatives = self.heap[head_body_raw].tail;
+          self.heap[head_body_raw].tail = self.heap.cons_ref(
             new_definition.body_value(&self.heap),
-            self.heap[self.heap[head_body_raw].tail],
-          );
-        } else if (!SYNERR) {
-          let ns = get_ids(new_definition.lhs_value(&self.heap).into());
-          let hr = self.heap[new_definition.body_value(&self.heap).into()].head;
-          if(ns==NIL){
-            errs = hr;
-            syntax("illegal lhs for local definition\n");
+            alternatives.into(),
+          ).into();
+        } else {
+          let binders = self.local_lhs_bound_identifiers(new_definition.lhs_value(&self.heap));
+          if binders.is_empty() {
+            self.syntax("illegal lhs for local definition\n");
           }
-          $$ = self.heap.cons_ref($2, $1);
-          new_definition.set_body_value(
-            &mut self.heap,
-            self.heap.tries_ref(
-              new_definition.lhs_value(&self.heap),
-              self.heap.cons_ref(new_definition.body_value(&self.heap), NIL),
-            ),
+          for binder in &binders {
+            if self.local_definition_group_contains_binder($1, *binder) {
+              self.syntax(&format!("nameclash, \"{}\" already defined\n", binder.get_name(&self.heap)));
+              break;
+            }
+          }
+          let initial_alternatives = self.heap.cons_ref(new_definition.body_value(&self.heap), NIL);
+          let wrapped_body = self.heap.tries_ref(
+            new_definition.lhs_value(&self.heap),
+            initial_alternatives,
           );
-          while(ns!=NIL&&!SYNERR) { /* local nameclash check */
-            nclashcheck(self.heap[ns].head, $1, hr);
-            ns = self.heap[ns].tail;
-          } /* potentially quadratic - fix later */
+          new_definition.set_body_value(&mut self.heap, wrapped_body);
+          $$ = self.heap.cons_ref($2, $1);
         }
       }
    ;
 
 ldef:
     spec {
-        errs = hd[tl[$1]];
-        syntax("`::' encountered in local defs\n");
+        self.syntax("`::' encountered in local defs\n");
         $$ = self.heap.cons_ref(self.heap.nill, NIL);
       }
     | typeform here EqualEqual {
-        errs=$2;
-        syntax("`==' encountered in local defs\n");
+        self.syntax("`==' encountered in local defs\n");
         $$ = self.heap.cons_ref(self.heap.nill, NIL);
       }
     | typeform here Colon2Equal {
-        errs=$2;
-        syntax("`::=' encountered in local defs\n");
+        self.syntax("`::=' encountered in local defs\n");
         $$ = self.heap.cons_ref(self.heap.nill, NIL);
       }
     | v act2 indent Equal here exp Where ldefs outdent {
-        let mut l = $1;
-        let mut r = block($8, $6, 0);
-        let f = self.heap[l].head;
-        if(self.heap[f].tag == Tag::Id && !isconstructor(f)) { /* fnform defn */
-          while(self.heap[l].tag == Tag::Ap){
-            r = lambda(self.heap[l].tail, r);
-            l = self.heap[l].head;
-          }
-        }
-        r = self.heap.label_ref($5, r);
-        $$ = DefinitionRef::new(&mut self.heap, l.into(), Type::Undefined.into(), r).into();
+        let body = self.build_local_block($8, $6);
+        let (lowered_lhs, lowered_body) = self.heap.lower_function_form_lambdas($1, body);
+        let labeled_body = self.heap.label_ref($5, lowered_body);
+        $$ = DefinitionRef::new(&mut self.heap, lowered_lhs, Type::Undefined.into(), labeled_body).into();
       }
     | v act2 indent Equal here non_where_rhs outdent {
-        let mut l = $1;
-        let mut r = $6;
-        let f = self.heap[l].head;
-        if(self.heap[f].tag == Tag::Id && !isconstructor(f)) { /* fnform defn */
-          while(self.heap[l].tag == Tag::Ap){
-            r = lambda(self.heap[l].tail, r);
-            l = self.heap[l].head;
-          }
-        }
-        r = self.heap.label_ref($5, r); /* to help locate type errors */
-        $$ = DefinitionRef::new(&mut self.heap, l.into(), Type::Undefined.into(), r).into();
+        let (lowered_lhs, lowered_body) = self.heap.lower_function_form_lambdas($1, $6);
+        let labeled_body = self.heap.label_ref($5, lowered_body);
+        $$ = DefinitionRef::new(&mut self.heap, lowered_lhs, Type::Undefined.into(), labeled_body).into();
       }
     ;
 
@@ -2488,7 +2565,8 @@ specs:  /* returns a list of self.heap.cons(id, self.heap.cons(here, type))
 
 spec:
     typeforms indent here ColonColon ttype outdent {
-        $$ = self.heap.cons_ref($1, self.heap.cons_ref($3, $5));
+        let spec_tail = self.heap.cons_ref($3, $5);
+        $$ = self.heap.cons_ref($1, spec_tail);
       } /* hack: `typeforms' includes `namelist' */
     ;
 
@@ -3089,6 +3167,134 @@ impl<'ctx /* 'fix quotes */> Parser<'ctx /* 'fix quotes */> {
       (inner >= ATOM_LIMIT && self.heap[inner].tag == Tag::Id)
         .then_some(Value::from(inner))
         .unwrap_or(head)
+    }
+
+    /// Wraps one active local-definition block around an already parsed body expression.
+    /// This exists so parser-owned `where` lowering reuses one committed block owner instead of open-coding local-node construction at each call site.
+    /// The invariant is that the active subset lowers local-definition groups into one committed `LetRec` body.
+    fn build_local_block(&mut self, definitions: Value, body: Value) -> Value {
+      self.heap.letrec_ref(definitions, body)
+    }
+
+    /// Composes one active guarded-expression case list into the committed local-control body shape.
+    /// This exists so parser-owned guarded rhs lowering reaches the same `Tries` owner regardless of whether the cases appear at top level or inside locals.
+    /// The invariant is that the parsed case list becomes one committed `Tries` node with alternatives kept in source order.
+    fn compose_cases(&mut self, reversed_cases: Value) -> Value {
+      let mut cursor: Value = reversed_cases;
+      let mut source_order = NIL;
+      while RawValue::from(cursor) >= ATOM_LIMIT && self.heap[RawValue::from(cursor)].tag == Tag::Cons {
+        let cursor_ref = RawValue::from(cursor);
+        source_order = self.heap.cons_ref(self.heap[cursor_ref].head.into(), source_order);
+        cursor = self.heap[cursor_ref].tail.into();
+      }
+      self.heap.tries_ref(NIL, source_order)
+    }
+
+    /// Collects the identifiers bound by one active local-definition lhs pattern.
+    /// This exists so parser-owned local-definition legality checks and nameclash checks share one binder walk instead of diverging across `ldefs` actions.
+    /// The invariant is that binders are collected once in first-occurrence order while constructor heads, wrapped constants, and arithmetic offsets remain non-binding.
+    fn collect_local_lhs_bound_identifiers(&self, pattern: Value, bound_identifiers: &mut Vec<IdentifierRecordRef>) {
+      let raw = RawValue::from(pattern);
+      if raw < ATOM_LIMIT {
+        return;
+      }
+
+      match self.heap[raw].tag {
+        Tag::Id => {
+          let identifier = IdentifierRecordRef::from_ref(raw);
+          if !identifier.is_constructor_valued(&self.heap) && !bound_identifiers.contains(&identifier) {
+            bound_identifiers.push(identifier);
+          }
+        }
+        Tag::Cons => {
+          if self.heap[raw].head == RawValue::from(Value::Token(Token::Constant)) {
+            return;
+          }
+          self.collect_local_lhs_bound_identifiers(self.heap[raw].head.into(), bound_identifiers);
+          self.collect_local_lhs_bound_identifiers(self.heap[raw].tail.into(), bound_identifiers);
+        }
+        Tag::Pair | Tag::TCons => {
+          self.collect_local_lhs_bound_identifiers(self.heap[raw].head.into(), bound_identifiers);
+          self.collect_local_lhs_bound_identifiers(self.heap[raw].tail.into(), bound_identifiers);
+        }
+        Tag::Ap => {
+          let application = ApNodeRef::from_ref(raw);
+          if let Some(function_application) = application.function_application(&self.heap) {
+            if function_application.function_raw(&self.heap) == Combinator::Plus as RawValue {
+              self.collect_local_lhs_bound_identifiers(application.argument_raw(&self.heap).into(), bound_identifiers);
+              return;
+            }
+          }
+          self.collect_local_lhs_bound_identifiers(application.argument_raw(&self.heap).into(), bound_identifiers);
+          let function = Value::from(application.function_raw(&self.heap));
+          let function_raw = RawValue::from(function);
+          if function_raw >= ATOM_LIMIT
+            && self.heap[function_raw].tag == Tag::Id
+            && !IdentifierRecordRef::from_ref(function_raw).is_constructor_valued(&self.heap)
+          {
+            self.collect_local_lhs_bound_identifiers(function, bound_identifiers);
+          }
+        }
+        _ => {}
+      }
+    }
+
+    /// Returns the binders introduced by one active local-definition lhs.
+    /// This exists so parser-owned local-definition checks can compare lhs binding sets without reopening the pattern walk each time.
+    /// The invariant is that the returned identifiers match the active lhs binder walk exactly.
+    fn local_lhs_bound_identifiers(&self, lhs: Value) -> Vec<IdentifierRecordRef> {
+      let mut bound_identifiers = Vec::new();
+      self.collect_local_lhs_bound_identifiers(lhs, &mut bound_identifiers);
+      bound_identifiers
+    }
+
+    /// Reports whether one committed local rhs may still fall through to later equations.
+    /// This exists so parser-owned repeated-equation grouping keeps the active unreachable-case check in one place instead of scattering partial tag checks through `ldefs`.
+    /// The invariant is that explicit `Fail` and non-identifier lambda binders remain fallible while simple-id lambdas recurse into their bodies.
+    fn is_fallible_local_rhs(&self, mut expression: Value) -> bool {
+      loop {
+        let raw = RawValue::from(expression);
+        if raw < ATOM_LIMIT {
+          return expression == Combinator::Fail.into();
+        }
+
+        match self.heap[raw].tag {
+          Tag::Label => expression = self.heap[raw].tail.into(),
+          Tag::Let | Tag::LetRec => expression = self.heap[raw].tail.into(),
+          Tag::Tries => {
+            let alternatives = self.heap[raw].tail;
+            if alternatives >= ATOM_LIMIT && self.heap[alternatives].tag == Tag::Cons {
+              expression = self.heap[alternatives].head.into();
+            } else {
+              return false;
+            }
+          }
+          Tag::Lambda => {
+            let binder_raw = self.heap[raw].head;
+            if binder_raw >= ATOM_LIMIT && self.heap[binder_raw].tag == Tag::Id {
+              expression = self.heap[raw].tail.into();
+            } else {
+              return true;
+            }
+          }
+          _ => return expression == Combinator::Fail.into(),
+        }
+      }
+    }
+
+    /// Returns whether one earlier local-definition group already binds the selected identifier.
+    /// This exists so parser-owned local nameclash checks can stay attached to `ldefs` without duplicating lhs binder scans at each recursion step.
+    /// The invariant is that any earlier definition whose lhs binds the identifier counts as a clash candidate.
+    fn local_definition_group_contains_binder(&self, mut definitions: Value, identifier: IdentifierRecordRef) -> bool {
+      while RawValue::from(definitions) >= ATOM_LIMIT && self.heap[RawValue::from(definitions)].tag == Tag::Cons {
+        let definitions_ref = RawValue::from(definitions);
+        let definition = DefinitionRef::from_ref(self.heap[definitions_ref].head);
+        if self.local_lhs_bound_identifiers(definition.lhs_value(&self.heap)).contains(&identifier) {
+          return true;
+        }
+        definitions = self.heap[definitions_ref].tail.into();
+      }
+      false
     }
 
     /// Decodes one raw include-binding heap node into its typed parser payload variant. This exists so parser-owned

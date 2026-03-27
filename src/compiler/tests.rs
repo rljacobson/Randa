@@ -55,6 +55,94 @@ fn parser_parses_top_level_function_form_and_lowers_to_lambdas() {
 }
 
 #[test]
+fn parser_parses_top_level_where_definition_with_semicolon_locals() {
+    let (heap, result) = run_parser(
+        "top_level_where_semicolon.m",
+        "f x = y where y = x; z = y\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success, got {result:?}");
+    };
+    assert_eq!(payload.definitions.len(), 1);
+    let definition = &payload.definitions[0];
+    assert_eq!(definition.identifier.get_name(&heap), "f");
+    let lambda_raw = definition.body;
+    assert_eq!(heap[lambda_raw].tag, Tag::Lambda);
+    let letrec_raw = heap[lambda_raw].tail;
+    assert_eq!(heap[letrec_raw].tag, Tag::LetRec);
+}
+
+#[test]
+fn parser_parses_top_level_where_definition_with_offside_locals() {
+    let (heap, result) = run_parser(
+        "top_level_where_offside.m",
+        "f x = y where\n  y = x\n  z = y\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success, got {result:?}");
+    };
+    assert_eq!(payload.definitions.len(), 1);
+    let definition = &payload.definitions[0];
+    assert_eq!(definition.identifier.get_name(&heap), "f");
+    let lambda_raw = definition.body;
+    assert_eq!(heap[lambda_raw].tag, Tag::Lambda);
+    let letrec_raw = heap[lambda_raw].tail;
+    assert_eq!(heap[letrec_raw].tag, Tag::LetRec);
+}
+
+#[test]
+fn parser_groups_repeated_local_equations_under_top_level_where() {
+    let (heap, result) = run_parser(
+        "top_level_where_grouped_local_equations.m",
+        "f x = g x where g 0 = 0; g y = y\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success, got {result:?}");
+    };
+    assert_eq!(payload.definitions.len(), 1);
+    let lambda_raw = payload.definitions[0].body;
+    let letrec_raw = heap[lambda_raw].tail;
+    assert_eq!(heap[letrec_raw].tag, Tag::LetRec);
+    let definitions_raw = heap[letrec_raw].head;
+    assert_eq!(heap[definitions_raw].tag, Tag::Cons);
+    assert_eq!(heap[definitions_raw].tail, RawValue::from(Combinator::Nil));
+}
+
+#[test]
+fn parser_reports_unreachable_grouped_local_case_under_top_level_where() {
+    let (_heap, result) = run_parser(
+        "top_level_where_unreachable_local_case.m",
+        "f x = g x where g y = y; g z = z\n",
+    );
+
+    let ParserRunResult::SyntaxError(diagnostics) = result else {
+        panic!("expected syntax error result");
+    };
+    assert!(diagnostics.diagnostics.iter().any(|diagnostic| {
+        diagnostic.message.contains("unreachable case in defn of \"g\"")
+    }));
+}
+
+#[test]
+fn parser_rejects_local_spec_under_top_level_where() {
+    let (_heap, result) = run_parser(
+        "top_level_where_local_spec_error.m",
+        "f = x where x :: num\n",
+    );
+
+    let ParserRunResult::SyntaxError(diagnostics) = result else {
+        panic!("expected syntax error result");
+    };
+    assert!(diagnostics
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message.contains("`::' encountered in local defs")));
+}
+
+#[test]
 fn parser_parses_top_level_cons_pattern_form() {
     let (heap, result) = run_parser("cons_pattern_form_substrate.m", "head (x:xs) = x\n");
 

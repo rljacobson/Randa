@@ -639,7 +639,7 @@ impl VM {
                 return Err(failure.into());
             }
 
-            self.run_export_closure_phase_partial_for_definienda(
+            self.run_export_closure_for_definienda(
                 directive_payload,
                 current_file_definienda,
                 nested_includees,
@@ -1077,7 +1077,7 @@ impl VM {
             .head(&self.heap)
             .map(|file| file.get_definienda(&self.heap))
             .unwrap_or(ConsList::EMPTY);
-        self.run_export_closure_phase_partial_for_definienda(
+        self.run_export_closure_for_definienda(
             directive_payload,
             current_file_definienda,
             materialized_includees,
@@ -1087,7 +1087,7 @@ impl VM {
     /// Applies export-closure gating over one staged current-file definienda set.
     /// This exists so recursive include compilation can reuse the active export-validation owner without rebinding authoritative VM file state.
     /// The invariant is that explicit export-id validation and type-driven closure read only the supplied current-file definienda plus the staged include graph.
-    fn run_export_closure_phase_partial_for_definienda(
+    fn run_export_closure_for_definienda(
         &mut self,
         directive_payload: Option<&ParserTopLevelDirectivePayload>,
         current_file_definienda: ConsList<IdentifierRecordRef>,

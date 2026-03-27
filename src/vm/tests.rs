@@ -2984,6 +2984,51 @@ fn load_file_nested_include_failure_leaves_no_authoritative_commit() {
 }
 
 #[test]
+fn load_file_accepts_simple_top_level_where_definition() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("top_level_where_simple.m");
+    std::fs::write(&source_path, "id x = y where y = x\n")
+        .expect("failed to write source test file");
+
+    let result = vm.load_file(&source_path.to_string_lossy());
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+}
+
+#[test]
+fn load_file_accepts_top_level_where_with_grouped_local_helper() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("top_level_where_grouped_helper.m");
+    std::fs::write(&source_path, "f x = g x where g 0 = 0; g y = y\n")
+        .expect("failed to write source test file");
+
+    let result = vm.load_file(&source_path.to_string_lossy());
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+}
+
+#[test]
+fn load_file_reports_undefined_local_name_in_top_level_where_definition() {
+    let mut vm = VM::new_for_tests();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("top_level_where_undefined_local_name.m");
+    std::fs::write(&source_path, "f = y where z = 1\n")
+        .expect("failed to write source test file");
+
+    let result = vm.load_file(&source_path.to_string_lossy());
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(TypecheckError::UndefinedNames { count: 1 }))
+    ));
+}
+
+#[test]
 fn load_file_typechecks_include_target_before_parent_commit() {
     let mut vm = VM::new_for_tests();
     vm.initializing = false;

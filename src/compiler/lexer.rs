@@ -61,10 +61,10 @@ impl Lexer {
         }
     }
 
-    /// Records the active left margin for one parser-owned layout region.
+    /// Pushes one active layout margin for the current parser-entered region.
     /// This exists so the lexer can synthesize `Offside` / `ElseEqual` tokens for the active subset instead of relying on VM no-op hooks.
-    /// The invariant is that the stored margin is the indentation of the current token's line.
-    pub fn set_left_margin_partial(&mut self) {
+    /// The invariant is that the pushed margin is the indentation of the current token's line.
+    pub fn push_layout_margin(&mut self) {
         let margin = self.line_indent_at(self.span.start);
         self.layout_stack.push(LayoutContext { margin });
     }
@@ -82,6 +82,7 @@ impl Lexer {
                     None => {
                         let n = self.source_text.len();
                         if !self.layout_stack.is_empty() {
+                            self.pop_layout_margin();
                             (Token::Offside, n..n)
                         } else {
                             (Token::EOF, n..n)
@@ -96,14 +97,53 @@ impl Lexer {
                 }
 
                 if self.where_layout_pending {
-                    self.start_where_layout_after_newline(span.clone());
+                    let Some((next_token, next_span)) = self.tokens[self.token_index..]
+                        .iter()
+                        .find(|(token, _)| *token != Token::Newline)
+                        .map(|(token, span)| (*token, span.clone()))
+                    else {
+                        self.where_layout_pending = false;
+                        continue;
+                    };
+                    let margin = self.line_indent_at(next_span.start);
+                    self.layout_stack.push(LayoutContext { margin });
+
+                    if next_token == Token::Equal {
+                        self.pending_tokens
+                            .push_back((Token::ElseEqual, next_span.clone()));
+                        self.token_index += 1;
+                    } else if margin <= self.line_indent_at(self.span.start) {
+                        self.pending_tokens.push_back((Token::Offside, span.clone()));
+                    }
+
                     self.where_layout_pending = false;
                     continue;
                 }
 
-                if self.synthesize_layout_separator_after_newline(span.clone()) {
+                let Some(active_layout) = self.layout_stack.last().copied() else {
+                    continue;
+                };
+                let Some((next_token, next_span)) = self.tokens[self.token_index..]
+                    .iter()
+                    .find(|(token, _)| *token != Token::Newline)
+                    .map(|(token, span)| (*token, span.clone()))
+                else {
+                    self.pending_tokens.push_back((Token::Offside, span.clone()));
+                    continue;
+                };
+                let next_margin = self.line_indent_at(next_span.start);
+                if next_margin > active_layout.margin {
                     continue;
                 }
+
+                if next_token == Token::Equal && next_margin == active_layout.margin {
+                    self.pending_tokens
+                        .push_back((Token::ElseEqual, next_span.clone()));
+                    self.token_index += 1;
+                } else {
+                    self.pending_tokens.push_back((Token::Offside, span.clone()));
+                }
+                continue;
             }
 
             self.span = span;
@@ -137,60 +177,11 @@ impl Lexer {
         }
     }
 
-    /// Establishes the first active layout margin after a `where` newline and queues the active separator token when needed.
-    /// This exists so `yylex` keeps the post-`where` layout-entry rule in one owner instead of duplicating the initial local-block setup inline.
-    /// The invariant is that the first non-newline token after `where` determines the active margin and may synthesize `ElseEqual` or `Offside` under the current subset rules.
-    fn start_where_layout_after_newline(&mut self, newline_span: Range<usize>) {
-        let Some((next_token, next_span)) = self.tokens[self.token_index..]
-            .iter()
-            .find(|(token, _)| *token != Token::Newline)
-            .map(|(token, span)| (*token, span.clone()))
-        else {
-            return;
-        };
-        let margin = self.line_indent_at(next_span.start);
-        self.layout_stack.push(LayoutContext { margin });
-
-        if next_token == Token::Equal {
-            self.pending_tokens
-                .push_back((Token::ElseEqual, next_span.clone()));
-            self.token_index += 1;
-        } else if margin <= self.line_indent_at(self.span.start) {
-            self.pending_tokens
-                .push_back((Token::Offside, newline_span));
-        }
-    }
-
-    /// Queues the active post-newline layout separator for one existing layout region.
-    /// This exists so `yylex` owns the equal-or-less-indented separator rule in one place instead of reimplementing it across newline paths.
-    /// The invariant is that only lines at or left of the active margin synthesize `Offside` or `ElseEqual`, while more-indented lines continue without a separator.
-    fn synthesize_layout_separator_after_newline(&mut self, newline_span: Range<usize>) -> bool {
-        let Some(active_layout) = self.layout_stack.last().copied() else {
-            return false;
-        };
-        let Some((next_token, next_span)) = self.tokens[self.token_index..]
-            .iter()
-            .find(|(token, _)| *token != Token::Newline)
-            .map(|(token, span)| (*token, span.clone()))
-        else {
-            self.pending_tokens
-                .push_back((Token::Offside, newline_span));
-            return true;
-        };
-        let next_margin = self.line_indent_at(next_span.start);
-        if next_margin > active_layout.margin {
-            return false;
-        }
-
-        if next_token == Token::Equal && next_margin == active_layout.margin {
-            self.pending_tokens
-                .push_back((Token::ElseEqual, next_span.clone()));
-            self.token_index += 1;
-        } else {
-            self.pending_tokens
-                .push_back((Token::Offside, newline_span));
-        }
-        true
+    /// Pops one active layout margin as the current parser-entered region exits.
+    /// This exists so parser-driven layout exits and EOF-driven offside draining use the same stack transition instead of mutating the layout stack ad hoc.
+    /// The invariant is that exactly one active layout context is removed when present.
+    pub fn pop_layout_margin(&mut self) {
+        let _ = self.layout_stack.pop();
     }
 
     /// Returns the indentation width of the line containing `offset`.
@@ -287,7 +278,7 @@ mod tests {
     #[test]
     fn layout_context_turns_equal_at_margin_into_else_equal() {
         let mut lexer = Lexer::new("guards.m", "value\n= otherwise\n");
-        lexer.set_left_margin_partial();
+        lexer.push_layout_margin();
 
         assert_eq!(lexer.yylex().expect("value token").token, Token::Identifier);
         assert_eq!(lexer.yylex().expect("guard separator").token, Token::ElseEqual);
