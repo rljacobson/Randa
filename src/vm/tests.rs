@@ -147,7 +147,7 @@ fn export_payload(
 
 #[test]
 fn load_file_missing_script_is_allowed_outside_initialization() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
     let source_path = unique_test_path("missing_script.m");
     let source_path_str = source_path.to_string_lossy().to_string();
@@ -162,7 +162,7 @@ fn load_file_missing_script_is_allowed_outside_initialization() {
 
 #[test]
 fn load_file_missing_script_errors_during_initialization() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = true;
     let source_path = unique_test_path("missing_prelude.m");
     let source_path_str = source_path.to_string_lossy().to_string();
@@ -178,7 +178,7 @@ fn load_file_missing_script_errors_during_initialization() {
 
 #[test]
 fn undump_propagates_load_file_error_after_bad_dump() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("script.m");
@@ -198,7 +198,7 @@ fn undump_propagates_load_file_error_after_bad_dump() {
 
 #[test]
 fn undump_falls_back_to_load_file_after_wrong_bytecode_version() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("script_version_mismatch.m");
@@ -220,7 +220,7 @@ fn undump_falls_back_to_load_file_after_wrong_bytecode_version() {
 
 #[test]
 fn load_file_parser_deferred_keeps_attempted_source_in_old_files() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     vm.files = vm.empty_environment_for_source("prior_source.m", UNIX_EPOCH);
@@ -267,7 +267,7 @@ fn load_file_parser_deferred_keeps_attempted_source_in_old_files() {
 
 #[test]
 fn load_file_missing_script_errors_during_make_mode() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
     vm.making = true;
     let source_path = unique_test_path("missing_make_target.m");
@@ -288,7 +288,7 @@ fn load_file_missing_script_errors_during_make_mode() {
 
 #[test]
 fn load_file_normalizes_non_m_source_paths() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path_no_ext = unique_test_path("normalize_target");
@@ -312,7 +312,7 @@ fn load_file_normalizes_non_m_source_paths() {
 
 #[test]
 fn classify_load_script_form_distinguishes_supported_top_level_forms() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     assert_eq!(
         vm.classify_load_script_form("slice.m", "+")
@@ -393,7 +393,7 @@ fn classify_load_script_form_distinguishes_supported_top_level_forms() {
 
 #[test]
 fn load_file_keeps_cons_pattern_tail_name_bound_after_constructor_formal_checks() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("cons_pattern_tail_binding.m");
@@ -421,7 +421,7 @@ fn load_file_keeps_cons_pattern_tail_name_bound_after_constructor_formal_checks(
 
 #[test]
 fn load_file_accepts_negative_integer_literal_pattern_in_formal() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("negative_integer_literal_formal.m");
@@ -440,7 +440,7 @@ fn load_file_accepts_negative_integer_literal_pattern_in_formal() {
 
 #[test]
 fn load_file_accepts_n_plus_k_pattern_and_binds_inner_name() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("n_plus_k_formal.m");
@@ -459,7 +459,7 @@ fn load_file_accepts_n_plus_k_pattern_and_binds_inner_name() {
 
 #[test]
 fn load_file_rejects_cons_inner_canonical_successor_pattern() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("invalid_successor_cons_formal.m");
@@ -479,7 +479,7 @@ fn load_file_rejects_cons_inner_canonical_successor_pattern() {
 
 #[test]
 fn load_file_reports_invalid_successor_pattern_before_undefined_name() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("invalid_successor_precedes_undefined_name.m");
@@ -499,7 +499,7 @@ fn load_file_reports_invalid_successor_pattern_before_undefined_name() {
 
 #[test]
 fn load_file_rejects_undeclared_constructor_atom_in_formal() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("undeclared_constructor_atom_formal.m");
@@ -518,7 +518,7 @@ fn load_file_rejects_undeclared_constructor_atom_in_formal() {
 
 #[test]
 fn load_file_rejects_undeclared_constructor_application_in_formal() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("undeclared_constructor_application_formal.m");
@@ -538,7 +538,7 @@ fn load_file_rejects_undeclared_constructor_application_in_formal() {
 
 #[test]
 fn load_file_rejects_declared_constructor_application_for_wrong_arity_in_formal() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("constructor_application_wrong_arity_formal.m");
@@ -561,7 +561,7 @@ fn load_file_rejects_declared_constructor_application_for_wrong_arity_in_formal(
 
 #[test]
 fn load_file_accepts_declared_unary_constructor_application_in_formal() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("constructor_application_matching_arity_formal.m");
@@ -626,7 +626,7 @@ fn load_file_accepts_declared_unary_constructor_application_in_formal() {
 
 #[test]
 fn load_file_accepts_declared_infix_constructor_application_in_formal() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("infix_constructor_application_formal.m");
@@ -660,7 +660,7 @@ fn load_file_accepts_declared_infix_constructor_application_in_formal() {
 
 #[test]
 fn load_file_accepts_unparenthesized_declared_infix_constructor_application_in_formal() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("unparenthesized_infix_constructor_application_formal.m");
@@ -694,7 +694,7 @@ fn load_file_accepts_unparenthesized_declared_infix_constructor_application_in_f
 
 #[test]
 fn load_file_accepts_ordinary_multi_argument_function_form() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("ordinary_multi_argument_function_form.m");
@@ -726,7 +726,7 @@ fn load_file_accepts_ordinary_multi_argument_function_form() {
 
 #[test]
 fn load_file_rejects_infix_name_application_in_formal() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("infix_name_application_formal.m");
@@ -746,7 +746,7 @@ fn load_file_rejects_infix_name_application_in_formal() {
 
 #[test]
 fn load_file_rejects_unparenthesized_infix_name_application_in_formal() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("unparenthesized_infix_name_application_formal.m");
@@ -766,7 +766,7 @@ fn load_file_rejects_unparenthesized_infix_name_application_in_formal() {
 
 #[test]
 fn load_file_reports_unparenthesized_infix_name_formal_before_generic_undefined_name() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("unparenthesized_infix_name_formal_precedes_undefined_name.m");
@@ -786,7 +786,7 @@ fn load_file_reports_unparenthesized_infix_name_formal_before_generic_undefined_
 
 #[test]
 fn load_file_rejects_unparenthesized_undeclared_infix_constructor_application_in_formal() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("unparenthesized_undeclared_infix_constructor_application_formal.m");
@@ -806,7 +806,7 @@ fn load_file_rejects_unparenthesized_undeclared_infix_constructor_application_in
 
 #[test]
 fn load_file_reports_unparenthesized_undeclared_infix_constructor_before_generic_undefined_name() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("unparenthesized_undeclared_infix_constructor_precedes_undefined_name.m");
@@ -826,7 +826,7 @@ fn load_file_reports_unparenthesized_undeclared_infix_constructor_before_generic
 
 #[test]
 fn load_file_rejects_unparenthesized_infix_name_form_with_value_head_left_operand() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("unparenthesized_infix_name_value_head_left_operand.m");
@@ -846,7 +846,7 @@ fn load_file_rejects_unparenthesized_infix_name_form_with_value_head_left_operan
 
 #[test]
 fn load_file_reports_unparenthesized_infix_name_value_head_before_generic_undefined_name() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("unparenthesized_infix_name_value_head_precedes_undefined_name.m");
@@ -866,7 +866,7 @@ fn load_file_reports_unparenthesized_infix_name_value_head_before_generic_undefi
 
 #[test]
 fn load_file_rejects_unparenthesized_infix_name_form_with_multi_argument_value_head_left_operand() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("unparenthesized_infix_name_multi_argument_value_head_left_operand.m");
@@ -886,7 +886,7 @@ fn load_file_rejects_unparenthesized_infix_name_form_with_multi_argument_value_h
 
 #[test]
 fn load_file_reports_unparenthesized_infix_name_multi_argument_value_head_before_generic_undefined_name() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("unparenthesized_infix_name_multi_argument_value_head_precedes_undefined_name.m");
@@ -906,7 +906,7 @@ fn load_file_reports_unparenthesized_infix_name_multi_argument_value_head_before
 
 #[test]
 fn load_file_rejects_unparenthesized_infix_name_form_with_repeated_name_headed_left_operand() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("unparenthesized_infix_name_repeated_head_left_operand.m");
@@ -926,7 +926,7 @@ fn load_file_rejects_unparenthesized_infix_name_form_with_repeated_name_headed_l
 
 #[test]
 fn load_file_reports_unparenthesized_infix_name_repeated_head_before_generic_undefined_name() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("unparenthesized_infix_name_repeated_head_precedes_undefined_name.m");
@@ -946,7 +946,7 @@ fn load_file_reports_unparenthesized_infix_name_repeated_head_before_generic_und
 
 #[test]
 fn load_file_rejects_unparenthesized_infix_constructor_form_with_non_identifier_left_operand() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("unparenthesized_infix_constructor_non_identifier_left_operand.m");
@@ -969,7 +969,7 @@ fn load_file_rejects_unparenthesized_infix_constructor_form_with_non_identifier_
 
 #[test]
 fn load_file_reports_unparenthesized_infix_constructor_non_identifier_head_before_generic_undefined_name() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("unparenthesized_infix_constructor_non_identifier_head_precedes_undefined_name.m");
@@ -992,7 +992,7 @@ fn load_file_reports_unparenthesized_infix_constructor_non_identifier_head_befor
 
 #[test]
 fn load_file_reports_infix_name_formal_before_generic_undefined_name() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("infix_name_formal_precedes_undefined_name.m");
@@ -1012,7 +1012,7 @@ fn load_file_reports_infix_name_formal_before_generic_undefined_name() {
 
 #[test]
 fn load_file_rejects_value_head_application_in_formal() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("value_head_application_formal.m");
@@ -1031,7 +1031,7 @@ fn load_file_rejects_value_head_application_in_formal() {
 
 #[test]
 fn load_file_rejects_non_identifier_head_application_in_formal() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("non_identifier_head_application_formal.m");
@@ -1050,7 +1050,7 @@ fn load_file_rejects_non_identifier_head_application_in_formal() {
 
 #[test]
 fn load_file_repeated_name_application_head_still_reaches_value_head_bucket() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("repeated_name_application_head_formal.m");
@@ -1069,7 +1069,7 @@ fn load_file_repeated_name_application_head_still_reaches_value_head_bucket() {
 
 #[test]
 fn load_file_accepts_unparenthesized_declared_constructor_application_in_formal() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("unparenthesized_constructor_application_formal.m");
@@ -1092,7 +1092,7 @@ fn load_file_accepts_unparenthesized_declared_constructor_application_in_formal(
 
 #[test]
 fn load_file_rejects_unparenthesized_value_head_application_chain_in_formal() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("unparenthesized_value_head_application_chain_formal.m");
@@ -1112,7 +1112,7 @@ fn load_file_rejects_unparenthesized_value_head_application_chain_in_formal() {
 
 #[test]
 fn load_file_rejects_unparenthesized_repeated_name_head_application_chain_in_formal() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("unparenthesized_repeated_name_head_application_chain_formal.m");
@@ -1132,7 +1132,7 @@ fn load_file_rejects_unparenthesized_repeated_name_head_application_chain_in_for
 
 #[test]
 fn load_file_rejects_unparenthesized_non_identifier_head_application_chain_in_formal() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("unparenthesized_non_identifier_head_application_chain_formal.m");
@@ -1152,7 +1152,7 @@ fn load_file_rejects_unparenthesized_non_identifier_head_application_chain_in_fo
 
 #[test]
 fn load_file_arithmetic_head_application_reaches_malformed_plus_application_error() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("arithmetic_head_application_formal.m");
@@ -1172,7 +1172,7 @@ fn load_file_arithmetic_head_application_reaches_malformed_plus_application_erro
 
 #[test]
 fn load_file_reports_arithmetic_head_application_before_undefined_name() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("arithmetic_head_precedes_undefined_name.m");
@@ -1192,7 +1192,7 @@ fn load_file_reports_arithmetic_head_application_before_undefined_name() {
 
 #[test]
 fn load_file_commits_strict_constructor_field_metadata() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("strict_constructor_field_metadata.m");
@@ -1240,7 +1240,7 @@ fn load_file_commits_strict_constructor_field_metadata() {
 
 #[test]
 fn load_file_rejects_declared_unary_constructor_used_nullary_in_formal() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("constructor_application_nullary_formal_wrong_arity.m");
@@ -1263,7 +1263,7 @@ fn load_file_rejects_declared_unary_constructor_used_nullary_in_formal() {
 
 #[test]
 fn load_file_rejects_declared_unary_constructor_used_binary_in_formal() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("constructor_application_binary_formal_wrong_arity.m");
@@ -1286,7 +1286,7 @@ fn load_file_rejects_declared_unary_constructor_used_binary_in_formal() {
 
 #[test]
 fn load_file_rejects_undeclared_constructor_inside_tuple_formal() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("undeclared_constructor_tuple_formal.m");
@@ -1306,7 +1306,7 @@ fn load_file_rejects_undeclared_constructor_inside_tuple_formal() {
 
 #[test]
 fn load_file_rejects_undeclared_constructor_inside_list_formal() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("undeclared_constructor_list_formal.m");
@@ -1326,7 +1326,7 @@ fn load_file_rejects_undeclared_constructor_inside_list_formal() {
 
 #[test]
 fn load_file_rejects_declared_constructor_application_inside_tuple_formal_for_wrong_arity() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("constructor_application_tuple_formal_wrong_arity.m");
@@ -1349,7 +1349,7 @@ fn load_file_rejects_declared_constructor_application_inside_tuple_formal_for_wr
 
 #[test]
 fn load_file_reports_tuple_contained_constructor_formal_before_generic_undefined_name() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("tuple_constructor_precedes_undefined_name.m");
@@ -1369,7 +1369,7 @@ fn load_file_reports_tuple_contained_constructor_formal_before_generic_undefined
 
 #[test]
 fn load_file_reports_undeclared_constructor_formal_before_generic_undefined_name() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("undeclared_constructor_precedes_undefined_name.m");
@@ -1389,7 +1389,7 @@ fn load_file_reports_undeclared_constructor_formal_before_generic_undefined_name
 
 #[test]
 fn load_file_reports_constructor_formal_arity_before_generic_undefined_name() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("constructor_arity_precedes_undefined_name.m");
@@ -1412,7 +1412,7 @@ fn load_file_reports_constructor_formal_arity_before_generic_undefined_name() {
 
 #[test]
 fn load_file_commits_narrow_spec_and_type_substrate_into_current_file() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("narrow_type_substrate.m");
@@ -1475,7 +1475,7 @@ fn load_file_commits_narrow_spec_and_type_substrate_into_current_file() {
 
 #[test]
 fn load_file_commits_multi_name_specification_payloads() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("multi_name_spec.m");
@@ -1498,7 +1498,7 @@ fn load_file_commits_multi_name_specification_payloads() {
 
 #[test]
 fn load_file_commits_synonym_type_lhs_arity() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("synonym_type_lhs_arity.m");
@@ -1531,7 +1531,7 @@ fn load_file_commits_synonym_type_lhs_arity() {
 
 #[test]
 fn load_file_commits_algebraic_type_lhs_arity_with_nullary_constructors() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("algebraic_type_lhs_arity.m");
@@ -1584,7 +1584,7 @@ fn load_file_commits_algebraic_type_lhs_arity_with_nullary_constructors() {
 
 #[test]
 fn load_file_commits_infix_synonym_type_lhs_arity() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("infix_synonym_type_lhs_arity.m");
@@ -1618,7 +1618,7 @@ fn load_file_commits_infix_synonym_type_lhs_arity() {
 
 #[test]
 fn load_file_commits_infix_algebraic_type_lhs_arity() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("infix_algebraic_type_lhs_arity.m");
@@ -1686,7 +1686,7 @@ fn load_file_commits_infix_algebraic_type_lhs_arity() {
 
 #[test]
 fn parse_source_text_commits_narrow_free_substrate_and_marks_file_unshareable() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let source_path = unique_test_path("narrow_free_substrate.m");
     let source_path_str = source_path.to_string_lossy().to_string();
@@ -1729,7 +1729,7 @@ fn parse_source_text_commits_narrow_free_substrate_and_marks_file_unshareable() 
 
 #[test]
 fn parse_source_text_commits_rich_specification_type_expr() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let source_path = unique_test_path("rich_spec_type_expr.m");
     let source_path_str = source_path.to_string_lossy().to_string();
@@ -1763,7 +1763,7 @@ fn parse_source_text_commits_rich_specification_type_expr() {
 
 #[test]
 fn parse_source_text_commits_rich_synonym_rhs_type_expr() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let source_path = unique_test_path("rich_synonym_rhs.m");
     let source_path_str = source_path.to_string_lossy().to_string();
@@ -1815,7 +1815,7 @@ fn parse_source_text_commits_rich_synonym_rhs_type_expr() {
 
 #[test]
 fn parse_source_text_commits_rich_free_binding_type_expr() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let source_path = unique_test_path("rich_free_type_expr.m");
     let source_path_str = source_path.to_string_lossy().to_string();
@@ -1844,7 +1844,7 @@ fn parse_source_text_commits_rich_free_binding_type_expr() {
 
 #[test]
 fn parse_source_text_commits_multi_entry_free_block_in_source_order() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let source_path = unique_test_path("multi_entry_free_block.m");
     let source_path_str = source_path.to_string_lossy().to_string();
@@ -1871,7 +1871,7 @@ fn parse_source_text_commits_multi_entry_free_block_in_source_order() {
 
 #[test]
 fn parse_source_text_commits_multi_name_free_spec() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let source_path = unique_test_path("multi_name_free_spec.m");
     let source_path_str = source_path.to_string_lossy().to_string();
@@ -1897,7 +1897,7 @@ fn parse_source_text_commits_multi_name_free_spec() {
 
 #[test]
 fn parse_source_text_commits_mixed_free_type_and_value_specs() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let source_path = unique_test_path("mixed_free_type_and_value_specs.m");
     let source_path_str = source_path.to_string_lossy().to_string();
@@ -1935,7 +1935,7 @@ fn parse_source_text_commits_mixed_free_type_and_value_specs() {
 
 #[test]
 fn load_file_reports_undefined_typename_in_rich_synonym_rhs() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let source_path = unique_test_path("undefined_typename_rich_synonym.m");
     let source_path_str = source_path.to_string_lossy().to_string();
@@ -1954,7 +1954,7 @@ fn load_file_reports_undefined_typename_in_rich_synonym_rhs() {
 
 #[test]
 fn load_file_reports_non_type_identifier_in_rich_free_binding_type_expr() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let source_path = unique_test_path("non_type_rich_free_expr.m");
     let source_path_str = source_path.to_string_lossy().to_string();
@@ -1976,7 +1976,7 @@ fn load_file_reports_non_type_identifier_in_rich_free_binding_type_expr() {
 
 #[test]
 fn load_file_reports_type_arity_mismatch_in_rich_spec_type_expr() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let source_path = unique_test_path("arity_mismatch_rich_spec_expr.m");
     let source_path_str = source_path.to_string_lossy().to_string();
@@ -1998,7 +1998,7 @@ fn load_file_reports_type_arity_mismatch_in_rich_spec_type_expr() {
 
 #[test]
 fn load_file_runs_include_export_directive_pipeline_and_commits_exports() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("include_export_directive_export_only.m");
@@ -2033,7 +2033,7 @@ fn load_file_runs_include_export_directive_pipeline_and_commits_exports() {
 
 #[test]
 fn load_file_exportfile_validation_failure_leaves_no_authoritative_commit() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let missing_include_path = unique_test_path("not_included.m");
@@ -2064,7 +2064,7 @@ fn load_file_exportfile_validation_failure_leaves_no_authoritative_commit() {
 
 #[test]
 fn load_file_include_materialization_failure_leaves_no_authoritative_commit() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let missing_include_path = unique_test_path("missing_include_target.m");
@@ -2096,7 +2096,7 @@ fn load_file_include_materialization_failure_leaves_no_authoritative_commit() {
 
 #[test]
 fn load_file_export_of_missing_explicit_name_fails_before_commit() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("export_missing_explicit_name.m");
@@ -2120,7 +2120,7 @@ fn load_file_export_of_missing_explicit_name_fails_before_commit() {
 
 #[test]
 fn load_file_include_and_exportfile_success_commits_after_validation() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let include_path = unique_test_path("committed_include_target.m");
@@ -2168,7 +2168,7 @@ fn load_file_include_and_exportfile_success_commits_after_validation() {
 
 #[test]
 fn load_file_export_closure_adds_synonym_type_dependency() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("export_closure_synonym_dependency.m");
@@ -2191,7 +2191,7 @@ fn load_file_export_closure_adds_synonym_type_dependency() {
 
 #[test]
 fn load_file_export_closure_adds_algebraic_type_dependency_from_exported_value() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("export_closure_algebraic_value_dependency.m");
@@ -2214,7 +2214,7 @@ fn load_file_export_closure_adds_algebraic_type_dependency_from_exported_value()
 
 #[test]
 fn load_file_export_closure_adds_abstract_basis_dependency() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("export_closure_abstract_basis_dependency.m");
@@ -2237,7 +2237,7 @@ fn load_file_export_closure_adds_abstract_basis_dependency() {
 
 #[test]
 fn load_file_materializes_included_source_definienda() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let include_path = unique_test_path("materialized_include_target.m");
@@ -2268,7 +2268,7 @@ fn load_file_materializes_included_source_definienda() {
 
 #[test]
 fn load_file_routes_include_value_actual_bindings_through_bindparams() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let include_path = unique_test_path("parameterized_include_value_target.m");
@@ -2296,7 +2296,7 @@ fn load_file_routes_include_value_actual_bindings_through_bindparams() {
 
 #[test]
 fn load_file_routes_include_type_actual_bindings_through_bindparams() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let include_path = unique_test_path("parameterized_include_type_target.m");
@@ -2340,7 +2340,7 @@ fn load_file_routes_include_type_actual_bindings_through_bindparams() {
 
 #[test]
 fn load_file_parameterized_include_missing_actual_binding_errors_before_commit() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let include_path = unique_test_path("parameterized_include_missing_target.m");
@@ -2366,7 +2366,7 @@ fn load_file_parameterized_include_missing_actual_binding_errors_before_commit()
 
 #[test]
 fn load_file_parameterized_include_extra_actual_binding_errors_before_commit() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let include_path = unique_test_path("parameterized_include_extra_target.m");
@@ -2395,7 +2395,7 @@ fn load_file_parameterized_include_extra_actual_binding_errors_before_commit() {
 
 #[test]
 fn load_file_preserves_parameterized_include_request_order() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let first_include_path = unique_test_path("parameterized_include_first_target.m");
@@ -2433,7 +2433,7 @@ fn load_file_preserves_parameterized_include_request_order() {
 
 #[test]
 fn load_file_shares_repeated_shareable_include_definition_identity_across_renamed_copy() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let include_path = unique_test_path("shared_include_target.m");
@@ -2476,7 +2476,7 @@ fn load_file_shares_repeated_shareable_include_definition_identity_across_rename
 
 #[test]
 fn load_file_preserves_include_order_after_repeated_shareable_include_sharing() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let shared_path = unique_test_path("shared_include_order_target.m");
@@ -2520,7 +2520,7 @@ fn load_file_preserves_include_order_after_repeated_shareable_include_sharing() 
 
 #[test]
 fn load_file_does_not_share_unshareable_current_script_include_components() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let include_path = unique_test_path("unshareable_include_target.m");
@@ -2558,7 +2558,7 @@ fn load_file_does_not_share_unshareable_current_script_include_components() {
 
 #[test]
 fn load_file_rejects_repeated_non_synonym_type_copies_from_same_include_file() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let include_path = unique_test_path("typeclash_include_target.m");
@@ -2597,7 +2597,7 @@ fn load_file_rejects_repeated_non_synonym_type_copies_from_same_include_file() {
 
 #[test]
 fn load_file_allows_repeated_synonym_type_copies_from_same_include_file() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let include_path = unique_test_path("synonym_include_target.m");
@@ -2639,7 +2639,7 @@ fn load_file_allows_repeated_synonym_type_copies_from_same_include_file() {
 
 #[test]
 fn load_file_exports_repeated_shared_include_definitions_coherently() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let include_path = unique_test_path("shared_export_include_target.m");
@@ -2685,7 +2685,7 @@ fn load_file_exports_repeated_shared_include_definitions_coherently() {
 
 #[test]
 fn load_file_applies_include_rename_modifier_to_materialized_definienda() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let include_path = unique_test_path("rename_include_target.m");
@@ -2717,7 +2717,7 @@ fn load_file_applies_include_rename_modifier_to_materialized_definienda() {
 
 #[test]
 fn load_file_applies_include_constructor_rename_modifier_to_materialized_definienda_and_metadata() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let include_path = unique_test_path("constructor_rename_include_target.m");
@@ -2770,7 +2770,7 @@ fn load_file_applies_include_constructor_rename_modifier_to_materialized_definie
 
 #[test]
 fn load_file_accepts_formal_matching_renamed_included_constructor() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let include_path = unique_test_path("renamed_constructor_formal_include_target.m");
@@ -2794,7 +2794,7 @@ fn load_file_accepts_formal_matching_renamed_included_constructor() {
 
 #[test]
 fn load_file_export_path_expansion_uses_renamed_included_constructor() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let include_path = unique_test_path("renamed_constructor_export_include_target.m");
@@ -2826,7 +2826,7 @@ fn load_file_export_path_expansion_uses_renamed_included_constructor() {
 
 #[test]
 fn load_file_rejects_include_constructor_rename_destination_clash() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let include_path = unique_test_path("constructor_rename_clash_include_target.m");
@@ -2854,7 +2854,7 @@ fn load_file_rejects_include_constructor_rename_destination_clash() {
 
 #[test]
 fn load_file_applies_include_suppress_modifier_to_materialized_definienda() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let include_path = unique_test_path("suppress_include_target.m");
@@ -2886,7 +2886,7 @@ fn load_file_applies_include_suppress_modifier_to_materialized_definienda() {
 
 #[test]
 fn load_file_include_modifier_failure_leaves_no_authoritative_commit() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let include_path = unique_test_path("missing_modifier_target_include.m");
@@ -2918,7 +2918,7 @@ fn load_file_include_modifier_failure_leaves_no_authoritative_commit() {
 
 #[test]
 fn load_file_materializes_nested_include_graph_in_source_order() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let leaf_path = unique_test_path("nested_include_leaf.m");
@@ -2951,7 +2951,7 @@ fn load_file_materializes_nested_include_graph_in_source_order() {
 
 #[test]
 fn load_file_nested_include_failure_leaves_no_authoritative_commit() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let missing_leaf_path = unique_test_path("missing_nested_leaf.m");
@@ -2985,7 +2985,7 @@ fn load_file_nested_include_failure_leaves_no_authoritative_commit() {
 
 #[test]
 fn load_file_accepts_simple_top_level_where_definition() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("top_level_where_simple.m");
@@ -2999,7 +2999,7 @@ fn load_file_accepts_simple_top_level_where_definition() {
 
 #[test]
 fn load_file_accepts_top_level_where_with_grouped_local_helper() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("top_level_where_grouped_helper.m");
@@ -3013,7 +3013,7 @@ fn load_file_accepts_top_level_where_with_grouped_local_helper() {
 
 #[test]
 fn load_file_reports_undefined_local_name_in_top_level_where_definition() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("top_level_where_undefined_local_name.m");
@@ -3030,7 +3030,7 @@ fn load_file_reports_undefined_local_name_in_top_level_where_definition() {
 
 #[test]
 fn load_file_typechecks_include_target_before_parent_commit() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let include_path = unique_test_path("typecheck_include_target.m");
@@ -3052,7 +3052,7 @@ fn load_file_typechecks_include_target_before_parent_commit() {
 
 #[test]
 fn load_file_lowers_include_target_definition_during_include_compilation() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let include_path = unique_test_path("codegen_include_target.m");
@@ -3078,7 +3078,7 @@ fn load_file_lowers_include_target_definition_during_include_compilation() {
 
 #[test]
 fn load_file_preserves_parent_include_bindings_and_modifier_scope_over_nested_include_graph() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let leaf_path = unique_test_path("nested_modifier_leaf.m");
@@ -3136,7 +3136,7 @@ fn load_file_preserves_parent_include_bindings_and_modifier_scope_over_nested_in
 
 #[test]
 fn load_file_lowers_identity_definition_body_during_codegen() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("codegen_identity_load.m");
@@ -3157,7 +3157,7 @@ fn load_file_lowers_identity_definition_body_during_codegen() {
 
 #[test]
 fn load_file_lowers_tuple_pattern_definition_body_during_codegen() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("codegen_tuple_pattern_load.m");
@@ -3179,7 +3179,7 @@ fn load_file_lowers_tuple_pattern_definition_body_during_codegen() {
 
 #[test]
 fn load_file_runs_phase_pipeline_when_expression_parse_succeeds() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("phase_pipeline.m");
@@ -3214,7 +3214,7 @@ fn load_file_runs_phase_pipeline_when_expression_parse_succeeds() {
 
 #[test]
 fn load_file_uses_syntax_fallback_when_expression_parse_fails() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("syntax_fallback.m");
@@ -3243,7 +3243,7 @@ fn load_file_uses_syntax_fallback_when_expression_parse_fails() {
 
 #[test]
 fn load_file_reports_syntax_error_during_initialization() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = true;
 
     let source_path = unique_test_path("init_syntax.m");
@@ -3265,14 +3265,14 @@ fn load_file_reports_syntax_error_during_initialization() {
 
 #[test]
 fn parse_source_text_rejects_uppercase_type_lhs_in_synonym() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let source_path = unique_test_path("uppercase_type_lhs_synonym.m");
     let source_path_str = source_path.to_string_lossy().to_string();
     let result = vm.parse_source_text(&source_path_str, "Maybe * == *\n", UNIX_EPOCH, false);
 
     let outcome = result.expect("expected parse outcome");
-    assert_eq!(outcome.status, ParsePhaseStatus::SyntaxError);
+    assert!(!outcome.parsed_without_error);
     assert!(vm.parser_diagnostics.iter().any(|diagnostic| diagnostic
         .message
         .contains("upper case identifier out of context")));
@@ -3280,14 +3280,14 @@ fn parse_source_text_rejects_uppercase_type_lhs_in_synonym() {
 
 #[test]
 fn parse_source_text_rejects_repeated_type_variable_on_type_lhs() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let source_path = unique_test_path("repeated_typevar_lhs_type_def.m");
     let source_path_str = source_path.to_string_lossy().to_string();
     let result = vm.parse_source_text(&source_path_str, "pair * * == *\n", UNIX_EPOCH, false);
 
     let outcome = result.expect("expected parse outcome");
-    assert_eq!(outcome.status, ParsePhaseStatus::SyntaxError);
+    assert!(!outcome.parsed_without_error);
     assert!(vm.parser_diagnostics.iter().any(|diagnostic| {
         diagnostic
             .message
@@ -3297,7 +3297,7 @@ fn parse_source_text_rejects_repeated_type_variable_on_type_lhs() {
 
 #[test]
 fn parse_source_text_accepts_distinct_type_variables_on_algebraic_lhs() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let source_path = unique_test_path("distinct_typevars_algebraic_lhs.m");
     let source_path_str = source_path.to_string_lossy().to_string();
@@ -3309,9 +3309,8 @@ fn parse_source_text_accepts_distinct_type_variables_on_algebraic_lhs() {
     );
 
     let outcome = result.expect("expected parse outcome");
-    assert_eq!(
-        outcome.status,
-        ParsePhaseStatus::Parsed,
+    assert!(
+        outcome.parsed_without_error,
         "diagnostics={:?}",
         vm.parser_diagnostics
     );
@@ -3319,7 +3318,7 @@ fn parse_source_text_accepts_distinct_type_variables_on_algebraic_lhs() {
 
 #[test]
 fn parse_source_text_commits_abstype_with_later_basis_binding() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let source_path = unique_test_path("abstype_with_later_basis_binding.m");
     let source_path_str = source_path.to_string_lossy().to_string();
@@ -3331,7 +3330,7 @@ fn parse_source_text_commits_abstype_with_later_basis_binding() {
     );
 
     let outcome = result.expect("expected parse outcome");
-    assert_eq!(outcome.status, ParsePhaseStatus::Parsed);
+    assert!(outcome.parsed_without_error);
     let thing = vm.intern_identifier("thing");
     let showthing = vm.intern_identifier("showthing");
     let IdentifierValueData::Typed {
@@ -3356,7 +3355,7 @@ fn parse_source_text_commits_abstype_with_later_basis_binding() {
 
 #[test]
 fn parse_source_text_commits_abstype_after_prior_basis_binding() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let source_path = unique_test_path("abstype_after_prior_basis_binding.m");
     let source_path_str = source_path.to_string_lossy().to_string();
@@ -3368,7 +3367,7 @@ fn parse_source_text_commits_abstype_after_prior_basis_binding() {
     );
 
     let outcome = result.expect("expected parse outcome");
-    assert_eq!(outcome.status, ParsePhaseStatus::Parsed);
+    assert!(outcome.parsed_without_error);
     let thing = vm.intern_identifier("thing");
     let showthing = vm.intern_identifier("showthing");
     let IdentifierValueData::Typed {
@@ -3393,7 +3392,7 @@ fn parse_source_text_commits_abstype_after_prior_basis_binding() {
 
 #[test]
 fn load_file_accepts_abstype_with_basis_and_function_show_function() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     let source_path = unique_test_path("abstype_with_basis_and_function_show_function.m");
     std::fs::write(&source_path, "abstype thing with showthing :: num\nthing == num\nshowthing = 0\n")
         .expect("failed to write source test file");
@@ -3426,7 +3425,7 @@ fn load_file_accepts_abstype_with_basis_and_function_show_function() {
 
 #[test]
 fn load_file_reports_unbound_abstype_without_basis() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     let source_path = unique_test_path("unbound_abstype_without_basis.m");
     std::fs::write(&source_path, "abstype thing with showthing :: num\nshowthing = 0\n")
         .expect("failed to write source test file");
@@ -3451,7 +3450,7 @@ fn load_file_reports_unbound_abstype_without_basis() {
 
 #[test]
 fn parse_source_script_reads_file_and_delegates_to_text_entry() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     let source_path = unique_test_path("parse_source_script_wrapper.m");
     std::fs::write(&source_path, "%free { x :: num }\n").expect("failed to write source test file");
     let source_path_str = source_path.to_string_lossy().to_string();
@@ -3461,7 +3460,7 @@ fn parse_source_script_reads_file_and_delegates_to_text_entry() {
         .parse_source_script(&source_file, &source_path_str, UNIX_EPOCH, false)
         .expect("expected parse outcome");
 
-    assert_eq!(outcome.status, ParsePhaseStatus::Parsed);
+    assert!(outcome.parsed_without_error);
     assert_eq!(vm.free_identifiers.len(&vm.heap), 1);
     let current_file = outcome.files.head(&vm.heap).expect("expected current file");
     assert!(!current_file.is_shareable(&vm.heap));
@@ -3469,7 +3468,7 @@ fn parse_source_script_reads_file_and_delegates_to_text_entry() {
 
 #[test]
 fn success_postlude_phase_resets_syntax_editor_state() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
     vm.sorted = false;
     vm.error_line = 42;
@@ -3491,7 +3490,7 @@ fn success_postlude_phase_resets_syntax_editor_state() {
 
 #[test]
 fn syntax_fallback_resets_syntax_editor_state_outside_initialization() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
     vm.error_line = 17;
     vm.error_locations = vec![Combinator::False.into()];
@@ -3514,7 +3513,7 @@ fn syntax_fallback_resets_syntax_editor_state_outside_initialization() {
 
 #[test]
 fn parser_vm_api_interns_identifiers_and_builds_alias_metadata() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let first = vm.intern_identifier("widget");
     let second = vm.intern_identifier("widget");
@@ -3534,7 +3533,7 @@ fn parser_vm_api_interns_identifiers_and_builds_alias_metadata() {
 
 #[test]
 fn parser_vm_api_supports_type_and_runtime_helpers() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let bool_id = vm.intern_identifier("bool");
     assert_eq!(vm.translate_type_identifier(bool_id), Type::Bool.into());
@@ -3587,7 +3586,7 @@ fn parser_vm_api_supports_type_and_runtime_helpers() {
 
 #[test]
 fn parser_vm_api_exposes_explicit_deferred_mutation_stubs() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     assert_eq!(
         vm.record_deferred_exports(NIL, NIL, NIL),
@@ -3641,7 +3640,7 @@ fn parser_vm_api_exposes_explicit_deferred_mutation_stubs() {
 
 #[test]
 fn exportfile_phase_errors_when_path_is_not_in_includees() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let path = unique_test_path("exports_only.m")
         .to_string_lossy()
@@ -3667,7 +3666,7 @@ fn exportfile_phase_errors_when_path_is_not_in_includees() {
 
 #[test]
 fn exportfile_phase_errors_when_path_binding_is_ambiguous() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let path = unique_test_path("ambiguous.m")
         .to_string_lossy()
@@ -3699,7 +3698,7 @@ fn exportfile_phase_errors_when_path_binding_is_ambiguous() {
 
 #[test]
 fn exportfile_phase_accepts_unique_included_binding() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let path = unique_test_path("included_once.m")
         .to_string_lossy()
@@ -3730,7 +3729,7 @@ fn exportfile_phase_accepts_unique_included_binding() {
 
 #[test]
 fn include_expansion_phase_appends_includees_and_clears_bookkeeping() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let main_file = FileRecord::new(
         &mut vm.heap,
@@ -3765,7 +3764,7 @@ fn include_expansion_phase_appends_includees_and_clears_bookkeeping() {
 
 #[test]
 fn include_expansion_phase_is_noop_when_includees_empty() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.files = ConsList::EMPTY;
     vm.included_files = ConsList::EMPTY;
     let include_stub = FileRecord::new(
@@ -3788,7 +3787,7 @@ fn include_expansion_phase_is_noop_when_includees_empty() {
 
 #[test]
 fn typecheck_phase_succeeds_when_no_undefined_names() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.undefined_names = ConsList::EMPTY;
 
     let result = vm.run_checktypes_phase();
@@ -3798,7 +3797,7 @@ fn typecheck_phase_succeeds_when_no_undefined_names() {
 
 #[test]
 fn typecheck_phase_fails_when_undefined_names_present() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     let missing_id = vm.heap.make_empty_identifier("missing_name");
     vm.undefined_names = ConsList::new(&mut vm.heap, missing_id);
 
@@ -3812,7 +3811,7 @@ fn typecheck_phase_fails_when_undefined_names_present() {
 
 #[test]
 fn typecheck_phase_tracks_bound_names_through_local_let_body() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let current_file = FileRecord::new(
         &mut vm.heap,
@@ -3840,7 +3839,7 @@ fn typecheck_phase_tracks_bound_names_through_local_let_body() {
 
 #[test]
 fn typecheck_phase_reports_undefined_name_inside_local_let_rhs() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let current_file = FileRecord::new(
         &mut vm.heap,
@@ -3873,7 +3872,7 @@ fn typecheck_phase_reports_undefined_name_inside_local_let_rhs() {
 
 #[test]
 fn typecheck_phase_tracks_recursive_local_letrec_bindings_across_group() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let current_file = FileRecord::new(
         &mut vm.heap,
@@ -3906,7 +3905,7 @@ fn typecheck_phase_tracks_recursive_local_letrec_bindings_across_group() {
 
 #[test]
 fn typecheck_phase_does_not_bind_repeated_name_leaf_in_formal() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let current_file = FileRecord::new(
         &mut vm.heap,
@@ -3942,7 +3941,7 @@ fn typecheck_phase_does_not_bind_repeated_name_leaf_in_formal() {
 
 #[test]
 fn typecheck_phase_does_not_bind_wrapped_constant_leaf_in_formal() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let current_file = FileRecord::new(
         &mut vm.heap,
@@ -3977,7 +3976,7 @@ fn typecheck_phase_does_not_bind_wrapped_constant_leaf_in_formal() {
 
 #[test]
 fn typecheck_phase_rejects_value_head_application_in_formal() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let current_file = FileRecord::new(
         &mut vm.heap,
@@ -4011,7 +4010,7 @@ fn typecheck_phase_rejects_value_head_application_in_formal() {
 
 #[test]
 fn typecheck_phase_rejects_non_identifier_application_head_in_formal() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let current_file = FileRecord::new(
         &mut vm.heap,
@@ -4047,7 +4046,7 @@ fn typecheck_phase_rejects_non_identifier_application_head_in_formal() {
 
 #[test]
 fn typecheck_phase_rejects_repeated_name_application_head_in_value_head_bucket() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let current_file = FileRecord::new(
         &mut vm.heap,
@@ -4082,7 +4081,7 @@ fn typecheck_phase_rejects_repeated_name_application_head_in_value_head_bucket()
 
 #[test]
 fn typecheck_phase_non_identifier_application_head_still_binds_interior_names() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let current_file = FileRecord::new(
         &mut vm.heap,
@@ -4120,7 +4119,7 @@ fn typecheck_phase_non_identifier_application_head_still_binds_interior_names() 
 
 #[test]
 fn typecheck_phase_non_identifier_application_head_still_binds_head_subtree_names() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let current_file = FileRecord::new(
         &mut vm.heap,
@@ -4158,7 +4157,7 @@ fn typecheck_phase_non_identifier_application_head_still_binds_head_subtree_name
 
 #[test]
 fn typecheck_phase_rejects_infix_name_application_in_value_head_bucket() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let current_file = FileRecord::new(
         &mut vm.heap,
@@ -4193,7 +4192,7 @@ fn typecheck_phase_rejects_infix_name_application_in_value_head_bucket() {
 
 #[test]
 fn typecheck_phase_infix_name_value_head_left_operand_still_binds_interior_names() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let current_file = FileRecord::new(
         &mut vm.heap,
@@ -4234,7 +4233,7 @@ fn typecheck_phase_infix_name_value_head_left_operand_still_binds_interior_names
 
 #[test]
 fn typecheck_phase_infix_name_repeated_head_left_operand_still_binds_interior_names() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let current_file = FileRecord::new(
         &mut vm.heap,
@@ -4275,7 +4274,7 @@ fn typecheck_phase_infix_name_repeated_head_left_operand_still_binds_interior_na
 
 #[test]
 fn typecheck_phase_invalid_application_formal_still_binds_interior_names() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let current_file = FileRecord::new(
         &mut vm.heap,
@@ -4311,7 +4310,7 @@ fn typecheck_phase_invalid_application_formal_still_binds_interior_names() {
 
 #[test]
 fn typecheck_phase_invalid_application_formal_still_binds_head_name() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let current_file = FileRecord::new(
         &mut vm.heap,
@@ -4347,7 +4346,7 @@ fn typecheck_phase_invalid_application_formal_still_binds_head_name() {
 
 #[test]
 fn typecheck_phase_repeated_name_application_head_still_binds_argument_names() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let current_file = FileRecord::new(
         &mut vm.heap,
@@ -4384,7 +4383,7 @@ fn typecheck_phase_repeated_name_application_head_still_binds_argument_names() {
 
 #[test]
 fn typecheck_phase_unparenthesized_value_head_application_chain_still_binds_all_names() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let current_file = FileRecord::new(
         &mut vm.heap,
@@ -4424,7 +4423,7 @@ fn typecheck_phase_unparenthesized_value_head_application_chain_still_binds_all_
 
 #[test]
 fn typecheck_phase_unparenthesized_repeated_name_application_chain_still_binds_argument_name() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let current_file = FileRecord::new(
         &mut vm.heap,
@@ -4468,7 +4467,7 @@ fn typecheck_phase_unparenthesized_repeated_name_application_chain_still_binds_a
 
 #[test]
 fn typecheck_phase_unparenthesized_non_identifier_application_chain_still_binds_interior_names() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let current_file = FileRecord::new(
         &mut vm.heap,
@@ -4508,7 +4507,7 @@ fn typecheck_phase_unparenthesized_non_identifier_application_chain_still_binds_
 
 #[test]
 fn typecheck_phase_successor_pattern_binds_inner_name() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let current_file = FileRecord::new(
         &mut vm.heap,
@@ -4543,7 +4542,7 @@ fn typecheck_phase_successor_pattern_binds_inner_name() {
 
 #[test]
 fn typecheck_phase_rejects_structural_inner_successor_pattern() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let current_file = FileRecord::new(
         &mut vm.heap,
@@ -4581,7 +4580,7 @@ fn typecheck_phase_rejects_structural_inner_successor_pattern() {
 
 #[test]
 fn typecheck_phase_invalid_successor_pattern_still_binds_interior_names() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let current_file = FileRecord::new(
         &mut vm.heap,
@@ -4621,7 +4620,7 @@ fn typecheck_phase_invalid_successor_pattern_still_binds_interior_names() {
 
 #[test]
 fn typecheck_phase_successor_pattern_preserves_inner_value_head_diagnostic() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let current_file = FileRecord::new(
         &mut vm.heap,
@@ -4659,7 +4658,7 @@ fn typecheck_phase_successor_pattern_preserves_inner_value_head_diagnostic() {
 
 #[test]
 fn typecheck_phase_rejects_undeclared_constructor_inside_successor_pattern() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let current_file = FileRecord::new(
         &mut vm.heap,
@@ -4697,7 +4696,7 @@ fn typecheck_phase_rejects_undeclared_constructor_inside_successor_pattern() {
 
 #[test]
 fn typecheck_phase_rejects_non_canonical_plus_pattern_in_formal() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let current_file = FileRecord::new(
         &mut vm.heap,
@@ -4733,7 +4732,7 @@ fn typecheck_phase_rejects_non_canonical_plus_pattern_in_formal() {
 
 #[test]
 fn typecheck_phase_non_canonical_plus_pattern_still_binds_interior_names() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let current_file = FileRecord::new(
         &mut vm.heap,
@@ -4771,7 +4770,7 @@ fn typecheck_phase_non_canonical_plus_pattern_still_binds_interior_names() {
 
 #[test]
 fn typecheck_phase_rejects_unary_minus_pattern_in_formal() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let current_file = FileRecord::new(
         &mut vm.heap,
@@ -4804,7 +4803,7 @@ fn typecheck_phase_rejects_unary_minus_pattern_in_formal() {
 
 #[test]
 fn typecheck_phase_unary_minus_pattern_still_binds_interior_names() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let current_file = FileRecord::new(
         &mut vm.heap,
@@ -4839,7 +4838,7 @@ fn typecheck_phase_unary_minus_pattern_still_binds_interior_names() {
 
 #[test]
 fn typecheck_phase_rejects_malformed_plus_application_in_formal() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let current_file = FileRecord::new(
         &mut vm.heap,
@@ -4875,7 +4874,7 @@ fn typecheck_phase_rejects_malformed_plus_application_in_formal() {
 
 #[test]
 fn typecheck_phase_malformed_plus_application_still_binds_all_pattern_operands() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let current_file = FileRecord::new(
         &mut vm.heap,
@@ -4913,7 +4912,7 @@ fn typecheck_phase_malformed_plus_application_still_binds_all_pattern_operands()
 
 #[test]
 fn typecheck_phase_rejects_binary_minus_pattern_in_formal() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let current_file = FileRecord::new(
         &mut vm.heap,
@@ -4949,7 +4948,7 @@ fn typecheck_phase_rejects_binary_minus_pattern_in_formal() {
 
 #[test]
 fn typecheck_phase_binary_minus_pattern_still_binds_both_operands() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let current_file = FileRecord::new(
         &mut vm.heap,
@@ -4985,7 +4984,7 @@ fn typecheck_phase_binary_minus_pattern_still_binds_both_operands() {
 
 #[test]
 fn export_closure_phase_is_noop_without_exports() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let result = vm.run_export_closure_phase_partial(
         Some(&ParserTopLevelDirectivePayload::default()),
@@ -4997,7 +4996,7 @@ fn export_closure_phase_is_noop_without_exports() {
 
 #[test]
 fn export_closure_phase_clears_exports_when_undefined_names_present() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     let missing_id = vm.heap.make_empty_identifier("missing_name");
     vm.undefined_names = ConsList::new(&mut vm.heap, missing_id);
     let payload = export_payload(
@@ -5021,7 +5020,7 @@ fn export_closure_phase_clears_exports_when_undefined_names_present() {
 
 #[test]
 fn export_closure_phase_keeps_exports_when_no_undefined_names() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.undefined_names = ConsList::EMPTY;
     let exported_name = vm.heap.make_empty_identifier("exported_name");
     let current_defs = ConsList::new(&mut vm.heap, exported_name);
@@ -5052,7 +5051,7 @@ fn export_closure_phase_keeps_exports_when_no_undefined_names() {
 
 #[test]
 fn export_closure_phase_rejects_explicit_export_name_not_in_definienda() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.undefined_names = ConsList::EMPTY;
     let current_name = vm.heap.make_empty_identifier("defined_here");
     let current_defs = ConsList::new(&mut vm.heap, current_name);
@@ -5084,7 +5083,7 @@ fn export_closure_phase_rejects_explicit_export_name_not_in_definienda() {
 
 #[test]
 fn export_closure_phase_accepts_explicit_export_name_from_materialized_include() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.undefined_names = ConsList::EMPTY;
     let main_name = vm.heap.make_empty_identifier("main_name");
     let current_defs = ConsList::new(&mut vm.heap, main_name);
@@ -5131,7 +5130,7 @@ fn export_closure_phase_accepts_explicit_export_name_from_materialized_include()
 
 #[test]
 fn export_closure_phase_deduplicates_explicit_and_path_expanded_exports() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.undefined_names = ConsList::EMPTY;
     let current_name = vm.heap.make_empty_identifier("foo");
     let current_defs = ConsList::new(&mut vm.heap, current_name);
@@ -5179,7 +5178,7 @@ fn export_closure_phase_deduplicates_explicit_and_path_expanded_exports() {
 
 #[test]
 fn export_closure_phase_preserves_embargo_filtering_after_explicit_validation() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.undefined_names = ConsList::EMPTY;
     let exported_name = vm.heap.make_empty_identifier("exported_name");
     let current_defs = ConsList::new(&mut vm.heap, exported_name);
@@ -5211,7 +5210,7 @@ fn export_closure_phase_preserves_embargo_filtering_after_explicit_validation() 
 
 #[test]
 fn export_closure_phase_clears_bereaved_risk_when_closed_export_keeps_required_typename() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("bereaved_risk_closed_export_ok.m");
@@ -5230,7 +5229,7 @@ fn export_closure_phase_clears_bereaved_risk_when_closed_export_keeps_required_t
 
 #[test]
 fn export_closure_phase_sets_bereaved_risk_when_embargo_removes_required_typename() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("bereaved_risk_embargoed_typename.m");
@@ -5249,7 +5248,7 @@ fn export_closure_phase_sets_bereaved_risk_when_embargo_removes_required_typenam
 
 #[test]
 fn bereaved_warning_phase_is_noop_without_risk_flag() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.exported_identifiers = NIL;
     vm.unused_types = false;
 
@@ -5259,7 +5258,7 @@ fn bereaved_warning_phase_is_noop_without_risk_flag() {
 
 #[test]
 fn bereaved_warning_phase_returns_ok_when_risk_flagged() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     let export_id = vm.heap.make_empty_identifier("exported_name");
     vm.exported_identifiers = vm.heap.cons_ref(export_id.into(), NIL);
     vm.unused_types = true;
@@ -5271,7 +5270,7 @@ fn bereaved_warning_phase_returns_ok_when_risk_flagged() {
 
 #[test]
 fn unused_diagnostics_phase_clears_deferred_marker() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.empty_production_nonterminals = Combinator::True.into();
 
     vm.emit_unused_definition_diagnostics_partial();
@@ -5280,7 +5279,7 @@ fn unused_diagnostics_phase_clears_deferred_marker() {
 
 #[test]
 fn unused_diagnostics_phase_is_stable_when_marker_absent() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.empty_production_nonterminals = NIL;
 
     vm.emit_unused_definition_diagnostics_partial();
@@ -5289,7 +5288,7 @@ fn unused_diagnostics_phase_is_stable_when_marker_absent() {
 
 #[test]
 fn codegen_phase_fails_without_loaded_files() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.files = ConsList::EMPTY;
 
     let result = vm.run_codegen_phase();
@@ -5299,7 +5298,7 @@ fn codegen_phase_fails_without_loaded_files() {
 
 #[test]
 fn codegen_phase_fails_during_initialization_with_unresolved_names() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = true;
     let source_file = FileRecord::new(
         &mut vm.heap,
@@ -5324,7 +5323,7 @@ fn codegen_phase_fails_during_initialization_with_unresolved_names() {
 
 #[test]
 fn codegen_phase_succeeds_with_loaded_files_and_no_init_errors() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
     let source_file = FileRecord::new(
         &mut vm.heap,
@@ -5345,7 +5344,7 @@ fn codegen_phase_succeeds_with_loaded_files_and_no_init_errors() {
 
 #[test]
 fn codegen_phase_rewrites_plain_top_level_label_wrapped_body() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let value_id = vm.heap.make_empty_identifier("value_id");
@@ -5384,7 +5383,7 @@ fn codegen_phase_rewrites_plain_top_level_label_wrapped_body() {
 
 #[test]
 fn codegen_phase_rewrites_lambda_headed_function_body() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let xs = vm.heap.make_empty_identifier("xs");
@@ -5421,7 +5420,7 @@ fn codegen_phase_rewrites_lambda_headed_function_body() {
 
 #[test]
 fn codegen_phase_normalizes_pair_body_into_cons() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let value_id = vm.heap.make_empty_identifier("pair_value");
@@ -5457,7 +5456,7 @@ fn codegen_phase_normalizes_pair_body_into_cons() {
 
 #[test]
 fn codegen_phase_normalizes_tcons_body_into_cons() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let value_id = vm.heap.make_empty_identifier("tcons_value");
@@ -5493,7 +5492,7 @@ fn codegen_phase_normalizes_tcons_body_into_cons() {
 
 #[test]
 fn codegen_phase_lowers_let_body_through_translet_shape() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let x = vm.heap.make_empty_identifier("x");
@@ -5529,7 +5528,7 @@ fn codegen_phase_lowers_let_body_through_translet_shape() {
 
 #[test]
 fn codegen_phase_lowers_letrec_singleton_body_through_y() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let x = vm.heap.make_empty_identifier("x");
@@ -5568,7 +5567,7 @@ fn codegen_phase_lowers_letrec_singleton_body_through_y() {
 
 #[test]
 fn codegen_phase_lowers_pattern_letrec_body_through_recursive_carrier_and_subscripts() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let x = vm.heap.make_empty_identifier("x");
@@ -5615,7 +5614,7 @@ fn codegen_phase_lowers_pattern_letrec_body_through_recursive_carrier_and_subscr
 
 #[test]
 fn codegen_phase_lowers_mixed_letrec_group_with_pattern_projection_order() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let x = vm.heap.make_empty_identifier("x");
@@ -5661,7 +5660,7 @@ fn codegen_phase_lowers_mixed_letrec_group_with_pattern_projection_order() {
 
 #[test]
 fn codegen_phase_lowers_tries_with_fallible_first_case_to_try_and_badcase() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let x = vm.heap.make_empty_identifier("x");
@@ -5704,7 +5703,7 @@ fn codegen_phase_lowers_tries_with_fallible_first_case_to_try_and_badcase() {
 
 #[test]
 fn codegen_phase_lowers_identity_lambda_to_i() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let x = vm.heap.make_empty_identifier("x");
@@ -5738,7 +5737,7 @@ fn codegen_phase_lowers_identity_lambda_to_i() {
 
 #[test]
 fn codegen_phase_lowers_tuple_pattern_lambda_to_u_application() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let x = vm.heap.make_empty_identifier("x");
@@ -5774,7 +5773,7 @@ fn codegen_phase_lowers_tuple_pattern_lambda_to_u_application() {
 
 #[test]
 fn codegen_phase_lowers_shared_top_level_body_to_shared_payload() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let payload = vm.heap.make_empty_identifier("payload");
@@ -5812,7 +5811,7 @@ fn codegen_phase_lowers_shared_top_level_body_to_shared_payload() {
 
 #[test]
 fn codegen_phase_lowers_shared_letrec_tries_body_through_existing_owned_subset() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let x = vm.heap.make_empty_identifier("x");
@@ -5867,7 +5866,7 @@ fn codegen_phase_lowers_shared_letrec_tries_body_through_existing_owned_subset()
 
 #[test]
 fn codegen_phase_reuses_one_lowered_result_for_repeated_shared_tuple_lambda() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let x = vm.heap.make_empty_identifier("x");
@@ -5913,7 +5912,7 @@ fn codegen_phase_reuses_one_lowered_result_for_repeated_shared_tuple_lambda() {
 
 #[test]
 fn codegen_phase_leftfactors_all_active_g_alt_shapes_and_leaves_non_matches_unchanged() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let a = vm.heap.make_empty_identifier("a");
@@ -6047,7 +6046,7 @@ fn codegen_phase_leftfactors_all_active_g_alt_shapes_and_leaves_non_matches_unch
 
 #[test]
 fn codegen_phase_lowers_builtin_show_nodes_for_num_bool_char_void_and_function_types() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let shownum_holder = vm.heap.make_empty_identifier("shownum_holder");
@@ -6136,7 +6135,7 @@ fn codegen_phase_lowers_builtin_show_nodes_for_num_bool_char_void_and_function_t
 
 #[test]
 fn codegen_phase_lowers_list_string_and_tuple_show_nodes() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let list_show_function_holder = vm.heap.make_empty_identifier("list_show_function_holder");
@@ -6207,7 +6206,7 @@ fn codegen_phase_lowers_list_string_and_tuple_show_nodes() {
 
 #[test]
 fn codegen_phase_lowers_attached_type_show_functions_through_committed_identity() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let showthing = vm.intern_identifier("showThing");
@@ -6267,7 +6266,7 @@ fn codegen_phase_lowers_attached_type_show_functions_through_committed_identity(
 
 #[test]
 fn codegen_phase_preserves_cond_shape_for_left_k_guarded_abstraction() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let x = vm.heap.make_empty_identifier("x");
@@ -6313,7 +6312,7 @@ fn codegen_phase_preserves_cond_shape_for_left_k_guarded_abstraction() {
 
 #[test]
 fn codegen_phase_preserves_cond_shape_for_left_b_with_right_k_guarded_abstraction() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let x = vm.heap.make_empty_identifier("x");
@@ -6357,7 +6356,7 @@ fn codegen_phase_preserves_cond_shape_for_left_b_with_right_k_guarded_abstractio
 
 #[test]
 fn codegen_phase_lowers_pattern_letrec_through_tries_and_guarded_lambda_interaction() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let x = vm.heap.make_empty_identifier("x");
@@ -6411,7 +6410,7 @@ fn codegen_phase_lowers_pattern_letrec_through_tries_and_guarded_lambda_interact
 
 #[test]
 fn dump_visibility_phase_runs_for_normal_m_source() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
     let internal = vm.heap.make_empty_identifier("internal_name");
     vm.internals = ConsList::new(&mut vm.heap, internal);
@@ -6427,7 +6426,7 @@ fn dump_visibility_phase_runs_for_normal_m_source() {
 
 #[test]
 fn dump_visibility_phase_writes_dump_file_for_normal_m_source() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("dump_write_success.m");
@@ -6447,7 +6446,7 @@ fn dump_visibility_phase_writes_dump_file_for_normal_m_source() {
 
 #[test]
 fn dump_visibility_phase_skips_non_m_source_when_not_initializing() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = false;
     let internal = vm.heap.make_empty_identifier("internal_name");
     vm.internals = ConsList::new(&mut vm.heap, internal);
@@ -6463,7 +6462,7 @@ fn dump_visibility_phase_skips_non_m_source_when_not_initializing() {
 
 #[test]
 fn dump_visibility_phase_runs_during_initialization_even_without_m_extension() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.initializing = true;
     let internal = vm.heap.make_empty_identifier("internal_name");
     vm.internals = ConsList::new(&mut vm.heap, internal);
@@ -6479,7 +6478,7 @@ fn dump_visibility_phase_runs_during_initialization_even_without_m_extension() {
 
 #[test]
 fn syntax_dump_records_source_anchor_for_m_scripts() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.old_files = ConsList::EMPTY;
     vm.last_load_phase_trace.clear();
 
@@ -6495,7 +6494,7 @@ fn syntax_dump_records_source_anchor_for_m_scripts() {
 
 #[test]
 fn syntax_dump_writes_dump_file_for_m_scripts() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.old_files = ConsList::EMPTY;
     vm.error_line = 17;
 
@@ -6515,7 +6514,7 @@ fn syntax_dump_writes_dump_file_for_m_scripts() {
 
 #[test]
 fn syntax_dump_is_noop_for_non_m_sources() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     vm.old_files = ConsList::EMPTY;
     vm.last_load_phase_trace.clear();
 
@@ -6531,7 +6530,7 @@ fn syntax_dump_is_noop_for_non_m_sources() {
 
 #[test]
 fn load_script_consumes_dump_shape_written_by_dump_visibility_phase() {
-    let mut writer_vm = VM::new_for_tests();
+    let mut writer_vm = VM::new();
     writer_vm.initializing = false;
 
     let source_path = unique_test_path("dump_decode_roundtrip.m");
@@ -6541,7 +6540,7 @@ fn load_script_consumes_dump_shape_written_by_dump_visibility_phase() {
     let write_result = writer_vm.run_dump_visibility_phase(&source_path_str);
     assert!(write_result.is_ok());
 
-    let mut reader_vm = VM::new_for_tests();
+    let mut reader_vm = VM::new();
     reader_vm.initializing = false;
     let dump_path = source_path.with_extension("x");
     let dump_file = File::open(dump_path).expect("expected generated dump file");
@@ -6558,7 +6557,7 @@ fn load_script_consumes_dump_shape_written_by_dump_visibility_phase() {
 
 #[test]
 fn load_defs_decodes_short_integer_through_integerref_boundary() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     let bytes = vec![Bytecode::Short.code(), 0x80, Bytecode::Definition.code()];
     let value = vm
         .load_defs(&mut bytes.into_iter())
@@ -6570,7 +6569,7 @@ fn load_defs_decodes_short_integer_through_integerref_boundary() {
 
 #[test]
 fn load_defs_decodes_int_x_multi_cell_chain_through_integerref_boundary() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     let mut bytes = vec![Bytecode::Integer.code()];
     for word in [1isize, 2, 3, -1] {
         bytes.extend_from_slice(&word.to_le_bytes());
@@ -6590,7 +6589,7 @@ fn load_defs_decodes_int_x_multi_cell_chain_through_integerref_boundary() {
 
 #[test]
 fn load_defs_preserves_int_x_first_word_negative_one() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
     let mut bytes = vec![Bytecode::Integer.code()];
     for word in [-1isize, -1] {
         bytes.extend_from_slice(&word.to_le_bytes());
@@ -6607,7 +6606,7 @@ fn load_defs_preserves_int_x_first_word_negative_one() {
 
 #[test]
 fn alfasort_is_deterministic_for_diagnostic_identifier_lists() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let zeta = IdentifierRecordRef::new(
         &mut vm.heap,
@@ -6646,7 +6645,7 @@ fn alfasort_is_deterministic_for_diagnostic_identifier_lists() {
 
 #[test]
 fn printlist_formats_identifier_names_for_diagnostics() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let alpha = IdentifierRecordRef::new(
         &mut vm.heap,
@@ -6683,7 +6682,7 @@ fn printlist_formats_identifier_names_for_diagnostics() {
 
 #[test]
 fn source_update_check_detects_when_loaded_source_is_newer_than_dump_timestamp() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let source_path = unique_test_path("source_update_check_newer.m");
     std::fs::write(&source_path, "-- source\n").expect("failed to write source test file");
@@ -6704,7 +6703,7 @@ fn source_update_check_detects_when_loaded_source_is_newer_than_dump_timestamp()
 
 #[test]
 fn source_update_check_is_false_when_dump_timestamp_is_not_older_than_source() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let source_path = unique_test_path("source_update_check_current.m");
     std::fs::write(&source_path, "-- source\n").expect("failed to write source test file");
@@ -6725,7 +6724,7 @@ fn source_update_check_is_false_when_dump_timestamp_is_not_older_than_source() {
 
 #[test]
 fn unfix_exports_clears_export_processing_state() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     vm.export_list_is_active = true;
     let internal = vm.heap.make_empty_identifier("internal_name");
@@ -6739,7 +6738,7 @@ fn unfix_exports_clears_export_processing_state() {
 
 #[test]
 fn unfix_exports_preserves_internals_in_exports_mode() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     vm.export_list_is_active = true;
     vm.options.make_exports.push("script.m".to_string());
@@ -6754,7 +6753,7 @@ fn unfix_exports_preserves_internals_in_exports_mode() {
 
 #[test]
 fn fixexports_internalizes_nested_free_id_bindings() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let source_file = FileRecord::new(
         &mut vm.heap,
@@ -6791,7 +6790,7 @@ fn fixexports_internalizes_nested_free_id_bindings() {
 
 #[test]
 fn fixexports_internalize_undef_writes_fallback_application_payload() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     vm.export_paths = Combinator::True.into();
 
@@ -6829,7 +6828,7 @@ fn fixexports_internalize_undef_writes_fallback_application_payload() {
 
 #[test]
 fn unload_unsets_identifiers_reached_through_free_formal_bindings() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let free_id = vm.heap.make_empty_identifier("free_param");
     free_id.set_type_expr(&mut vm.heap, TypeExprRef::new(Type::Type.into()));
@@ -6862,7 +6861,7 @@ fn unload_unsets_identifiers_reached_through_free_formal_bindings() {
 
 #[test]
 fn fixexports_internalize_type_name_wraps_definition_with_alias_metadata() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     vm.export_paths = Combinator::True.into();
 
@@ -6901,7 +6900,7 @@ fn fixexports_internalize_type_name_wraps_definition_with_alias_metadata() {
 
 #[test]
 fn hdsort_orders_free_binding_pairs_by_identifier_name() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let gamma = vm.heap.make_empty_identifier("gamma");
     let alpha = vm.heap.make_empty_identifier("alpha");
@@ -6934,7 +6933,7 @@ fn hdsort_orders_free_binding_pairs_by_identifier_name() {
 
 #[test]
 fn bindparams_records_missing_and_extra_bindings_and_writes_matches() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let x = vm.heap.make_empty_identifier("x");
     let y = vm.heap.make_empty_identifier("y");
@@ -6998,7 +6997,7 @@ fn bindparams_records_missing_and_extra_bindings_and_writes_matches() {
 
 #[test]
 fn bindparams_records_wrong_arity_in_detritus_and_still_writes_formal_value() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let t = vm.heap.make_empty_identifier("t");
     let t_original =
@@ -7061,7 +7060,7 @@ fn bindparams_records_wrong_arity_in_detritus_and_still_writes_formal_value() {
 
 #[test]
 fn bind_include_request_actuals_routes_parser_fed_value_and_type_bindings_through_bindparams() {
-    let mut vm = VM::new_for_tests();
+    let mut vm = VM::new();
 
     let x = vm.heap.make_empty_identifier("x");
     let t = vm.heap.make_empty_identifier("t");

@@ -121,7 +121,14 @@ impl Lexer {
                 }
 
                 let Some(active_layout) = self.layout_stack.last().copied() else {
-                    continue;
+                    self.span = span;
+                    self.token = token;
+                    return Ok(ParserLookahead {
+                        token_type: token as i32 + 2,
+                        token,
+                        value: Value::Token(token),
+                        loc: Loc::new(self.span.start as u32, self.span.end as u32),
+                    });
                 };
                 let Some((next_token, next_span)) = self.tokens[self.token_index..]
                     .iter()

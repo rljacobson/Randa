@@ -221,6 +221,16 @@ impl VM {
         Ok(())
     }
 
+    /// Loads one Miranda source file through the active source-parse/typecheck/codegen pipeline.
+    /// This exists so non-startup callers can exercise the real file-loading path without going
+    /// through dump probing or command-line setup. The invariant is that direct file loads run the
+    /// same active source pipeline as startup fallback after `undump` decides source loading is
+    /// required.
+    pub fn load_source_file(&mut self, source_path: &str) -> Result<(), LoadFileError> {
+        self.initializing = false;
+        self.load_file(source_path)
+    }
+
     pub(super) fn load_file(&mut self, source_path: &str) -> Result<(), LoadFileError> {
         #[cfg(test)]
         self.last_load_phase_trace.clear();
@@ -281,7 +291,7 @@ impl VM {
                 is_main_script,
             )?;
 
-            if parse_outcome.status == ParsePhaseStatus::SyntaxError {
+            if !parse_outcome.parsed_without_error {
                 self.record_load_phase("syntax-fallback");
                 self.files = parse_outcome.files;
                 self.apply_syntax_error_fallback(&source_path)?;
@@ -546,7 +556,7 @@ impl VM {
                 }
             })?;
             let parse_outcome = self.parse_source_text(&path, &source_text, modified_time, false)?;
-            if parse_outcome.status == ParsePhaseStatus::SyntaxError {
+            if !parse_outcome.parsed_without_error {
                 return Err(IncludeDirectiveError::SyntaxErrorsPresent { path }.into());
             }
 
@@ -1842,7 +1852,7 @@ impl VM {
             ParserRunResult::ParsedExpression(expression) => {
                 self.last_expression = expression;
                 Ok(ParsePhaseOutcome {
-                    status: ParsePhaseStatus::Parsed,
+                    parsed_without_error: true,
                     files: placeholder_files,
                     top_level_payload: None,
                 })
@@ -1851,7 +1861,7 @@ impl VM {
                 let committed_files =
                     self.commit_parsed_top_level_script(source_path, modified_time, &payload);
                 Ok(ParsePhaseOutcome {
-                    status: ParsePhaseStatus::Parsed,
+                    parsed_without_error: true,
                     files: committed_files,
                     top_level_payload: Some(payload),
                 })
@@ -1859,7 +1869,7 @@ impl VM {
             ParserRunResult::SyntaxError(diagnostics) => {
                 self.commit_parser_run_diagnostics(diagnostics);
                 Ok(ParsePhaseOutcome {
-                    status: ParsePhaseStatus::SyntaxError,
+                    parsed_without_error: false,
                     files: placeholder_files,
                     top_level_payload: None,
                 })
@@ -2507,9 +2517,7 @@ impl VM {
 
         Some(IdentifierRecordRef::from_ref(restored_public_ref))
     }
-}
 
-impl VM {
     pub(crate) fn intern_identifier(&mut self, name: &str) -> IdentifierRecordRef {
         self.heap
             .get_identifier(name)

@@ -1,0 +1,37 @@
+# filename<TAB>status<TAB>detail
+# status is one of: pass, panic, skip
+README	skip	documentation
+ack.m	pass
+barry.m	pass
+box.m	pass
+divmodtest.m	pass
+edigits.m	pass
+fib.m	pass
+fibs.m	pass
+genmat.m	pass
+graphics.m	pass
+hamming.m	pass
+hanoi.m	pass
+just.m	pass
+kate.lit.m	pass
+kate.pdf	skip	non-source artifact
+keith.m	pass
+makebug.m	pass
+matrix.m	pass
+mrev	skip	non-.m executable script
+parafs.m	pass
+polish.m	pass
+powers.m	pass
+primes.m	pass
+pyths.m	pass
+queens.m	pass
+queens1.m	pass
+quicksort.m	pass
+rational.m	pass
+refoliate.m	pass
+selflines.m	pass
+set.m	pass
+stack.m	pass
+topsort.m	pass
+treesort.m	pass
+unify.m	pass

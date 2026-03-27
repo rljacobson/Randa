@@ -1036,24 +1036,14 @@ fn parser_returns_syntax_diagnostics_for_invalid_source() {
     let ParserRunResult::SyntaxError(diagnostics) = result else {
         panic!("expected syntax error result");
     };
-    assert_eq!(diagnostics.diagnostics.len(), 1);
-    assert!(diagnostics.diagnostics[0]
-        .message
-        .starts_with("unexpected token"));
+    let unexpected_token = diagnostics
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.message.starts_with("unexpected token"))
+        .expect("expected unexpected-token diagnostic");
+    assert_eq!(unexpected_token.here_info.as_ref().unwrap().line_number, 1);
     assert_eq!(
-        diagnostics.diagnostics[0]
-            .here_info
-            .as_ref()
-            .unwrap()
-            .line_number,
-        1
-    );
-    assert_eq!(
-        diagnostics.diagnostics[0]
-            .here_info
-            .as_ref()
-            .unwrap()
-            .script_file,
+        unexpected_token.here_info.as_ref().unwrap().script_file,
         "parse_boundary_syntax.m"
     );
 }

@@ -612,96 +612,102 @@ top_level_local_definition:
     ;
 
 top_level_definition_lhs:
-    Name { $$ = $1; }
-    | Name top_level_definition_parameters {
+    Name top_level_definition_parameters_opt {
+        let mut lhs = $1;
         let mut parameters: RawValue = $2.into();
-        let mut source_order_parameters = Vec::new();
-        while parameters != NIL_RAW {
-          source_order_parameters.push(Value::from(self.heap[parameters].head));
-          parameters = self.heap[parameters].tail;
-        }
-        source_order_parameters.reverse();
+        if parameters == NIL_RAW {
+          $$ = lhs;
+        } else {
+          let mut source_order_parameters = Vec::new();
+          while parameters != NIL_RAW {
+            source_order_parameters.push(Value::from(self.heap[parameters].head));
+            parameters = self.heap[parameters].tail;
+          }
+          source_order_parameters.reverse();
 
-        if source_order_parameters.len() > 1 {
-          if let Some(infix_parameter) = source_order_parameters.last().copied() {
-            let infix_parameter_ref = RawValue::from(infix_parameter);
-            if infix_parameter_ref >= ATOM_LIMIT && self.heap[infix_parameter_ref].tag == Tag::Ap {
-              let outer_application = ApNodeRef::from_ref(infix_parameter_ref);
-              if let Some(operator_application) = outer_application.function_application(&self.heap) {
-                let operator = Value::from(operator_application.function_raw(&self.heap));
-                let left = Value::from(operator_application.argument_raw(&self.heap));
-                let right = Value::from(outer_application.argument_raw(&self.heap));
+          if source_order_parameters.len() > 1 {
+            if let Some(infix_parameter) = source_order_parameters.last().copied() {
+              let infix_parameter_ref = RawValue::from(infix_parameter);
+              if infix_parameter_ref >= ATOM_LIMIT && self.heap[infix_parameter_ref].tag == Tag::Ap {
+                let outer_application = ApNodeRef::from_ref(infix_parameter_ref);
+                if let Some(operator_application) = outer_application.function_application(&self.heap) {
+                  let operator = Value::from(operator_application.function_raw(&self.heap));
+                  let left = Value::from(operator_application.argument_raw(&self.heap));
+                  let right = Value::from(outer_application.argument_raw(&self.heap));
 
-                let mut combined_left = source_order_parameters[0];
-                for argument in source_order_parameters[1..source_order_parameters.len() - 1].iter().copied() {
-                  combined_left = self.heap.apply_ref(self.top_level_application_head(combined_left), argument);
+                  let mut combined_left = source_order_parameters[0];
+                  for argument in source_order_parameters[1..source_order_parameters.len() - 1].iter().copied() {
+                    combined_left = self.heap.apply_ref(self.top_level_application_head(combined_left), argument);
+                  }
+                  combined_left = self.heap.apply_ref(self.top_level_application_head(combined_left), left);
+                  let combined_pattern = self.heap.apply2(operator, combined_left, right);
+                  source_order_parameters.truncate(0);
+                  source_order_parameters.push(combined_pattern);
                 }
-                combined_left = self.heap.apply_ref(self.top_level_application_head(combined_left), left);
-                let combined_pattern = self.heap.apply2(operator, combined_left, right);
-                source_order_parameters.truncate(0);
-                source_order_parameters.push(combined_pattern);
               }
             }
           }
-        }
 
-        let mut grouped_parameters = Vec::new();
-        for parameter in source_order_parameters {
-          let should_absorb = grouped_parameters.last().copied().is_some_and(|head| {
-            let head_ref = RawValue::from(head);
-            let head_can_absorb = if head_ref < ATOM_LIMIT || self.heap[head_ref].tag != Tag::Id {
-              true
-            } else {
-              is_capitalized(IdentifierRecordRef::from_ref(head_ref).get_name(&self.heap).as_str())
-            };
+          let mut grouped_parameters = Vec::new();
+          for parameter in source_order_parameters {
+            let should_absorb = grouped_parameters.last().copied().is_some_and(|head| {
+              let head_ref = RawValue::from(head);
+              let head_can_absorb = if head_ref < ATOM_LIMIT || self.heap[head_ref].tag != Tag::Id {
+                true
+              } else {
+                is_capitalized(IdentifierRecordRef::from_ref(head_ref).get_name(&self.heap).as_str())
+              };
 
-            let parameter_ref = RawValue::from(parameter);
-            let parameter_is_application_atom = if parameter_ref < ATOM_LIMIT {
-              true
-            } else {
-              match self.heap[parameter_ref].tag {
-                Tag::Id | Tag::Cons | Tag::Pair | Tag::TCons => true,
-                Tag::Ap => {
-                  let application = ApNodeRef::from_ref(parameter_ref);
-                  application.function_application(&self.heap).is_none()
-                    || {
-                      let function_ref = application.function_raw(&self.heap);
-                      function_ref < ATOM_LIMIT
-                        || match self.heap[function_ref].tag {
-                          Tag::Id | Tag::Cons | Tag::Pair | Tag::TCons => true,
-                          Tag::Ap => ApNodeRef::from_ref(function_ref).function_application(&self.heap).is_none(),
-                          _ => false,
-                        }
-                    }
+              let parameter_ref = RawValue::from(parameter);
+              let parameter_is_application_atom = if parameter_ref < ATOM_LIMIT {
+                true
+              } else {
+                match self.heap[parameter_ref].tag {
+                  Tag::Id | Tag::Cons | Tag::Pair | Tag::TCons => true,
+                  Tag::Ap => {
+                    let application = ApNodeRef::from_ref(parameter_ref);
+                    application.function_application(&self.heap).is_none()
+                      || {
+                        let function_ref = application.function_raw(&self.heap);
+                        function_ref < ATOM_LIMIT
+                          || match self.heap[function_ref].tag {
+                            Tag::Id | Tag::Cons | Tag::Pair | Tag::TCons => true,
+                            Tag::Ap => ApNodeRef::from_ref(function_ref).function_application(&self.heap).is_none(),
+                            _ => false,
+                          }
+                      }
+                  }
+                  _ => false,
                 }
-                _ => false,
-              }
-            };
+              };
 
-            head_can_absorb && parameter_is_application_atom
-          });
+              head_can_absorb && parameter_is_application_atom
+            });
 
-          if should_absorb {
-            let head = grouped_parameters.pop().unwrap();
-            grouped_parameters.push(self.heap.apply_ref(self.top_level_application_head(head), parameter));
-          } else {
-            grouped_parameters.push(parameter);
+            if should_absorb {
+              let head = grouped_parameters.pop().unwrap();
+              grouped_parameters.push(self.heap.apply_ref(self.top_level_application_head(head), parameter));
+            } else {
+              grouped_parameters.push(parameter);
+            }
           }
-        }
 
-        let mut lhs = $1;
-        for parameter in grouped_parameters {
-          lhs = self.heap.apply_ref(lhs, parameter);
+          for parameter in grouped_parameters {
+            lhs = self.heap.apply_ref(lhs, parameter);
+          }
+          $$ = lhs;
         }
-        $$ = lhs;
       }
     ;
 
-top_level_definition_parameters:
-    top_level_definition_parameters_start top_level_definition_parameter {
+top_level_definition_parameters_opt:
+    /* empty */ { $$ = NIL; }
+    | top_level_definition_parameters_start top_level_definition_parameter {
         $$ = self.heap.cons_ref($2, NIL);
       }
-    | top_level_definition_parameters top_level_definition_parameter { $$ = self.heap.cons_ref($2, $1); }
+    | top_level_definition_parameters_opt top_level_definition_parameter {
+        $$ = self.heap.cons_ref($2, $1);
+      }
     ;
 
 top_level_definition_parameters_start:

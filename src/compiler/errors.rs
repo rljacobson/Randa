@@ -20,7 +20,3 @@ pub enum LexerError {
         source: Box<dyn StdError + 'static>,
     },
 }
-
-pub fn emit_error(e: LexerError) {
-    println!("Error: {}", e);
-}
