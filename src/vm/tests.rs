@@ -3766,6 +3766,100 @@ fn typecheck_phase_fails_when_undefined_names_present() {
 }
 
 #[test]
+fn typecheck_phase_tracks_bound_names_through_local_let_body() {
+    let mut vm = VM::new_for_tests();
+
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("local_let_scope_ok.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        ConsList::EMPTY,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+
+    let f = vm.heap.make_empty_identifier("f");
+    let y = vm.heap.make_empty_identifier("y");
+    let one = IntegerRef::from_i64(&mut vm.heap, 1);
+    let definition = DefinitionRef::new(&mut vm.heap, y.into(), Type::Undefined.into(), one.into());
+    let let_body = vm.heap.let_ref(definition.into(), y.into());
+    f.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(let_body));
+    current_file.push_item_onto_definienda(&mut vm.heap, f);
+
+    let result = vm.run_checktypes_phase();
+
+    assert!(result.is_ok());
+}
+
+#[test]
+fn typecheck_phase_reports_undefined_name_inside_local_let_rhs() {
+    let mut vm = VM::new_for_tests();
+
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("local_let_scope_missing_rhs.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        ConsList::EMPTY,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+
+    let f = vm.heap.make_empty_identifier("f");
+    let y = vm.heap.make_empty_identifier("y");
+    let missing = vm.heap.make_empty_identifier("missing_local_rhs");
+    let definition = DefinitionRef::new(
+        &mut vm.heap,
+        y.into(),
+        Type::Undefined.into(),
+        missing.into(),
+    );
+    let let_body = vm.heap.let_ref(definition.into(), y.into());
+    f.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(let_body));
+    current_file.push_item_onto_definienda(&mut vm.heap, f);
+
+    let result = vm.run_checktypes_phase();
+
+    assert!(matches!(result, Err(TypecheckError::UndefinedNames { count: 1 })));
+}
+
+#[test]
+fn typecheck_phase_tracks_recursive_local_letrec_bindings_across_group() {
+    let mut vm = VM::new_for_tests();
+
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("local_letrec_scope_ok.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        ConsList::EMPTY,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+
+    let f = vm.heap.make_empty_identifier("f");
+    let g = vm.heap.make_empty_identifier("g");
+    let h = vm.heap.make_empty_identifier("h");
+    let g_definition = DefinitionRef::new(&mut vm.heap, g.into(), Type::Undefined.into(), h.into());
+    let one = IntegerRef::from_i64(&mut vm.heap, 1);
+    let h_definition = DefinitionRef::new(&mut vm.heap, h.into(), Type::Undefined.into(), one.into());
+    let mut definitions = NIL;
+    definitions = ConsList::<Value>::insert_ordered_value(&mut vm.heap, definitions, h_definition.into());
+    definitions = ConsList::<Value>::insert_ordered_value(&mut vm.heap, definitions, g_definition.into());
+    let letrec_body = vm.heap.letrec_ref(definitions.into(), g.into());
+    f.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(letrec_body));
+    current_file.push_item_onto_definienda(&mut vm.heap, f);
+
+    let result = vm.run_checktypes_phase();
+
+    assert!(result.is_ok());
+}
+
+#[test]
 fn typecheck_phase_does_not_bind_repeated_name_leaf_in_formal() {
     let mut vm = VM::new_for_tests();
 

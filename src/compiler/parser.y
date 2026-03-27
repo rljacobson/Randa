@@ -1149,7 +1149,11 @@ eqop:
 rhs:
     cases Where ldefs { $$ = block($3, compose($1), 0); }
     | exp Where ldefs { $$ = block($3, $1, 0); }
-    | exp { $$ = $1; }
+    | non_where_rhs { $$ = $1; }
+    ;
+
+non_where_rhs:
+    exp { $$ = $1; }
     | cases { $$ = compose($1); }
     ;
 
@@ -1189,8 +1193,7 @@ if:
 indent:
     /* empty */ {
         if !self.syntax_error_found {
-          self.vm.layout_partial();
-          self.vm.set_left_margin_partial();
+          self.yylexer.set_left_margin_partial();
         }
         $$ = NIL;
       }
@@ -1201,7 +1204,6 @@ indent:
 
 outdent:
     separator {
-        self.vm.unset_left_margin_partial();
         $$ = NIL;
       }
     ;
@@ -1213,11 +1215,6 @@ separator:
 
 reindent:
     /* empty */ {
-        if(!SYNERR) {
-          unsetlmargin();
-          layout();
-          setlmargin();
-        }
         $$ = NIL;
       }
     ;
@@ -1694,7 +1691,23 @@ defs:
     ;
 
 def:
-    v act2 indent Equal here rhs outdent {
+    v act2 indent Equal here exp Where ldefs outdent {
+        let mut l = $1;
+        let mut r = block($8, $6, 0);
+        let f = head(l);
+        if self.heap[f].tag==Tag::Id && !isconstructor(f) {
+          /* fnform defn */
+          while self.heap[l].tag==Tag::Ap {
+            r = lambda(self.heap[l].tail, r);
+            l = self.heap[l].head;
+          }
+        }
+        r = self.heap.label_ref($5, r);
+        declare(l, r);
+        self.last_identifier = l.into();
+      }
+
+    | v act2 indent Equal here non_where_rhs outdent {
         let mut l = $1;
         let mut r = $6;
         let f = head(l);
@@ -2212,9 +2225,22 @@ ldef:
         syntax("`::=' encountered in local defs\n");
         $$ = self.heap.cons_ref(self.heap.nill, NIL);
       }
-    | v act2 indent Equal here rhs outdent {
-        let l = $1;
-        let r = $6;
+    | v act2 indent Equal here exp Where ldefs outdent {
+        let mut l = $1;
+        let mut r = block($8, $6, 0);
+        let f = self.heap[l].head;
+        if(self.heap[f].tag == Tag::Id && !isconstructor(f)) { /* fnform defn */
+          while(self.heap[l].tag == Tag::Ap){
+            r = lambda(self.heap[l].tail, r);
+            l = self.heap[l].head;
+          }
+        }
+        r = self.heap.label_ref($5, r);
+        $$ = DefinitionRef::new(&mut self.heap, l.into(), Type::Undefined.into(), r).into();
+      }
+    | v act2 indent Equal here non_where_rhs outdent {
+        let mut l = $1;
+        let mut r = $6;
         let f = self.heap[l].head;
         if(self.heap[f].tag == Tag::Id && !isconstructor(f)) { /* fnform defn */
           while(self.heap[l].tag == Tag::Ap){

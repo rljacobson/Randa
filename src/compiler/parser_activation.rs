@@ -32,17 +32,11 @@ impl ParserVmContext {
         self.void_tuple
     }
 
-    pub fn layout_partial(&self) {
-        unimplemented!()
-    }
+    pub fn layout_partial(&self) {}
 
-    pub fn set_left_margin_partial(&self) {
-        unimplemented!()
-    }
+    pub fn set_left_margin_partial(&self) {}
 
-    pub fn unset_left_margin_partial(&self) {
-        unimplemented!()
-    }
+    pub fn unset_left_margin_partial(&self) {}
 }
 
 pub struct ParserActivation<'ctx> {

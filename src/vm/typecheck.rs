@@ -2,7 +2,7 @@ use super::*;
 use crate::big_num::SIGN_BIT_MASK;
 use crate::compiler::Token;
 use crate::data::api::{
-    AlgebraicConstructorMetadataRef, IdentifierRecordRef, IdentifierValueTypeKind,
+    AlgebraicConstructorMetadataRef, DefinitionRef, IdentifierRecordRef, IdentifierValueTypeKind,
     TypeExprRef,
 };
 use crate::data::heap::is_capitalized;
@@ -568,7 +568,106 @@ fn collect_unresolved_identifier_references(
                 type_names_used_as_identifiers,
             );
         }
+        Tag::Let => {
+            let definition = DefinitionRef::from_ref(heap[raw_reference].head);
+            collect_unresolved_identifier_references(
+                heap,
+                definition.body_value(heap),
+                bound_identifiers,
+                undefined_names,
+                type_names_used_as_identifiers,
+            );
+            let prior_bound_len = bound_identifiers.len();
+            collect_pattern_bound_identifiers(heap, definition.lhs_value(heap), bound_identifiers);
+            collect_unresolved_identifier_references(
+                heap,
+                heap[raw_reference].tail.into(),
+                bound_identifiers,
+                undefined_names,
+                type_names_used_as_identifiers,
+            );
+            bound_identifiers.truncate(prior_bound_len);
+        }
+        Tag::LetRec => {
+            let prior_bound_len = bound_identifiers.len();
+            collect_local_definition_group_bound_identifiers(
+                heap,
+                heap[raw_reference].head.into(),
+                bound_identifiers,
+            );
+            collect_local_definition_group_rhs_identifiers(
+                heap,
+                heap[raw_reference].head.into(),
+                bound_identifiers,
+                undefined_names,
+                type_names_used_as_identifiers,
+            );
+            collect_unresolved_identifier_references(
+                heap,
+                heap[raw_reference].tail.into(),
+                bound_identifiers,
+                undefined_names,
+                type_names_used_as_identifiers,
+            );
+            bound_identifiers.truncate(prior_bound_len);
+        }
+        Tag::Tries => {
+            let mut alternatives: Value = heap[raw_reference].tail.into();
+            while RawValue::from(alternatives) >= ATOM_LIMIT
+                && heap[RawValue::from(alternatives)].tag == Tag::Cons
+            {
+                let alternatives_ref = RawValue::from(alternatives);
+                collect_unresolved_identifier_references(
+                    heap,
+                    heap[alternatives_ref].head.into(),
+                    bound_identifiers,
+                    undefined_names,
+                    type_names_used_as_identifiers,
+                );
+                alternatives = heap[alternatives_ref].tail.into();
+            }
+        }
         _ => {}
+    }
+}
+
+/// Collects the bound identifiers for one local definition group into the active scope.
+/// This exists so the typecheck boundary owns local-scope visibility for committed `LetRec` groups instead of treating parser-lowered locals as flat expressions.
+/// The invariant is that each local lhs contributes the same active pattern-bound identifiers that lambda heads already contribute.
+fn collect_local_definition_group_bound_identifiers(
+    heap: &Heap,
+    mut definitions: Value,
+    bound_identifiers: &mut Vec<IdentifierRecordRef>,
+) {
+    while RawValue::from(definitions) >= ATOM_LIMIT && heap[RawValue::from(definitions)].tag == Tag::Cons {
+        let definitions_ref = RawValue::from(definitions);
+        let definition = DefinitionRef::from_ref(heap[definitions_ref].head);
+        collect_pattern_bound_identifiers(heap, definition.lhs_value(heap), bound_identifiers);
+        definitions = heap[definitions_ref].tail.into();
+    }
+}
+
+/// Walks each rhs in one committed local definition group using the already-extended recursive local scope.
+/// This exists so `LetRec` unresolved-name checks match the active Miranda recursive-binding visibility instead of reporting local peers as undefined.
+/// The invariant is that every rhs in the group is checked under the same bound-identifier scope that includes the whole local group.
+fn collect_local_definition_group_rhs_identifiers(
+    heap: &mut Heap,
+    mut definitions: Value,
+    bound_identifiers: &mut Vec<IdentifierRecordRef>,
+    undefined_names: &mut ConsList<IdentifierRecordRef>,
+    type_names_used_as_identifiers: &mut ConsList<IdentifierRecordRef>,
+) {
+    while RawValue::from(definitions) >= ATOM_LIMIT && heap[RawValue::from(definitions)].tag == Tag::Cons {
+        let definitions_ref = RawValue::from(definitions);
+        let definition = DefinitionRef::from_ref(heap[definitions_ref].head);
+        collect_unresolved_identifier_references(
+            heap,
+            definition.body_value(heap),
+            bound_identifiers,
+            undefined_names,
+            type_names_used_as_identifiers,
+        );
+        definitions = heap[definitions_ref].tail.into();
     }
 }
 
