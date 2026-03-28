@@ -599,8 +599,14 @@ top_level_local_definitions:
     ;
 
 top_level_local_definition:
-    v act2 top_level_definition_anchor Equal rhs {
+    where_local_function_form_lhs act2 top_level_definition_anchor Equal rhs {
         let (lowered_lhs, lowered_body) = self.heap.lower_function_form_lambdas($1, $5);
+        let labeled_body = self.heap.label_ref($3, lowered_body);
+        $$ = DefinitionRef::new(&mut self.heap, lowered_lhs, Type::Undefined.into(), labeled_body).into();
+      }
+    | v act2 top_level_definition_anchor Equal rhs {
+        let normalized_lhs = self.normalize_local_function_form_lhs($1);
+        let (lowered_lhs, lowered_body) = self.heap.lower_function_form_lambdas(normalized_lhs, $5);
         let labeled_body = self.heap.label_ref($3, lowered_body);
         $$ = DefinitionRef::new(&mut self.heap, lowered_lhs, Type::Undefined.into(), labeled_body).into();
       }
@@ -620,102 +626,7 @@ top_level_local_definition:
 
 top_level_definition_lhs:
     Name top_level_definition_parameters_opt {
-        let mut lhs = $1;
-        let mut parameters: RawValue = $2.into();
-        if parameters == NIL_RAW {
-          $$ = lhs;
-        } else {
-          let mut source_order_parameters = Vec::new();
-          while parameters != NIL_RAW {
-            source_order_parameters.push(Value::from(self.heap[parameters].head));
-            parameters = self.heap[parameters].tail;
-          }
-          source_order_parameters.reverse();
-
-          if source_order_parameters.len() > 1 {
-            if let Some(infix_parameter) = source_order_parameters.last().copied() {
-              let infix_parameter_ref = RawValue::from(infix_parameter);
-              if infix_parameter_ref >= ATOM_LIMIT && self.heap[infix_parameter_ref].tag == Tag::Ap {
-                let outer_application = ApNodeRef::from_ref(infix_parameter_ref);
-                if let Some(operator_application) = outer_application.function_application(&self.heap) {
-                  let operator = Value::from(operator_application.function_raw(&self.heap));
-                  let left = Value::from(operator_application.argument_raw(&self.heap));
-                  let right = Value::from(outer_application.argument_raw(&self.heap));
-
-                  let mut combined_left = source_order_parameters[0];
-                  for argument in source_order_parameters[1..source_order_parameters.len() - 1].iter().copied() {
-                    combined_left = self.heap.apply_ref(self.top_level_application_head(combined_left), argument);
-                  }
-                  combined_left = self.heap.apply_ref(self.top_level_application_head(combined_left), left);
-                  let combined_pattern = self.heap.apply2(operator, combined_left, right);
-                  source_order_parameters.truncate(0);
-                  source_order_parameters.push(combined_pattern);
-                } else if Value::from(outer_application.function_raw(&self.heap)) == Combinator::Minus.into() {
-                  let mut combined_left = source_order_parameters[0];
-                  for argument in source_order_parameters[1..source_order_parameters.len() - 1].iter().copied() {
-                    combined_left = self.heap.apply_ref(self.top_level_application_head(combined_left), argument);
-                  }
-                  let combined_pattern = self.heap.apply2(
-                    Combinator::Minus.into(),
-                    combined_left,
-                    Value::from(outer_application.argument_raw(&self.heap)),
-                  );
-                  source_order_parameters.truncate(0);
-                  source_order_parameters.push(combined_pattern);
-                }
-              }
-            }
-          }
-
-          let mut grouped_parameters = Vec::new();
-          for parameter in source_order_parameters {
-            let should_absorb = grouped_parameters.last().copied().is_some_and(|head| {
-              let head_ref = RawValue::from(head);
-              let head_can_absorb = if head_ref < ATOM_LIMIT || self.heap[head_ref].tag != Tag::Id {
-                true
-              } else {
-                is_capitalized(IdentifierRecordRef::from_ref(head_ref).get_name(&self.heap).as_str())
-              };
-
-              let parameter_ref = RawValue::from(parameter);
-              let parameter_is_application_atom = if parameter_ref < ATOM_LIMIT {
-                true
-              } else {
-                match self.heap[parameter_ref].tag {
-                  Tag::Id | Tag::Cons | Tag::Pair | Tag::TCons => true,
-                  Tag::Ap => {
-                    let application = ApNodeRef::from_ref(parameter_ref);
-                    application.function_application(&self.heap).is_none()
-                      || {
-                        let function_ref = application.function_raw(&self.heap);
-                        function_ref < ATOM_LIMIT
-                          || match self.heap[function_ref].tag {
-                            Tag::Id | Tag::Cons | Tag::Pair | Tag::TCons => true,
-                            Tag::Ap => ApNodeRef::from_ref(function_ref).function_application(&self.heap).is_none(),
-                            _ => false,
-                          }
-                      }
-                  }
-                  _ => false,
-                }
-              };
-
-              head_can_absorb && parameter_is_application_atom
-            });
-
-            if should_absorb {
-              let head = grouped_parameters.pop().unwrap();
-              grouped_parameters.push(self.heap.apply_ref(self.top_level_application_head(head), parameter));
-            } else {
-              grouped_parameters.push(parameter);
-            }
-          }
-
-          for parameter in grouped_parameters {
-            lhs = self.heap.apply_ref(lhs, parameter);
-          }
-          $$ = lhs;
-        }
+        $$ = self.fold_function_form_lhs($1, $2.into());
       }
     ;
 
@@ -726,6 +637,21 @@ top_level_definition_parameters_opt:
       }
     | top_level_definition_parameters_opt top_level_definition_parameter {
         $$ = self.heap.cons_ref($2, $1);
+      }
+    ;
+
+where_local_function_form_parameters:
+    top_level_definition_parameters_start top_level_definition_parameter {
+        $$ = self.heap.cons_ref($2, NIL);
+      }
+    | where_local_function_form_parameters top_level_definition_parameter {
+        $$ = self.heap.cons_ref($2, $1);
+      }
+    ;
+
+where_local_function_form_lhs:
+    Name where_local_function_form_parameters {
+        $$ = self.fold_function_form_lhs($1, $2.into());
       }
     ;
 
@@ -2419,14 +2345,27 @@ ldef:
         self.syntax("`::=' encountered in local defs\n");
         $$ = self.heap.cons_ref(self.heap.nill, NIL);
       }
-    | v act2 indent Equal here exp Where ldefs outdent {
+    | where_local_function_form_lhs act2 indent Equal here exp Where ldefs outdent {
         let body = self.build_local_block($8, $6);
         let (lowered_lhs, lowered_body) = self.heap.lower_function_form_lambdas($1, body);
         let labeled_body = self.heap.label_ref($5, lowered_body);
         $$ = DefinitionRef::new(&mut self.heap, lowered_lhs, Type::Undefined.into(), labeled_body).into();
       }
-    | v act2 indent Equal here non_where_rhs outdent {
+    | where_local_function_form_lhs act2 indent Equal here non_where_rhs outdent {
         let (lowered_lhs, lowered_body) = self.heap.lower_function_form_lambdas($1, $6);
+        let labeled_body = self.heap.label_ref($5, lowered_body);
+        $$ = DefinitionRef::new(&mut self.heap, lowered_lhs, Type::Undefined.into(), labeled_body).into();
+      }
+    | v act2 indent Equal here exp Where ldefs outdent {
+        let body = self.build_local_block($8, $6);
+        let normalized_lhs = self.normalize_local_function_form_lhs($1);
+        let (lowered_lhs, lowered_body) = self.heap.lower_function_form_lambdas(normalized_lhs, body);
+        let labeled_body = self.heap.label_ref($5, lowered_body);
+        $$ = DefinitionRef::new(&mut self.heap, lowered_lhs, Type::Undefined.into(), labeled_body).into();
+      }
+    | v act2 indent Equal here non_where_rhs outdent {
+        let normalized_lhs = self.normalize_local_function_form_lhs($1);
+        let (lowered_lhs, lowered_body) = self.heap.lower_function_form_lambdas(normalized_lhs, $6);
         let labeled_body = self.heap.label_ref($5, lowered_body);
         $$ = DefinitionRef::new(&mut self.heap, lowered_lhs, Type::Undefined.into(), labeled_body).into();
       }
@@ -2469,6 +2408,18 @@ v1:
           self.syntax("inappropriate use of \"-\" in pattern\n");
           $$ = self.heap.cons_ref(Token::Constant.into(), constant);
         }
+      }
+    | v2 Minus Constant {
+        let constant = $3;
+        let constant_raw: RawValue = constant.into();
+        let negative_pattern = if constant_raw >= ATOM_LIMIT && self.heap[constant_raw].tag == Tag::Int {
+          let negated = IntegerRef::from_ref(constant_raw).negate(self.heap);
+          self.heap.cons_ref(Token::Constant.into(), negated.into())
+        } else {
+          self.syntax("inappropriate use of \"-\" in pattern\n");
+          self.heap.cons_ref(Token::Constant.into(), constant)
+        };
+        $$ = self.heap.apply_ref(self.top_level_application_head($1), negative_pattern);
       }
     | Minus v_non_constant_application_or_atom { $$ = self.heap.apply_ref(Combinator::Minus.into(), $2); }
     | v1 Minus v_non_constant_application_or_atom { $$ = self.heap.apply2(Combinator::Minus.into(), $1, $3); }
@@ -3312,8 +3263,110 @@ impl<'ctx /* 'fix quotes */> Parser<'ctx /* 'fix quotes */> {
       false
     }
 
-    /// Returns the application head for one active top-level pattern application step. This exists so parser-visible
-    /// `v2 v3` activation can match Miranda's repeated-name head stripping without changing non-head wrapped-constant
+    /// Folds one identifier plus a reverse-collected parameter list into the committed function-form lhs owner.
+    /// This exists so top-level definitions and active local `where` helpers share one function-form parameter owner instead of drifting apart.
+    /// The invariant is that the active trailing arithmetic regrouping and application absorption rules are identical for every caller.
+    fn fold_function_form_lhs(&mut self, function_name: Value, parameters: Value) -> Value {
+      let mut lhs = function_name;
+      let mut parameters: RawValue = parameters.into();
+      if parameters == NIL_RAW {
+        return lhs;
+      }
+
+      let mut source_order_parameters = Vec::new();
+      while parameters != NIL_RAW {
+        source_order_parameters.push(Value::from(self.heap[parameters].head));
+        parameters = self.heap[parameters].tail;
+      }
+      source_order_parameters.reverse();
+
+      if source_order_parameters.len() > 1 {
+        if let Some(infix_parameter) = source_order_parameters.last().copied() {
+          let infix_parameter_ref = RawValue::from(infix_parameter);
+          if infix_parameter_ref >= ATOM_LIMIT && self.heap[infix_parameter_ref].tag == Tag::Ap {
+            let outer_application = ApNodeRef::from_ref(infix_parameter_ref);
+            if let Some(operator_application) = outer_application.function_application(&self.heap) {
+              let operator = Value::from(operator_application.function_raw(&self.heap));
+              let left = Value::from(operator_application.argument_raw(&self.heap));
+              let right = Value::from(outer_application.argument_raw(&self.heap));
+
+              let mut combined_left = source_order_parameters[0];
+              for argument in source_order_parameters[1..source_order_parameters.len() - 1].iter().copied() {
+                combined_left = self.heap.apply_ref(self.top_level_application_head(combined_left), argument);
+              }
+              combined_left = self.heap.apply_ref(self.top_level_application_head(combined_left), left);
+              let combined_pattern = self.heap.apply2(operator, combined_left, right);
+              source_order_parameters.truncate(0);
+              source_order_parameters.push(combined_pattern);
+            } else if Value::from(outer_application.function_raw(&self.heap)) == Combinator::Minus.into() {
+              let mut combined_left = source_order_parameters[0];
+              for argument in source_order_parameters[1..source_order_parameters.len() - 1].iter().copied() {
+                combined_left = self.heap.apply_ref(self.top_level_application_head(combined_left), argument);
+              }
+              let combined_pattern = self.heap.apply2(
+                Combinator::Minus.into(),
+                combined_left,
+                Value::from(outer_application.argument_raw(&self.heap)),
+              );
+              source_order_parameters.truncate(0);
+              source_order_parameters.push(combined_pattern);
+            }
+          }
+        }
+      }
+
+      let mut grouped_parameters = Vec::new();
+      for parameter in source_order_parameters {
+        let should_absorb = grouped_parameters.last().copied().is_some_and(|head| {
+          let head_ref = RawValue::from(head);
+          let head_can_absorb = if head_ref < ATOM_LIMIT || self.heap[head_ref].tag != Tag::Id {
+            true
+          } else {
+            is_capitalized(IdentifierRecordRef::from_ref(head_ref).get_name(&self.heap).as_str())
+          };
+
+          let parameter_ref = RawValue::from(parameter);
+          let parameter_is_application_atom = if parameter_ref < ATOM_LIMIT {
+            true
+          } else {
+            match self.heap[parameter_ref].tag {
+              Tag::Id | Tag::Cons | Tag::Pair | Tag::TCons => true,
+              Tag::Ap => {
+                let application = ApNodeRef::from_ref(parameter_ref);
+                application.function_application(&self.heap).is_none()
+                  || {
+                    let function_ref = application.function_raw(&self.heap);
+                    function_ref < ATOM_LIMIT
+                      || match self.heap[function_ref].tag {
+                        Tag::Id | Tag::Cons | Tag::Pair | Tag::TCons => true,
+                        Tag::Ap => ApNodeRef::from_ref(function_ref).function_application(&self.heap).is_none(),
+                        _ => false,
+                      }
+                  }
+              }
+              _ => false,
+            }
+          };
+
+          head_can_absorb && parameter_is_application_atom
+        });
+
+        if should_absorb {
+          let head = grouped_parameters.pop().unwrap();
+          grouped_parameters.push(self.heap.apply_ref(self.top_level_application_head(head), parameter));
+        } else {
+          grouped_parameters.push(parameter);
+        }
+      }
+
+      for parameter in grouped_parameters {
+        lhs = self.heap.apply_ref(lhs, parameter);
+      }
+      lhs
+    }
+
+    /// Returns the application head for one active pattern application step. This exists so parser-visible
+    /// application-spine activation can match Miranda's repeated-name head stripping without changing non-head wrapped-constant
     /// behavior. The invariant is that only a leading wrapped repeated-name identifier is unwrapped; all other shapes
     /// are returned unchanged.
     fn top_level_application_head(&self, head: Value) -> Value {
@@ -3338,6 +3391,123 @@ impl<'ctx /* 'fix quotes */> Parser<'ctx /* 'fix quotes */> {
     /// The invariant is that the active subset lowers local-definition groups into one committed `LetRec` body.
     fn build_local_block(&mut self, definitions: Value, body: Value) -> Value {
       self.heap.letrec_ref(definitions, body)
+    }
+
+    /// Returns the lowercase identifier-owned application spine eligible for local function-form regrouping.
+    /// This exists so local unparenthesized arithmetic reassociation can reuse one owner check instead of open-coding lowercase-id spine walks in each arithmetic branch.
+    /// The invariant is that only lowercase identifier heads produce a source-order parameter spine.
+    fn local_function_form_spine(&self, value: Value) -> Option<(Value, Vec<Value>)> {
+      let mut current = value;
+      let mut parameters = Vec::new();
+      loop {
+        let current_raw = RawValue::from(current);
+        if current_raw < ATOM_LIMIT || self.heap[current_raw].tag != Tag::Ap {
+          break;
+        }
+
+        let application = ApNodeRef::from_ref(current_raw);
+        parameters.push(Value::from(application.argument_raw(&self.heap)));
+        current = Value::from(application.function_raw(&self.heap));
+      }
+      parameters.reverse();
+
+      let current_raw = RawValue::from(current);
+      if current_raw < ATOM_LIMIT || self.heap[current_raw].tag != Tag::Id {
+        return None;
+      }
+
+      let owner = IdentifierRecordRef::from_ref(current_raw);
+      (!is_capitalized(owner.get_name(&self.heap).as_str())).then_some((owner.into(), parameters))
+    }
+
+    /// Reassociates one parsed local lhs onto the committed lowercase-id function-form owner when the unparenthesized
+    /// local arithmetic slice reached the older generic `v` grouping first.
+    /// This exists so local `where` helpers can admit the active unparenthesized arithmetic family without replacing the
+    /// broader local-pattern owner.
+    /// The invariant is that parenthesized forms stay unchanged while the newly admitted unparenthesized arithmetic
+    /// family is regrouped onto the same committed lhs shapes already consumed by `lower_function_form_lambdas` and typecheck.
+    fn normalize_local_function_form_lhs(&mut self, lhs: Value) -> Value {
+      let lhs_raw = RawValue::from(lhs);
+      if lhs_raw < ATOM_LIMIT || self.heap[lhs_raw].tag != Tag::Ap {
+        return lhs;
+      }
+
+      let outer_application = ApNodeRef::from_ref(lhs_raw);
+      let Some(operator_application) = outer_application.function_application(&self.heap) else {
+        return lhs;
+      };
+      let operator = Value::from(operator_application.function_raw(&self.heap));
+      let left = Value::from(operator_application.argument_raw(&self.heap));
+      let right = Value::from(outer_application.argument_raw(&self.heap));
+
+      if operator == Combinator::Plus.into() {
+        let left_raw = RawValue::from(left);
+        if left_raw >= ATOM_LIMIT
+          && self.heap[left_raw].tag == Tag::Int
+          && (self.heap[left_raw].head & SIGN_BIT_MASK) == 0
+        {
+          let Some((owner, mut parameters)) = self.local_function_form_spine(right) else {
+            return lhs;
+          };
+          let Some(inner) = parameters.pop() else {
+            return lhs;
+          };
+
+          let mut combined_left = inner;
+          if let Some(first_parameter) = parameters.first().copied() {
+            combined_left = first_parameter;
+            for parameter in parameters[1..].iter().copied() {
+              combined_left = self.heap.apply_ref(self.top_level_application_head(combined_left), parameter);
+            }
+            combined_left = self.heap.apply_ref(self.top_level_application_head(combined_left), inner);
+          }
+
+          let parameter = self.heap.apply2(Combinator::Plus.into(), left, combined_left);
+          return self.heap.apply_ref(owner, parameter);
+        }
+
+        let Some((owner, mut parameters)) = self.local_function_form_spine(left) else {
+          return lhs;
+        };
+        let Some(last_parameter) = parameters.pop() else {
+          return lhs;
+        };
+
+        let mut combined_left = last_parameter;
+        if let Some(first_parameter) = parameters.first().copied() {
+          combined_left = first_parameter;
+          for parameter in parameters[1..].iter().copied() {
+            combined_left = self.heap.apply_ref(self.top_level_application_head(combined_left), parameter);
+          }
+          combined_left = self.heap.apply_ref(self.top_level_application_head(combined_left), last_parameter);
+        }
+
+        let parameter = self.heap.apply2(Combinator::Plus.into(), combined_left, right);
+        return self.heap.apply_ref(owner, parameter);
+      }
+
+      if operator == Combinator::Minus.into() {
+        let Some((owner, mut parameters)) = self.local_function_form_spine(left) else {
+          return lhs;
+        };
+
+        let parameter = if let Some(last_parameter) = parameters.pop() {
+          let mut combined_left = last_parameter;
+          if let Some(first_parameter) = parameters.first().copied() {
+            combined_left = first_parameter;
+            for parameter in parameters[1..].iter().copied() {
+              combined_left = self.heap.apply_ref(self.top_level_application_head(combined_left), parameter);
+            }
+            combined_left = self.heap.apply_ref(self.top_level_application_head(combined_left), last_parameter);
+          }
+            self.heap.apply2(Combinator::Minus.into(), combined_left, right)
+        } else {
+          self.heap.apply_ref(Combinator::Minus.into(), right)
+        };
+        return self.heap.apply_ref(owner, parameter);
+      }
+
+      lhs
     }
 
     /// Composes one active guarded-expression case list into the committed local-control body shape.

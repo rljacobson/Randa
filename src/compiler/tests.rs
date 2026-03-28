@@ -1435,6 +1435,101 @@ fn parser_parses_unary_minus_pattern_in_top_level_formals() {
 }
 
 #[test]
+fn parser_parses_top_level_where_with_local_unparenthesized_arithmetic_patterns() {
+    let (heap, result) = run_parser(
+        "top_level_where_local_unparenthesized_arithmetic_patterns.m",
+        "f x = g x where g y+1 = y; h -1 = 0; p a+b = a; m -y = y; b a-b = b; q g x+y = x\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success, got {result:?}");
+    };
+    assert_eq!(payload.definitions.len(), 1);
+
+    let outer_lambda_raw = payload.definitions[0].body;
+    assert_eq!(heap[outer_lambda_raw].tag, Tag::Lambda);
+    let letrec_raw = heap[outer_lambda_raw].tail;
+    assert_eq!(heap[letrec_raw].tag, Tag::LetRec);
+
+    let mut definitions_raw = heap[letrec_raw].head;
+    let mut saw_successor = false;
+    let mut saw_negative_literal = false;
+    let mut saw_non_canonical_plus = false;
+    let mut saw_unary_minus = false;
+    let mut saw_binary_minus = false;
+    let mut saw_application_headed_plus = false;
+    while definitions_raw != RawValue::from(Combinator::Nil) {
+        let definition = DefinitionRef::from_ref(heap[definitions_raw].head);
+        let definition_name = IdentifierRecordRef::from_ref(definition.lhs_value(&heap).into()).get_name(&heap);
+        let body_raw = RawValue::from(definition.body_value(&heap));
+        assert_eq!(heap[body_raw].tag, Tag::Tries);
+        let alternatives_raw = heap[body_raw].tail;
+        let labeled_body_raw = heap[alternatives_raw].head;
+        let lambda_raw = heap[labeled_body_raw].tail;
+        let pattern_raw = RawValue::from(heap[lambda_raw].head);
+
+        match definition_name.as_str() {
+            "g" => {
+                saw_successor = true;
+                assert_eq!(heap[pattern_raw].tag, Tag::Ap);
+                let operator_application_raw = heap[pattern_raw].head;
+                assert_eq!(heap[operator_application_raw].tag, Tag::Ap);
+                assert_eq!(Value::from(heap[operator_application_raw].head), Combinator::Plus.into());
+            }
+            "h" => {
+                saw_negative_literal = true;
+                assert_eq!(heap[pattern_raw].tag, Tag::Cons);
+                let integer_raw = heap[pattern_raw].tail;
+                assert_eq!(heap[integer_raw].tag, Tag::Int);
+                assert_ne!(heap[integer_raw].head & SIGN_BIT_MASK, 0);
+            }
+            "p" => {
+                saw_non_canonical_plus = true;
+                assert_eq!(heap[pattern_raw].tag, Tag::Ap);
+                let operator_application_raw = heap[pattern_raw].head;
+                assert_eq!(heap[operator_application_raw].tag, Tag::Ap);
+                assert_eq!(Value::from(heap[operator_application_raw].head), Combinator::Plus.into());
+            }
+            "m" => {
+                saw_unary_minus = true;
+                assert_eq!(heap[pattern_raw].tag, Tag::Ap);
+                assert_eq!(Value::from(heap[pattern_raw].head), Combinator::Minus.into());
+            }
+            "b" => {
+                saw_binary_minus = true;
+                assert_eq!(heap[pattern_raw].tag, Tag::Ap);
+                let operator_application_raw = heap[pattern_raw].head;
+                assert_eq!(heap[operator_application_raw].tag, Tag::Ap);
+                assert_eq!(Value::from(heap[operator_application_raw].head), Combinator::Minus.into());
+            }
+            "q" => {
+                saw_application_headed_plus = true;
+                assert_eq!(heap[pattern_raw].tag, Tag::Ap);
+                let operator_application_raw = heap[pattern_raw].head;
+                assert_eq!(heap[operator_application_raw].tag, Tag::Ap);
+                assert_eq!(Value::from(heap[operator_application_raw].head), Combinator::Plus.into());
+                let left_operand_raw = heap[operator_application_raw].tail;
+                assert_eq!(heap[left_operand_raw].tag, Tag::Ap);
+                let left_head_identifier = IdentifierRecordRef::from_ref(heap[left_operand_raw].head);
+                assert_eq!(left_head_identifier.get_name(&heap), "g");
+                let left_argument_identifier = IdentifierRecordRef::from_ref(heap[left_operand_raw].tail);
+                assert_eq!(left_argument_identifier.get_name(&heap), "x");
+            }
+            other => panic!("unexpected local definition {other}"),
+        }
+
+        definitions_raw = heap[definitions_raw].tail;
+    }
+
+    assert!(saw_successor);
+    assert!(saw_negative_literal);
+    assert!(saw_non_canonical_plus);
+    assert!(saw_unary_minus);
+    assert!(saw_binary_minus);
+    assert!(saw_application_headed_plus);
+}
+
+#[test]
 fn parser_parses_top_level_where_with_local_arithmetic_patterns() {
     let (heap, result) = run_parser(
         "top_level_where_local_arithmetic_patterns.m",

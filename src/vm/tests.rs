@@ -1614,6 +1614,116 @@ fn parse_source_text_top_level_where_reaches_non_canonical_plus_pattern_typechec
 }
 
 #[test]
+fn parse_source_text_top_level_where_reaches_unparenthesized_non_canonical_plus_pattern_typecheck_error() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("source_top_level_where_unparenthesized_non_canonical_plus.m");
+    let source_path_str = source_path.to_string_lossy().to_string();
+    let outcome = vm
+        .parse_source_text(
+            &source_path_str,
+            "f x = g x where g a+b = a\n",
+            UNIX_EPOCH,
+            false,
+        )
+        .expect("source parse should succeed");
+
+    assert!(outcome.parsed_without_error);
+    vm.files = outcome.files;
+
+    let result = vm.run_checktypes_phase();
+
+    assert!(matches!(
+        result,
+        Err(TypecheckError::NonCanonicalPlusPatternsInFormals { count: 1 })
+    ));
+}
+
+#[test]
+fn parse_source_text_top_level_where_reaches_unparenthesized_unary_minus_pattern_typecheck_error() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("source_top_level_where_unparenthesized_unary_minus.m");
+    let source_path_str = source_path.to_string_lossy().to_string();
+    let outcome = vm
+        .parse_source_text(
+            &source_path_str,
+            "f x = g x where g -y = y\n",
+            UNIX_EPOCH,
+            false,
+        )
+        .expect("source parse should succeed");
+
+    assert!(outcome.parsed_without_error);
+    vm.files = outcome.files;
+
+    let result = vm.run_checktypes_phase();
+
+    assert!(matches!(
+        result,
+        Err(TypecheckError::UnaryMinusPatternsInFormals { count: 1 })
+    ));
+}
+
+#[test]
+fn parse_source_text_top_level_where_reaches_unparenthesized_malformed_minus_pattern_typecheck_error() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("source_top_level_where_unparenthesized_malformed_minus.m");
+    let source_path_str = source_path.to_string_lossy().to_string();
+    let outcome = vm
+        .parse_source_text(
+            &source_path_str,
+            "f x = g x where g a-b = b\n",
+            UNIX_EPOCH,
+            false,
+        )
+        .expect("source parse should succeed");
+
+    assert!(outcome.parsed_without_error);
+    vm.files = outcome.files;
+
+    let result = vm.run_checktypes_phase();
+
+    assert!(matches!(
+        result,
+        Err(TypecheckError::MalformedMinusApplicationsInFormals { count: 1 })
+    ));
+}
+
+#[test]
+fn parse_source_text_top_level_where_unparenthesized_application_headed_plus_still_binds_interior_names() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("source_top_level_where_unparenthesized_application_headed_plus.m");
+    let source_path_str = source_path.to_string_lossy().to_string();
+    let outcome = vm
+        .parse_source_text(
+            &source_path_str,
+            "f x = q x where q g x+y = x\n",
+            UNIX_EPOCH,
+            false,
+        )
+        .expect("source parse should succeed");
+
+    assert!(outcome.parsed_without_error);
+    vm.files = outcome.files;
+
+    let inputs = typecheck::TypecheckBoundaryInputs::from_vm(&vm);
+    let result = typecheck::run_partial_typecheck(&mut vm.heap, inputs);
+
+    assert!(matches!(
+        &result.failure,
+        Some(TypecheckError::NonCanonicalPlusPatternsInFormals { count: 1 })
+    ));
+    assert!(result.undefined_names.is_empty());
+}
+
+#[test]
 fn parse_source_text_top_level_where_malformed_plus_application_still_binds_interior_names() {
     let mut vm = VM::new();
     vm.initializing = false;
@@ -3695,12 +3805,116 @@ fn load_file_accepts_top_level_where_with_local_n_plus_k_helper() {
 }
 
 #[test]
+fn load_file_accepts_top_level_where_with_local_unparenthesized_n_plus_k_helper() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("top_level_where_local_unparenthesized_n_plus_k_helper.m");
+    std::fs::write(&source_path, "f x = g x where g y+1 = y\n")
+        .expect("failed to write source test file");
+
+    let result = vm.load_file(&source_path.to_string_lossy());
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+}
+
+#[test]
+fn load_file_accepts_top_level_where_with_local_unparenthesized_negative_integer_literal_helper() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("top_level_where_local_unparenthesized_negative_literal_helper.m");
+    std::fs::write(&source_path, "f x = h x where h -1 = 0\n")
+        .expect("failed to write source test file");
+
+    let result = vm.load_file(&source_path.to_string_lossy());
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+}
+
+#[test]
 fn load_file_rejects_top_level_where_with_local_non_canonical_plus_pattern() {
     let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("top_level_where_local_non_canonical_plus_pattern.m");
     std::fs::write(&source_path, "f x = g x where g (a+b) = a\n")
+        .expect("failed to write source test file");
+
+    let result = vm.load_file(&source_path.to_string_lossy());
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::NonCanonicalPlusPatternsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
+fn load_file_rejects_top_level_where_with_local_unparenthesized_non_canonical_plus_pattern() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("top_level_where_local_unparenthesized_non_canonical_plus_pattern.m");
+    std::fs::write(&source_path, "f x = g x where g a+b = a\n")
+        .expect("failed to write source test file");
+
+    let result = vm.load_file(&source_path.to_string_lossy());
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::NonCanonicalPlusPatternsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
+fn load_file_rejects_top_level_where_with_local_unparenthesized_unary_minus_pattern() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("top_level_where_local_unparenthesized_unary_minus_pattern.m");
+    std::fs::write(&source_path, "f x = g x where g -y = y\n")
+        .expect("failed to write source test file");
+
+    let result = vm.load_file(&source_path.to_string_lossy());
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::UnaryMinusPatternsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
+fn load_file_rejects_top_level_where_with_local_unparenthesized_binary_minus_pattern() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("top_level_where_local_unparenthesized_binary_minus_pattern.m");
+    std::fs::write(&source_path, "f x = g x where g a-b = b\n")
+        .expect("failed to write source test file");
+
+    let result = vm.load_file(&source_path.to_string_lossy());
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::MalformedMinusApplicationsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
+fn load_file_top_level_where_unparenthesized_application_headed_plus_still_binds_interior_names() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("top_level_where_local_unparenthesized_application_headed_plus.m");
+    std::fs::write(&source_path, "f x = q x where q g x+y = missing\n")
         .expect("failed to write source test file");
 
     let result = vm.load_file(&source_path.to_string_lossy());
