@@ -2,7 +2,7 @@ use super::*;
 
 use crate::big_num::SIGN_BIT_MASK;
 use crate::data::{
-    api::{ConsList, HeapObjectProxy, IdentifierRecordRef},
+    api::{ConsList, DefinitionRef, HeapObjectProxy, IdentifierRecordRef},
     Combinator, Heap, RawValue, Tag, Type, Value,
 };
 
@@ -109,6 +109,86 @@ fn parser_groups_repeated_local_equations_under_top_level_where() {
     let definitions_raw = heap[letrec_raw].head;
     assert_eq!(heap[definitions_raw].tag, Tag::Cons);
     assert_eq!(heap[definitions_raw].tail, RawValue::from(Combinator::Nil));
+}
+
+#[test]
+fn parser_parses_top_level_where_with_guarded_local_definition_semicolon_separator() {
+    let (heap, result) = run_parser(
+        "top_level_where_guarded_local_semicolon.m",
+        "f x = g x where g y = y, if p; z = x\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success, got {result:?}");
+    };
+    assert_eq!(payload.definitions.len(), 1);
+    let lambda_raw = payload.definitions[0].body;
+    let letrec_raw = heap[lambda_raw].tail;
+    assert_eq!(heap[letrec_raw].tag, Tag::LetRec);
+    let definitions_raw = heap[letrec_raw].head;
+    let local_definition = DefinitionRef::from_ref(heap[definitions_raw].head);
+    let local_body_raw = RawValue::from(local_definition.body_value(&heap));
+    assert_eq!(heap[local_body_raw].tag, Tag::Tries);
+}
+
+#[test]
+fn parser_parses_top_level_where_with_guarded_local_definition_offside_separator() {
+    let (heap, result) = run_parser(
+        "top_level_where_guarded_local_offside.m",
+        "f x = g x where\n  g y = y, if p\n  z = x\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success, got {result:?}");
+    };
+    assert_eq!(payload.definitions.len(), 1);
+    let lambda_raw = payload.definitions[0].body;
+    let letrec_raw = heap[lambda_raw].tail;
+    assert_eq!(heap[letrec_raw].tag, Tag::LetRec);
+    let definitions_raw = heap[letrec_raw].head;
+    let local_definition = DefinitionRef::from_ref(heap[definitions_raw].head);
+    let local_body_raw = RawValue::from(local_definition.body_value(&heap));
+    assert_eq!(heap[local_body_raw].tag, Tag::Tries);
+}
+
+#[test]
+fn parser_parses_nested_local_where_inside_top_level_where_definition() {
+    let (heap, result) = run_parser(
+        "top_level_where_nested_local_where.m",
+        "f = g where\n  g = h where\n    h = 1\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success, got {result:?}");
+    };
+    assert_eq!(payload.definitions.len(), 1);
+    let outer_letrec_raw = payload.definitions[0].body;
+    assert_eq!(heap[outer_letrec_raw].tag, Tag::LetRec);
+    let outer_definitions_raw = heap[outer_letrec_raw].head;
+    let outer_local_definition = DefinitionRef::from_ref(heap[outer_definitions_raw].head);
+    let outer_local_body_raw = RawValue::from(outer_local_definition.body_value(&heap));
+    assert_eq!(heap[outer_local_body_raw].tag, Tag::Tries);
+    let outer_alternatives_raw = heap[outer_local_body_raw].tail;
+    let nested_body_raw = heap[outer_alternatives_raw].head;
+    assert_eq!(heap[nested_body_raw].tag, Tag::Label);
+    let nested_letrec_raw = heap[nested_body_raw].tail;
+    assert_eq!(heap[nested_letrec_raw].tag, Tag::LetRec);
+}
+
+#[test]
+fn parser_groups_local_equations_when_nested_local_where_is_present() {
+    let (heap, result) = run_parser(
+        "top_level_where_nested_grouped_local_where.m",
+        "f = g 0 where\n  g x = h where\n    h = x\n  g y = y\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success, got {result:?}");
+    };
+    let outer_letrec_raw = payload.definitions[0].body;
+    let outer_definitions_raw = heap[outer_letrec_raw].head;
+    assert_eq!(heap[outer_definitions_raw].tag, Tag::Cons);
+    assert_eq!(heap[outer_definitions_raw].tail, RawValue::from(Combinator::Nil));
 }
 
 #[test]

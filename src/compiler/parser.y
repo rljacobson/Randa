@@ -493,9 +493,9 @@ include_export_item:
     ;
 
 top_level_definition_item:
-    top_level_definition_lhs top_level_definition_anchor Equal top_level_rhs directive_terminators {
-        let anchor = FileInfoRef::from_ref($2.into());
-        let (lowered_lhs, lowered_body) = self.heap.lower_function_form_lambdas($1, $4);
+    top_level_definition_lhs act2 top_level_definition_anchor Equal top_level_rhs directive_terminators {
+        let anchor = FileInfoRef::from_ref($3.into());
+        let (lowered_lhs, lowered_body) = self.heap.lower_function_form_lambdas($1, $5);
         let lowered_identifier_ref: RawValue = lowered_lhs.into();
         if lowered_identifier_ref < ATOM_LIMIT || self.heap[lowered_identifier_ref].tag != Tag::Id {
           self.syntax("illegal top-level definition lhs\n");
@@ -514,14 +514,21 @@ top_level_definition_item:
     ;
 
 top_level_rhs:
-    cases Where top_level_local_definitions {
+    cases Where where_local_definitions_start top_level_local_definitions {
         let composed_cases = self.compose_cases($1);
-        $$ = self.build_local_block($3, composed_cases);
+        $$ = self.build_local_block($4, composed_cases);
       }
-    | exp Where top_level_local_definitions {
-        $$ = self.build_local_block($3, $1);
+    | exp Where where_local_definitions_start top_level_local_definitions {
+        $$ = self.build_local_block($4, $1);
       }
     | non_where_rhs { $$ = $1; }
+    ;
+
+where_local_definitions_start:
+    /* empty */ {
+        self.used_identifiers = ConsList::EMPTY;
+        $$ = NIL;
+      }
     ;
 
 top_level_local_definitions:
@@ -592,9 +599,9 @@ top_level_local_definitions:
     ;
 
 top_level_local_definition:
-    top_level_definition_lhs top_level_definition_anchor Equal non_where_rhs {
-        let (lowered_lhs, lowered_body) = self.heap.lower_function_form_lambdas($1, $4);
-        let labeled_body = self.heap.label_ref($2, lowered_body);
+    top_level_definition_lhs act2 top_level_definition_anchor Equal rhs {
+        let (lowered_lhs, lowered_body) = self.heap.lower_function_form_lambdas($1, $5);
+        let labeled_body = self.heap.label_ref($3, lowered_body);
         $$ = DefinitionRef::new(&mut self.heap, lowered_lhs, Type::Undefined.into(), labeled_body).into();
       }
     | spec {
@@ -1251,11 +1258,11 @@ eqop:
     ;
 
 rhs:
-    cases Where ldefs {
+    cases Where where_local_definitions_start ldefs {
         let composed_cases = self.compose_cases($1);
-        $$ = self.build_local_block($3, composed_cases);
+        $$ = self.build_local_block($4, composed_cases);
       }
-    | exp Where ldefs { $$ = self.build_local_block($3, $1); }
+    | exp Where where_local_definitions_start ldefs { $$ = self.build_local_block($4, $1); }
     | non_where_rhs { $$ = $1; }
     ;
 
@@ -2255,7 +2262,8 @@ act2:
 
 ldefs:
     ldef {
-        let definition = DefinitionRef::from_ref($1.into());
+        let definition_value = $1;
+        let definition = DefinitionRef::from_ref(definition_value.into());
         let initial_alternatives = self.heap.cons_ref(definition.body_value(&self.heap), NIL);
         let wrapped_body = self.heap.tries_ref(
           definition.lhs_value(&self.heap),
@@ -2265,13 +2273,15 @@ ldefs:
         if self.local_lhs_bound_identifiers(definition.lhs_value(&self.heap)).is_empty() {
           self.syntax("illegal lhs for local definition\n");
         }
-        $$ = self.heap.cons_ref($1, NIL);
+        $$ = self.heap.cons_ref(definition_value, NIL);
       }
     | ldefs ldef {
-        let new_definition = DefinitionRef::from_ref($2.into());
-        let head_definition = DefinitionRef::from_ref(self.heap[RawValue::from($1)].head);
+        let prior_definitions = $1;
+        let new_definition_value = $2;
+        let new_definition = DefinitionRef::from_ref(new_definition_value.into());
+        let head_definition = DefinitionRef::from_ref(self.heap[RawValue::from(prior_definitions)].head);
         if new_definition.lhs_value(&self.heap) == head_definition.lhs_value(&self.heap) {
-          $$ = $1;
+          $$ = prior_definitions;
           let head_body = head_definition.body_value(&self.heap);
           if !self.is_fallible_local_rhs(head_body) {
             let new_lhs = new_definition.lhs_value(&self.heap);
@@ -2294,7 +2304,7 @@ ldefs:
             self.syntax("illegal lhs for local definition\n");
           }
           for binder in &binders {
-            if self.local_definition_group_contains_binder($1, *binder) {
+            if self.local_definition_group_contains_binder(prior_definitions, *binder) {
               self.syntax(&format!("nameclash, \"{}\" already defined\n", binder.get_name(&self.heap)));
               break;
             }
@@ -2305,7 +2315,7 @@ ldefs:
             initial_alternatives,
           );
           new_definition.set_body_value(&mut self.heap, wrapped_body);
-          $$ = self.heap.cons_ref($2, $1);
+          $$ = self.heap.cons_ref(new_definition_value, prior_definitions);
         }
       }
    ;
@@ -2345,7 +2355,7 @@ vlist:
     ;
 
 v:
-    v1
+    v1 { $$ = $1; }
     | v1 Colon v { $$ = self.heap.cons_ref($1, $3); }
     ;
 
@@ -2372,12 +2382,14 @@ v1:
       }
     | v2 InfixName v1 { $$ = self.heap.apply2($2, $1, $3); }
     | v2 InfixCName v1 { $$ = self.heap.apply2($2, $1, $3); }
-    | v2;
+    | v2 { $$ = $1; }
 
 v2:
-    v3
+    v3 { $$ = $1; }
     | v2 v3 {
-        let head_raw: RawValue = $1.into();
+        let function = $1;
+        let argument = $2;
+        let head_raw: RawValue = function.into();
         let head =
           if head_raw >= ATOM_LIMIT
             && self.heap[head_raw].tag == Tag::Cons
@@ -2387,12 +2399,12 @@ v2:
             if inner >= ATOM_LIMIT && self.heap[inner].tag == Tag::Id {
               Value::from(inner)
             } else {
-              $1
+              function
             }
           } else {
-            $1
+            function
           };
-        $$ = self.heap.apply_ref(head, $2);
+        $$ = self.heap.apply_ref(head, argument);
         /* repeated name apparatus may have wrapped Constant around leading id
            - not wanted */
       }
@@ -2400,16 +2412,17 @@ v2:
 
 v3:
     Name {
+        let identifier = $1;
         if self.semantic_reduction_count != 0 {
           // `%bnf` grammar-variable legality remains deferred with `%bnf` itself.
           self.syntax("illegal use of $num symbol\n");
         }
-        if self.used_identifiers.contains(self.heap, $1) {
-          $$ = self.heap.cons_ref(Token::Constant.into(), $1);
+        if self.used_identifiers.contains(self.heap, identifier) {
+          $$ = self.heap.cons_ref(Token::Constant.into(), identifier);
         } /* picks up repeated names in a template */
         else {
-          self.used_identifiers.push(self.heap, $1);
-          $$ = $1;
+          self.used_identifiers.push(self.heap, identifier);
+          $$ = identifier;
         }
       }
     | ConstructorName

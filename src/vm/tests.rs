@@ -3012,12 +3012,88 @@ fn load_file_accepts_top_level_where_with_grouped_local_helper() {
 }
 
 #[test]
+fn load_file_accepts_top_level_where_with_guarded_local_helper() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("top_level_where_guarded_local_helper.m");
+    std::fs::write(&source_path, "f x = g x where g y = y, if x; z = x\n")
+        .expect("failed to write source test file");
+
+    let result = vm.load_file(&source_path.to_string_lossy());
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+}
+
+#[test]
 fn load_file_reports_undefined_local_name_in_top_level_where_definition() {
     let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("top_level_where_undefined_local_name.m");
     std::fs::write(&source_path, "f = y where z = 1\n")
+        .expect("failed to write source test file");
+
+    let result = vm.load_file(&source_path.to_string_lossy());
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(TypecheckError::UndefinedNames { count: 1 }))
+    ));
+}
+
+#[test]
+fn load_file_reports_undefined_name_inside_guarded_local_rhs() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("top_level_where_guarded_local_missing_name.m");
+    std::fs::write(&source_path, "f x = g x where g y = missing, if x; z = x\n")
+        .expect("failed to write source test file");
+
+    let result = vm.load_file(&source_path.to_string_lossy());
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(TypecheckError::UndefinedNames { count: 1 }))
+    ));
+}
+
+#[test]
+fn load_file_accepts_top_level_where_with_nested_local_where() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("top_level_where_nested_local_where.m");
+    std::fs::write(&source_path, "f = g where\n  g = h where\n    h = 1\n")
+        .expect("failed to write source test file");
+
+    let result = vm.load_file(&source_path.to_string_lossy());
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+}
+
+#[test]
+fn load_file_accepts_grouped_local_helper_when_nested_local_where_is_present() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("top_level_where_grouped_nested_local_where.m");
+    std::fs::write(&source_path, "f = g 0 where\n  g x = h where\n    h = x\n  g y = y\n")
+        .expect("failed to write source test file");
+
+    let result = vm.load_file(&source_path.to_string_lossy());
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+}
+
+#[test]
+fn load_file_reports_undefined_name_inside_nested_local_where() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("top_level_where_nested_local_missing_name.m");
+    std::fs::write(&source_path, "f = g where\n  g = h where\n    h = missing\n")
         .expect("failed to write source test file");
 
     let result = vm.load_file(&source_path.to_string_lossy());
