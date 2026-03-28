@@ -7,6 +7,7 @@ use crate::data::{
     values::Value,
     Heap, RawValue, Type, ATOM_LIMIT,
 };
+use std::collections::HashMap;
 
 pub(super) struct CodegenBoundaryInputs {
     pub(super) files: ConsList<FileRecord>,
@@ -563,6 +564,506 @@ fn abstract_template_from_expression(heap: &mut Heap, template: Value, expressio
     }
 }
 
+#[derive(Clone)]
+struct LocalDefinitionGroup {
+    definitions: Vec<DefinitionRef>,
+    recursive: bool,
+}
+
+#[derive(Clone)]
+struct LocalDefinitionPartitionEntry {
+    definition: DefinitionRef,
+    dependency_indices: Vec<usize>,
+    self_recursive: bool,
+}
+
+/// Walks one committed expression subtree and records referenced local-definition indices.
+/// This exists so codegen owns one Miranda-shaped free-identifier walk for local block
+/// partitioning and pruning instead of duplicating binder-sensitive traversal across `LetRec`
+/// lowering paths. The invariant is that constructor-valued identifiers and locally bound names do
+/// not contribute edges, while committed `Lambda` / `Let` / `LetRec` binder scopes are removed from
+/// the active dependency set the same way Miranda's local-block analysis expects.
+fn collect_local_dependency_indices_from_value(
+    heap: &Heap,
+    value: Value,
+    local_definition_indices: &HashMap<RawValue, usize>,
+    bound_identifiers: &mut Vec<IdentifierRecordRef>,
+    dependencies: &mut Vec<usize>,
+) {
+    let raw: RawValue = value.into();
+    if raw < ATOM_LIMIT {
+        return;
+    }
+
+    match heap[raw].tag {
+        Tag::Id => {
+            let identifier = IdentifierRecordRef::from_ref(raw);
+            if !bound_identifiers.contains(&identifier) && !identifier.is_constructor_valued(heap) {
+                if let Some(&dependency_index) = local_definition_indices.get(&raw) {
+                    if !dependencies.contains(&dependency_index) {
+                        dependencies.push(dependency_index);
+                    }
+                }
+            }
+        }
+        Tag::Ap | Tag::Cons | Tag::Pair | Tag::TCons => {
+            collect_local_dependency_indices_from_value(
+                heap,
+                heap[raw].head.into(),
+                local_definition_indices,
+                bound_identifiers,
+                dependencies,
+            );
+            collect_local_dependency_indices_from_value(
+                heap,
+                heap[raw].tail.into(),
+                local_definition_indices,
+                bound_identifiers,
+                dependencies,
+            );
+        }
+        Tag::Lambda => {
+            let prior_bound_len = bound_identifiers.len();
+            super::typecheck::collect_pattern_bound_identifiers(
+                heap,
+                heap[raw].head.into(),
+                bound_identifiers,
+            );
+            collect_local_dependency_indices_from_value(
+                heap,
+                heap[raw].tail.into(),
+                local_definition_indices,
+                bound_identifiers,
+                dependencies,
+            );
+            bound_identifiers.truncate(prior_bound_len);
+        }
+        Tag::Label | Tag::Show => {
+            collect_local_dependency_indices_from_value(
+                heap,
+                heap[raw].tail.into(),
+                local_definition_indices,
+                bound_identifiers,
+                dependencies,
+            );
+        }
+        Tag::Share => {
+            collect_local_dependency_indices_from_value(
+                heap,
+                heap[raw].head.into(),
+                local_definition_indices,
+                bound_identifiers,
+                dependencies,
+            );
+        }
+        Tag::Let => {
+            let definition = DefinitionRef::from_ref(heap[raw].head);
+            collect_local_dependency_indices_from_value(
+                heap,
+                definition.body_value(heap),
+                local_definition_indices,
+                bound_identifiers,
+                dependencies,
+            );
+            let prior_bound_len = bound_identifiers.len();
+            super::typecheck::collect_pattern_bound_identifiers(
+                heap,
+                definition.lhs_value(heap),
+                bound_identifiers,
+            );
+            collect_local_dependency_indices_from_value(
+                heap,
+                heap[raw].tail.into(),
+                local_definition_indices,
+                bound_identifiers,
+                dependencies,
+            );
+            bound_identifiers.truncate(prior_bound_len);
+        }
+        Tag::LetRec => {
+            let prior_bound_len = bound_identifiers.len();
+            let mut definitions: Value = heap[raw].head.into();
+            while RawValue::from(definitions) >= ATOM_LIMIT
+                && heap[RawValue::from(definitions)].tag == Tag::Cons
+            {
+                let definitions_ref = RawValue::from(definitions);
+                let definition = DefinitionRef::from_ref(heap[definitions_ref].head);
+                super::typecheck::collect_pattern_bound_identifiers(
+                    heap,
+                    definition.lhs_value(heap),
+                    bound_identifiers,
+                );
+                definitions = heap[definitions_ref].tail.into();
+            }
+
+            let mut definitions: Value = heap[raw].head.into();
+            while RawValue::from(definitions) >= ATOM_LIMIT
+                && heap[RawValue::from(definitions)].tag == Tag::Cons
+            {
+                let definitions_ref = RawValue::from(definitions);
+                let definition = DefinitionRef::from_ref(heap[definitions_ref].head);
+                collect_local_dependency_indices_from_value(
+                    heap,
+                    definition.body_value(heap),
+                    local_definition_indices,
+                    bound_identifiers,
+                    dependencies,
+                );
+                definitions = heap[definitions_ref].tail.into();
+            }
+
+            collect_local_dependency_indices_from_value(
+                heap,
+                heap[raw].tail.into(),
+                local_definition_indices,
+                bound_identifiers,
+                dependencies,
+            );
+            bound_identifiers.truncate(prior_bound_len);
+        }
+        Tag::Tries => {
+            let mut alternatives: Value = heap[raw].tail.into();
+            while RawValue::from(alternatives) >= ATOM_LIMIT
+                && heap[RawValue::from(alternatives)].tag == Tag::Cons
+            {
+                let alternatives_ref = RawValue::from(alternatives);
+                collect_local_dependency_indices_from_value(
+                    heap,
+                    heap[alternatives_ref].head.into(),
+                    local_definition_indices,
+                    bound_identifiers,
+                    dependencies,
+                );
+                alternatives = heap[alternatives_ref].tail.into();
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Partitions one committed local-definition family into reachable dependency-ordered groups.
+/// This exists so codegen reconstructs Miranda-shaped local blocks from committed `LetRec`
+/// definitions instead of lowering the whole surviving family as one coarse recursive bundle. The
+/// invariant is that only body-reachable definitions survive, strongly connected local subsets stay
+/// together, and the returned group order is dependency-first so reconstruction can wrap inside-out.
+fn partition_local_definition_groups(
+    heap: &Heap,
+    definitions: Value,
+    body: Value,
+) -> Vec<LocalDefinitionGroup> {
+    fn visit_definition_dependencies(
+        index: usize,
+        entries: &[LocalDefinitionPartitionEntry],
+        retained: &[bool],
+        visited: &mut [bool],
+        finish_order: &mut Vec<usize>,
+    ) {
+        if visited[index] || !retained[index] {
+            return;
+        }
+        visited[index] = true;
+        for dependency_index in &entries[index].dependency_indices {
+            visit_definition_dependencies(
+                *dependency_index,
+                entries,
+                retained,
+                visited,
+                finish_order,
+            );
+        }
+        finish_order.push(index);
+    }
+
+    fn collect_reverse_component(
+        index: usize,
+        reverse_edges: &[Vec<usize>],
+        retained: &[bool],
+        visited: &mut [bool],
+        component: &mut Vec<usize>,
+    ) {
+        if visited[index] || !retained[index] {
+            return;
+        }
+        visited[index] = true;
+        component.push(index);
+        for predecessor in &reverse_edges[index] {
+            collect_reverse_component(
+                *predecessor,
+                reverse_edges,
+                retained,
+                visited,
+                component,
+            );
+        }
+    }
+
+    fn visit_component_dependencies(
+        component_index: usize,
+        component_dependencies: &[Vec<usize>],
+        visited: &mut [bool],
+        dependency_order: &mut Vec<usize>,
+    ) {
+        if visited[component_index] {
+            return;
+        }
+        visited[component_index] = true;
+        for dependency_component in &component_dependencies[component_index] {
+            visit_component_dependencies(
+                *dependency_component,
+                component_dependencies,
+                visited,
+                dependency_order,
+            );
+        }
+        dependency_order.push(component_index);
+    }
+
+    let mut ordered_definitions = Vec::new();
+    let mut definition_cursor = definitions;
+    while RawValue::from(definition_cursor) >= ATOM_LIMIT
+        && heap[RawValue::from(definition_cursor)].tag == Tag::Cons
+    {
+        let definition_cursor_raw = RawValue::from(definition_cursor);
+        ordered_definitions.push(DefinitionRef::from_ref(heap[definition_cursor_raw].head));
+        definition_cursor = heap[definition_cursor_raw].tail.into();
+    }
+
+    let mut local_definition_indices = HashMap::new();
+    let mut binder_lists = Vec::with_capacity(ordered_definitions.len());
+    for (index, definition) in ordered_definitions.iter().copied().enumerate() {
+        let mut binders = Vec::new();
+        super::typecheck::collect_pattern_bound_identifiers(
+            heap,
+            definition.lhs_value(heap),
+            &mut binders,
+        );
+        for binder in &binders {
+            local_definition_indices.insert(binder.get_ref(), index);
+        }
+        binder_lists.push(binders);
+    }
+
+    let mut entries = Vec::with_capacity(ordered_definitions.len());
+    for (index, definition) in ordered_definitions.iter().copied().enumerate() {
+        let mut dependency_indices = Vec::new();
+        collect_local_dependency_indices_from_value(
+            heap,
+            definition.body_value(heap),
+            &local_definition_indices,
+            &mut Vec::new(),
+            &mut dependency_indices,
+        );
+        let self_recursive = dependency_indices.contains(&index);
+        entries.push(LocalDefinitionPartitionEntry {
+            definition,
+            dependency_indices,
+            self_recursive,
+        });
+    }
+
+    let mut directly_needed_indices = Vec::new();
+    collect_local_dependency_indices_from_value(
+        heap,
+        body,
+        &local_definition_indices,
+        &mut Vec::new(),
+        &mut directly_needed_indices,
+    );
+
+    let mut retained = vec![false; entries.len()];
+    let mut stack = directly_needed_indices;
+    while let Some(index) = stack.pop() {
+        if retained[index] {
+            continue;
+        }
+        retained[index] = true;
+        for dependency_index in &entries[index].dependency_indices {
+            stack.push(*dependency_index);
+        }
+    }
+
+    let mut finish_order = Vec::new();
+    let mut visited = vec![false; entries.len()];
+    for index in 0..entries.len() {
+        visit_definition_dependencies(
+            index,
+            &entries,
+            &retained,
+            &mut visited,
+            &mut finish_order,
+        );
+    }
+
+    let mut reverse_edges = vec![Vec::new(); entries.len()];
+    for (index, entry) in entries.iter().enumerate() {
+        if !retained[index] {
+            continue;
+        }
+        for dependency_index in &entry.dependency_indices {
+            if retained[*dependency_index] {
+                reverse_edges[*dependency_index].push(index);
+            }
+        }
+    }
+
+    let mut components = Vec::new();
+    let mut reverse_visited = vec![false; entries.len()];
+    while let Some(index) = finish_order.pop() {
+        if reverse_visited[index] || !retained[index] {
+            continue;
+        }
+        let mut component = Vec::new();
+        collect_reverse_component(
+            index,
+            &reverse_edges,
+            &retained,
+            &mut reverse_visited,
+            &mut component,
+        );
+        component.sort_unstable();
+        components.push(component);
+    }
+
+    let mut component_for_definition = vec![usize::MAX; entries.len()];
+    for (component_index, component) in components.iter().enumerate() {
+        for definition_index in component {
+            component_for_definition[*definition_index] = component_index;
+        }
+    }
+
+    let mut component_dependencies = vec![Vec::new(); components.len()];
+    for (component_index, component) in components.iter().enumerate() {
+        for definition_index in component {
+            for dependency_index in &entries[*definition_index].dependency_indices {
+                if !retained[*dependency_index] {
+                    continue;
+                }
+                let dependency_component = component_for_definition[*dependency_index];
+                if dependency_component != component_index
+                    && !component_dependencies[component_index].contains(&dependency_component)
+                {
+                    component_dependencies[component_index].push(dependency_component);
+                }
+            }
+        }
+    }
+
+    let mut component_indices: Vec<usize> = (0..components.len()).collect();
+    component_indices.sort_by_key(|component_index| components[*component_index][0]);
+
+    let mut dependency_order = Vec::new();
+    let mut component_visited = vec![false; components.len()];
+    for component_index in component_indices {
+        visit_component_dependencies(
+            component_index,
+            &component_dependencies,
+            &mut component_visited,
+            &mut dependency_order,
+        );
+    }
+
+    dependency_order
+        .into_iter()
+        .map(|component_index| {
+            let definitions = components[component_index]
+                .iter()
+                .map(|definition_index| entries[*definition_index].definition)
+                .collect::<Vec<_>>();
+            let recursive = components[component_index].len() > 1
+                || entries[components[component_index][0]].self_recursive;
+            LocalDefinitionGroup {
+                definitions,
+                recursive,
+            }
+        })
+        .collect()
+}
+
+/// Lowers one committed non-recursive local definition against an already-lowered body.
+/// This exists so dependency-partitioned local groups can reuse the existing `translet` owner after
+/// codegen has already reconstructed the inner body shape. The invariant is that the lowered result
+/// stays `ap(abstract(lhs, lowered_body), codegen(rhs))` over the committed definition payload.
+fn lower_single_local_definition_with_lowered_body(
+    heap: &mut Heap,
+    inputs: &CodegenBoundaryInputs,
+    definition: DefinitionRef,
+    lowered_body: Value,
+) -> Value {
+    let lowered_rhs = lower_codegen_value(heap, inputs, definition.body_value(heap));
+    let lowered_function =
+        abstract_template_from_expression(heap, definition.lhs_value(heap), lowered_body);
+    heap.apply_ref(lowered_function, lowered_rhs)
+}
+
+/// Lowers one committed recursive local-definition group against an already-lowered body.
+/// This exists so dependency-partitioned local groups can preserve the existing `transletrec`
+/// lowering owner for each recursive subset instead of reimplementing recursive carrier logic at
+/// the partition boundary. The invariant is that simple recursive groups keep the current `Y` /
+/// `abstrlist` lowering, while patterned recursive groups still introduce the private carrier and
+/// ordered `SUBSCRIPT` projections now scoped to the recursive subset being lowered.
+fn lower_recursive_local_definition_group_with_lowered_body(
+    heap: &mut Heap,
+    inputs: &CodegenBoundaryInputs,
+    definitions: &[DefinitionRef],
+    lowered_body: Value,
+) -> Value {
+    let mut lhs = Combinator::Nil.into();
+    let mut rhs = Combinator::Nil.into();
+
+    for definition in definitions {
+        let lhs_value = definition.lhs_value(heap);
+        let lhs_raw: RawValue = lhs_value.into();
+        let lowered_rhs = lower_codegen_value(heap, inputs, definition.body_value(heap));
+
+        if lhs_raw >= ATOM_LIMIT && heap[lhs_raw].tag == Tag::Id {
+            lhs = heap.cons_ref(lhs_value, lhs);
+            rhs = heap.cons_ref(lowered_rhs, rhs);
+        } else {
+            let recursive_carrier = match heap.make_private_symbol_ref(Combinator::Undef.into()) {
+                Value::Reference(reference) => Value::from(reference),
+                _ => unreachable!("make_private_symbol_ref should return a heap reference"),
+            };
+            lhs = heap.cons_ref(recursive_carrier, lhs);
+            rhs = heap.cons_ref(lowered_rhs, rhs);
+
+            let mut bound_identifiers = Vec::new();
+            collect_recursive_pattern_identifiers(heap, lhs_value, &mut bound_identifiers);
+            for (index, identifier) in bound_identifiers.into_iter().enumerate() {
+                lhs = heap.cons_ref(identifier.into(), lhs);
+                let projection = heap.apply2(
+                    Combinator::Subscript.into(),
+                    Value::Data(index as RawValue),
+                    recursive_carrier,
+                );
+                rhs = heap.cons_ref(projection, rhs);
+            }
+        }
+    }
+
+    let lhs_raw: RawValue = lhs.into();
+    if lhs_raw >= ATOM_LIMIT && heap[lhs_raw].tail == Combinator::Nil.into() {
+        let binder = heap[lhs_raw].head;
+        let rhs_head = heap[RawValue::from(rhs)].head;
+        let lowered_function = abstract_variable_from_expression(
+            heap,
+            IdentifierRecordRef::from_ref(binder),
+            lowered_body,
+        );
+        let lowered_recursive_rhs = abstract_variable_from_expression(
+            heap,
+            IdentifierRecordRef::from_ref(binder),
+            rhs_head.into(),
+        );
+        let recursive_application = heap.apply_ref(Combinator::Y.into(), lowered_recursive_rhs);
+        return heap.apply_ref(lowered_function, recursive_application);
+    }
+
+    let lowered_function = abstract_variable_list_from_expression(heap, lhs, lowered_body);
+    let lowered_recursive_rhs = abstract_variable_list_from_expression(heap, lhs, rhs);
+    let recursive_application = heap.apply_ref(Combinator::Y.into(), lowered_recursive_rhs);
+    heap.apply_ref(lowered_function, recursive_application)
+}
+
 /// Lowers one committed `Tag::Let` body through the current Miranda-shaped active subset. This
 /// exists so codegen owns `translet`-style lowering in one place instead of open-coding definition
 /// projection in the main dispatcher. The invariant is that the lowered shape is `ap(abstract(lhs,
@@ -571,10 +1072,7 @@ fn lower_let_value(heap: &mut Heap, inputs: &CodegenBoundaryInputs, let_value: V
     let let_raw: RawValue = let_value.into();
     let definition = DefinitionRef::from_ref(heap[let_raw].head);
     let lowered_body = lower_codegen_value(heap, inputs, heap[let_raw].tail.into());
-    let lowered_rhs = lower_codegen_value(heap, inputs, definition.body_value(heap));
-    let lowered_function =
-        abstract_template_from_expression(heap, definition.lhs_value(heap), lowered_body);
-    heap.apply_ref(lowered_function, lowered_rhs)
+    lower_single_local_definition_with_lowered_body(heap, inputs, definition, lowered_body)
 }
 
 /// Bracket-abstracts a list of active simple identifier binders from one lowered expression. This
@@ -692,75 +1190,38 @@ fn collect_recursive_pattern_identifiers(
 /// Lowers one committed `Tag::LetRec` body through the current Miranda-shaped active subset.
 /// This exists so codegen owns the active `transletrec` lowering slice over committed recursive
 /// definition groups, including Miranda's private-carrier projection strategy for non-identifier
-/// lhs definitions. The invariant is that singleton simple-id groups lower through `Y` with
-/// `abstr`, while broader groups lower through `abstrlist` over the Miranda-shaped lhs/rhs order.
+/// lhs definitions. The invariant is that dependency-partitioned local groups lower one reachable
+/// subset at a time, with singleton non-recursive subsets using `translet` and only genuinely
+/// recursive subsets reusing the existing `Y` / `abstrlist` lowering owners.
 fn lower_letrec_value(
     heap: &mut Heap,
     inputs: &CodegenBoundaryInputs,
     letrec_value: Value,
 ) -> Value {
     let letrec_raw: RawValue = letrec_value.into();
-    let mut definitions: Value = heap[letrec_raw].head.into();
-    let mut lhs = Combinator::Nil.into();
-    let mut rhs = Combinator::Nil.into();
+    let body: Value = heap[letrec_raw].tail.into();
+    let groups = partition_local_definition_groups(heap, heap[letrec_raw].head.into(), body);
 
-    while RawValue::from(definitions) >= ATOM_LIMIT && heap[RawValue::from(definitions)].tag == Tag::Cons {
-        let definitions_ref = RawValue::from(definitions);
-        let definition = DefinitionRef::from_ref(heap[definitions_ref].head);
-        let lhs_value = definition.lhs_value(heap);
-        let lhs_raw: RawValue = lhs_value.into();
-        let lowered_rhs = lower_codegen_value(heap, inputs, definition.body_value(heap));
-
-        if lhs_raw >= ATOM_LIMIT && heap[lhs_raw].tag == Tag::Id {
-            lhs = heap.cons_ref(lhs_value, lhs);
-            rhs = heap.cons_ref(lowered_rhs, rhs);
-        } else {
-            let recursive_carrier = match heap.make_private_symbol_ref(Combinator::Undef.into()) {
-                Value::Reference(reference) => Value::from(reference),
-                _ => unreachable!("make_private_symbol_ref should return a heap reference"),
-            };
-            lhs = heap.cons_ref(recursive_carrier, lhs);
-            rhs = heap.cons_ref(lowered_rhs, rhs);
-
-            let mut bound_identifiers = Vec::new();
-            collect_recursive_pattern_identifiers(heap, lhs_value, &mut bound_identifiers);
-            for (index, identifier) in bound_identifiers.into_iter().enumerate() {
-                lhs = heap.cons_ref(identifier.into(), lhs);
-                let projection = heap.apply2(
-                    Combinator::Subscript.into(),
-                    Value::Data(index as RawValue),
-                    recursive_carrier,
-                );
-                rhs = heap.cons_ref(projection, rhs);
+    groups.into_iter().rev().fold(
+        lower_codegen_value(heap, inputs, body),
+        |lowered_body, group| {
+            if group.recursive {
+                lower_recursive_local_definition_group_with_lowered_body(
+                    heap,
+                    inputs,
+                    &group.definitions,
+                    lowered_body,
+                )
+            } else {
+                lower_single_local_definition_with_lowered_body(
+                    heap,
+                    inputs,
+                    group.definitions[0],
+                    lowered_body,
+                )
             }
-        }
-
-        definitions = heap[definitions_ref].tail.into();
-    }
-
-    let lowered_body = lower_codegen_value(heap, inputs, heap[letrec_raw].tail.into());
-    let lhs_raw: RawValue = lhs.into();
-    if lhs_raw >= ATOM_LIMIT && heap[lhs_raw].tail == Combinator::Nil.into() {
-        let binder = heap[lhs_raw].head;
-        let rhs_head = heap[RawValue::from(rhs)].head;
-        let lowered_function = abstract_variable_from_expression(
-            heap,
-            IdentifierRecordRef::from_ref(binder),
-            lowered_body,
-        );
-        let lowered_recursive_rhs = abstract_variable_from_expression(
-            heap,
-            IdentifierRecordRef::from_ref(binder),
-            rhs_head.into(),
-        );
-        let recursive_application = heap.apply_ref(Combinator::Y.into(), lowered_recursive_rhs);
-        return heap.apply_ref(lowered_function, recursive_application);
-    }
-
-    let lowered_function = abstract_variable_list_from_expression(heap, lhs, lowered_body);
-    let lowered_recursive_rhs = abstract_variable_list_from_expression(heap, lhs, rhs);
-    let recursive_application = heap.apply_ref(Combinator::Y.into(), lowered_recursive_rhs);
-    heap.apply_ref(lowered_function, recursive_application)
+        },
+    )
 }
 
 /// Returns whether the committed rhs is fallible in the currently owned `transtries` subset. This

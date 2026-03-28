@@ -105,6 +105,27 @@ fn subtree_contains_combinator(heap: &Heap, value: Value, combinator: Combinator
     }
 }
 
+/// Returns whether one lowered subtree still contains the selected committed identifier reference.
+/// This exists so codegen tests can assert that dependency pruning removed dead local payloads and
+/// retained transitively needed ones without duplicating one heap-tree walk per assertion. The
+/// invariant is that the helper only reports identifiers still reachable in the lowered tree.
+fn subtree_contains_identifier(heap: &Heap, value: Value, identifier: IdentifierRecordRef) -> bool {
+    let raw: RawValue = value.into();
+    if raw < ATOM_LIMIT {
+        return raw == identifier.get_ref();
+    }
+
+    match heap[raw].tag {
+        Tag::Id => raw == identifier.get_ref(),
+        Tag::Ap | Tag::Cons | Tag::Pair | Tag::TCons | Tag::Let | Tag::LetRec | Tag::Tries | Tag::Label | Tag::Show => {
+            subtree_contains_identifier(heap, heap[raw].head.into(), identifier)
+                || subtree_contains_identifier(heap, heap[raw].tail.into(), identifier)
+        }
+        Tag::Share => subtree_contains_identifier(heap, heap[raw].head.into(), identifier),
+        _ => false,
+    }
+}
+
 fn export_payload(
     vm: &mut VM,
     source_path: &str,
@@ -6799,7 +6820,7 @@ fn codegen_phase_lowers_let_body_through_translet_shape() {
 }
 
 #[test]
-fn codegen_phase_lowers_letrec_singleton_body_through_y() {
+fn codegen_phase_lowers_nonrecursive_simple_letrec_without_y() {
     let mut vm = VM::new();
     vm.initializing = false;
 
@@ -6813,7 +6834,43 @@ fn codegen_phase_lowers_letrec_singleton_body_through_y() {
     let definienda = ConsList::new(&mut vm.heap, holder);
     let current_file = FileRecord::new(
         &mut vm.heap,
-        unique_test_path("codegen_letrec_body.m")
+        unique_test_path("codegen_nonrecursive_letrec_body.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        definienda,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+    vm.undefined_names = ConsList::EMPTY;
+
+    let result = vm.run_codegen_phase();
+
+    assert!(result.is_ok());
+    let lowered = holder
+        .get_value(&vm.heap)
+        .expect("expected lowered nonrecursive letrec body")
+        .get_ref()
+        .into();
+    assert!(!subtree_contains_combinator(&vm.heap, lowered, Combinator::Y));
+}
+
+#[test]
+fn codegen_phase_lowers_letrec_singleton_body_through_y() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let x = vm.heap.make_empty_identifier("x");
+    let holder = vm.heap.make_empty_identifier("holder");
+    let definition = DefinitionRef::new(&mut vm.heap, x.into(), Type::Undefined.into(), x.into());
+    let definitions = vm.heap.cons_ref(definition.get_ref().into(), Combinator::Nil.into());
+    let letrec_body = vm.heap.letrec_ref(definitions, x.into());
+    holder.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(letrec_body));
+
+    let definienda = ConsList::new(&mut vm.heap, holder);
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("codegen_recursive_letrec_body.m")
             .to_string_lossy()
             .to_string(),
         UNIX_EPOCH,
@@ -6835,6 +6892,84 @@ fn codegen_phase_lowers_letrec_singleton_body_through_y() {
     let recursive_rhs = vm.heap[lowered_raw].tail;
     assert_eq!(vm.heap[recursive_rhs].tag, Tag::Ap);
     assert_eq!(vm.heap[recursive_rhs].head, RawValue::from(Combinator::Y));
+}
+
+#[test]
+fn codegen_phase_lowers_simple_mutual_recursion_through_y() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let x = vm.heap.make_empty_identifier("x");
+    let y = vm.heap.make_empty_identifier("y");
+    let holder = vm.heap.make_empty_identifier("holder");
+    let x_definition = DefinitionRef::new(&mut vm.heap, x.into(), Type::Undefined.into(), y.into());
+    let y_definition = DefinitionRef::new(&mut vm.heap, y.into(), Type::Undefined.into(), x.into());
+    let y_tail = vm.heap.cons_ref(y_definition.get_ref().into(), Combinator::Nil.into());
+    let definitions = vm.heap.cons_ref(x_definition.get_ref().into(), y_tail);
+    let letrec_body = vm.heap.letrec_ref(definitions, x.into());
+    holder.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(letrec_body));
+
+    let definienda = ConsList::new(&mut vm.heap, holder);
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("codegen_mutual_simple_letrec_body.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        definienda,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+    vm.undefined_names = ConsList::EMPTY;
+
+    let result = vm.run_codegen_phase();
+
+    assert!(result.is_ok());
+    let lowered = holder
+        .get_value(&vm.heap)
+        .expect("expected lowered mutually recursive letrec body")
+        .get_ref()
+        .into();
+    assert!(subtree_contains_combinator(&vm.heap, lowered, Combinator::Y));
+}
+
+#[test]
+fn codegen_phase_partitions_simple_dependency_chain_without_recursive_bundle() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let x = vm.heap.make_empty_identifier("x");
+    let y = vm.heap.make_empty_identifier("y");
+    let holder = vm.heap.make_empty_identifier("holder");
+    let x_definition = DefinitionRef::new(&mut vm.heap, x.into(), Type::Undefined.into(), y.into());
+    let y_definition = DefinitionRef::new(&mut vm.heap, y.into(), Type::Undefined.into(), Value::Data(1));
+    let y_tail = vm.heap.cons_ref(y_definition.get_ref().into(), Combinator::Nil.into());
+    let definitions = vm.heap.cons_ref(x_definition.get_ref().into(), y_tail);
+    let letrec_body = vm.heap.letrec_ref(definitions, x.into());
+    holder.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(letrec_body));
+
+    let definienda = ConsList::new(&mut vm.heap, holder);
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("codegen_simple_dependency_chain_body.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        definienda,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+    vm.undefined_names = ConsList::EMPTY;
+
+    let result = vm.run_codegen_phase();
+
+    assert!(result.is_ok());
+    let lowered = holder
+        .get_value(&vm.heap)
+        .expect("expected lowered dependency chain body")
+        .get_ref()
+        .into();
+    assert!(!subtree_contains_combinator(&vm.heap, lowered, Combinator::Y));
 }
 
 #[test]
@@ -6918,16 +7053,16 @@ fn codegen_phase_lowers_mixed_letrec_group_with_pattern_projection_order() {
     let result = vm.run_codegen_phase();
 
     assert!(result.is_ok());
-    let lowered_raw = holder
+    let lowered = holder
         .get_value(&vm.heap)
         .expect("expected lowered mixed letrec body")
-        .get_ref();
-    let recursive_rhs = vm.heap[lowered_raw].tail;
-    let abstraction_result = vm.heap[recursive_rhs].tail;
+        .get_ref()
+        .into();
     let mut subscript_indices = Vec::new();
-    collect_subscript_indices(&vm.heap, abstraction_result.into(), &mut subscript_indices);
+    collect_subscript_indices(&vm.heap, lowered, &mut subscript_indices);
     subscript_indices.sort();
-    assert_eq!(subscript_indices, vec![0, 1]);
+    assert!(subscript_indices.is_empty());
+    assert!(!subtree_contains_combinator(&vm.heap, lowered, Combinator::Y));
 }
 
 #[test]
@@ -7130,7 +7265,8 @@ fn codegen_phase_lowers_shared_letrec_tries_body_through_existing_owned_subset()
     let mut subscript_indices = Vec::new();
     collect_subscript_indices(&vm.heap, lowered, &mut subscript_indices);
     subscript_indices.sort();
-    assert_eq!(subscript_indices, vec![0, 1]);
+    assert!(subscript_indices.is_empty());
+    assert!(!subtree_contains_combinator(&vm.heap, lowered, Combinator::Y));
     assert!(subtree_contains_combinator(&vm.heap, lowered, Combinator::Try));
     assert!(subtree_contains_combinator(&vm.heap, lowered, Combinator::BadCase));
     assert!(subtree_contains_combinator(&vm.heap, lowered, Combinator::Cond));
@@ -7627,6 +7763,189 @@ fn codegen_phase_preserves_cond_shape_for_left_b_with_right_k_guarded_abstractio
 }
 
 #[test]
+fn codegen_phase_lowers_nonrecursive_pattern_group_without_recursive_bundle() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let x = vm.heap.make_empty_identifier("x");
+    let y = vm.heap.make_empty_identifier("y");
+    let pair = vm.heap.make_empty_identifier("pair");
+    let z = vm.heap.make_empty_identifier("z");
+    let holder = vm.heap.make_empty_identifier("holder");
+    let binder = vm.heap.pair_ref(x.into(), y.into());
+    let pattern_definition = DefinitionRef::new(&mut vm.heap, binder, Type::Undefined.into(), pair.into());
+    let pair_value = vm.heap.pair_ref(Value::Data(1), Value::Data(2));
+    let pair_definition = DefinitionRef::new(
+        &mut vm.heap,
+        pair.into(),
+        Type::Undefined.into(),
+        pair_value,
+    );
+    let z_definition = DefinitionRef::new(&mut vm.heap, z.into(), Type::Undefined.into(), Value::Data(7));
+    let z_tail = vm.heap.cons_ref(z_definition.get_ref().into(), Combinator::Nil.into());
+    let pair_tail = vm.heap.cons_ref(pair_definition.get_ref().into(), z_tail);
+    let definitions = vm.heap.cons_ref(pattern_definition.get_ref().into(), pair_tail);
+    let body = vm.heap.cons_ref(x.into(), z.into());
+    let letrec_body = vm.heap.letrec_ref(definitions, body);
+    holder.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(letrec_body));
+
+    let definienda = ConsList::new(&mut vm.heap, holder);
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("codegen_nonrecursive_pattern_group.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        definienda,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+    vm.undefined_names = ConsList::EMPTY;
+
+    let result = vm.run_codegen_phase();
+
+    assert!(result.is_ok());
+    let lowered = holder
+        .get_value(&vm.heap)
+        .expect("expected lowered nonrecursive pattern group")
+        .get_ref()
+        .into();
+    assert!(!subtree_contains_combinator(&vm.heap, lowered, Combinator::Y));
+}
+
+#[test]
+fn codegen_phase_prunes_dead_simple_local_definition() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let used = vm.heap.make_empty_identifier("used");
+    let dead = vm.heap.make_empty_identifier("dead");
+    let dead_payload = vm.heap.make_empty_identifier("dead_payload");
+    let holder = vm.heap.make_empty_identifier("holder");
+    let used_definition = DefinitionRef::new(&mut vm.heap, used.into(), Type::Undefined.into(), Value::Data(1));
+    let dead_definition = DefinitionRef::new(&mut vm.heap, dead.into(), Type::Undefined.into(), dead_payload.into());
+    let dead_tail = vm.heap.cons_ref(dead_definition.get_ref().into(), Combinator::Nil.into());
+    let definitions = vm.heap.cons_ref(used_definition.get_ref().into(), dead_tail);
+    let letrec_body = vm.heap.letrec_ref(definitions, used.into());
+    holder.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(letrec_body));
+
+    let definienda = ConsList::new(&mut vm.heap, holder);
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("codegen_prunes_dead_simple_local.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        definienda,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+    vm.undefined_names = ConsList::EMPTY;
+
+    let result = vm.run_codegen_phase();
+
+    assert!(result.is_ok());
+    let lowered = holder
+        .get_value(&vm.heap)
+        .expect("expected lowered body after dead-simple pruning")
+        .get_ref()
+        .into();
+    assert!(!subtree_contains_identifier(&vm.heap, lowered, dead_payload));
+}
+
+#[test]
+fn codegen_phase_prunes_dead_pattern_local_definition() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let used = vm.heap.make_empty_identifier("used");
+    let dead_x = vm.heap.make_empty_identifier("dead_x");
+    let dead_y = vm.heap.make_empty_identifier("dead_y");
+    let dead_payload = vm.heap.make_empty_identifier("dead_pattern_payload");
+    let holder = vm.heap.make_empty_identifier("holder");
+    let used_definition = DefinitionRef::new(&mut vm.heap, used.into(), Type::Undefined.into(), Value::Data(1));
+    let dead_binder = vm.heap.pair_ref(dead_x.into(), dead_y.into());
+    let dead_definition = DefinitionRef::new(
+        &mut vm.heap,
+        dead_binder,
+        Type::Undefined.into(),
+        dead_payload.into(),
+    );
+    let dead_tail = vm.heap.cons_ref(dead_definition.get_ref().into(), Combinator::Nil.into());
+    let definitions = vm.heap.cons_ref(used_definition.get_ref().into(), dead_tail);
+    let letrec_body = vm.heap.letrec_ref(definitions, used.into());
+    holder.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(letrec_body));
+
+    let definienda = ConsList::new(&mut vm.heap, holder);
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("codegen_prunes_dead_pattern_local.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        definienda,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+    vm.undefined_names = ConsList::EMPTY;
+
+    let result = vm.run_codegen_phase();
+
+    assert!(result.is_ok());
+    let lowered = holder
+        .get_value(&vm.heap)
+        .expect("expected lowered body after dead-pattern pruning")
+        .get_ref()
+        .into();
+    assert!(!subtree_contains_identifier(&vm.heap, lowered, dead_payload));
+}
+
+#[test]
+fn codegen_phase_retains_transitively_needed_local_definition() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let x = vm.heap.make_empty_identifier("x");
+    let y = vm.heap.make_empty_identifier("y");
+    let dead = vm.heap.make_empty_identifier("dead");
+    let needed_payload = vm.heap.make_empty_identifier("needed_payload");
+    let dead_payload = vm.heap.make_empty_identifier("dead_payload");
+    let holder = vm.heap.make_empty_identifier("holder");
+    let x_definition = DefinitionRef::new(&mut vm.heap, x.into(), Type::Undefined.into(), y.into());
+    let y_definition = DefinitionRef::new(&mut vm.heap, y.into(), Type::Undefined.into(), needed_payload.into());
+    let dead_definition = DefinitionRef::new(&mut vm.heap, dead.into(), Type::Undefined.into(), dead_payload.into());
+    let dead_tail = vm.heap.cons_ref(dead_definition.get_ref().into(), Combinator::Nil.into());
+    let y_tail = vm.heap.cons_ref(y_definition.get_ref().into(), dead_tail);
+    let definitions = vm.heap.cons_ref(x_definition.get_ref().into(), y_tail);
+    let letrec_body = vm.heap.letrec_ref(definitions, x.into());
+    holder.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(letrec_body));
+
+    let definienda = ConsList::new(&mut vm.heap, holder);
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("codegen_retains_transitive_local.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        definienda,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+    vm.undefined_names = ConsList::EMPTY;
+
+    let result = vm.run_codegen_phase();
+
+    assert!(result.is_ok());
+    let lowered = holder
+        .get_value(&vm.heap)
+        .expect("expected lowered body after transitive pruning")
+        .get_ref()
+        .into();
+    assert!(subtree_contains_identifier(&vm.heap, lowered, needed_payload));
+    assert!(!subtree_contains_identifier(&vm.heap, lowered, dead_payload));
+}
+
+#[test]
 fn codegen_phase_lowers_pattern_letrec_through_tries_and_guarded_lambda_interaction() {
     let mut vm = VM::new();
     vm.initializing = false;
@@ -7674,10 +7993,78 @@ fn codegen_phase_lowers_pattern_letrec_through_tries_and_guarded_lambda_interact
     let mut subscript_indices = Vec::new();
     collect_subscript_indices(&vm.heap, lowered, &mut subscript_indices);
     subscript_indices.sort();
-    assert_eq!(subscript_indices, vec![0, 1]);
+    assert!(subscript_indices.is_empty());
+    assert!(!subtree_contains_combinator(&vm.heap, lowered, Combinator::Y));
     assert!(subtree_contains_combinator(&vm.heap, lowered, Combinator::Try));
     assert!(subtree_contains_combinator(&vm.heap, lowered, Combinator::BadCase));
     assert!(subtree_contains_combinator(&vm.heap, lowered, Combinator::Cond));
+}
+
+#[test]
+fn top_level_where_lowers_nonrecursive_local_without_y() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("top_level_where_codegen_nonrecursive_local.m");
+    std::fs::write(&source_path, "f = g where g = 1\n")
+        .expect("failed to write source test file");
+
+    let result = vm.load_file(&source_path.to_string_lossy());
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+    let f = vm.heap.get_identifier("f").expect("expected f identifier");
+    let lowered = f
+        .get_value(&vm.heap)
+        .expect("expected lowered top-level where body")
+        .get_ref()
+        .into();
+    assert!(!subtree_contains_combinator(&vm.heap, lowered, Combinator::Y));
+}
+
+#[test]
+fn top_level_where_partitions_simple_dependency_chain_without_y() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("top_level_where_codegen_dependency_chain.m");
+    std::fs::write(&source_path, "f = x where x = y; y = 1\n")
+        .expect("failed to write source test file");
+
+    let result = vm.load_file(&source_path.to_string_lossy());
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+    let f = vm.heap.get_identifier("f").expect("expected f identifier");
+    let lowered = f
+        .get_value(&vm.heap)
+        .expect("expected lowered partitioned top-level where body")
+        .get_ref()
+        .into();
+    assert!(!subtree_contains_combinator(&vm.heap, lowered, Combinator::Y));
+}
+
+#[test]
+fn top_level_where_lowers_recursive_pattern_subset_through_carrier_path() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("top_level_where_codegen_recursive_pattern_subset.m");
+    std::fs::write(&source_path, "f = x where (x,y) = pair; pair = x\n")
+        .expect("failed to write source test file");
+
+    let result = vm.load_file(&source_path.to_string_lossy());
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+    let f = vm.heap.get_identifier("f").expect("expected f identifier");
+    let lowered = f
+        .get_value(&vm.heap)
+        .expect("expected lowered recursive patterned where body")
+        .get_ref()
+        .into();
+    let mut subscript_indices = Vec::new();
+    collect_subscript_indices(&vm.heap, lowered, &mut subscript_indices);
+    subscript_indices.sort();
+    assert_eq!(subscript_indices, vec![0, 1]);
+    assert!(subtree_contains_combinator(&vm.heap, lowered, Combinator::Y));
 }
 
 #[test]
