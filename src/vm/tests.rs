@@ -439,12 +439,50 @@ fn load_file_accepts_negative_integer_literal_pattern_in_formal() {
 }
 
 #[test]
+fn load_file_accepts_unparenthesized_negative_integer_literal_pattern_in_formal() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("unparenthesized_negative_integer_literal_formal.m");
+    std::fs::write(&source_path, "sign -1 = 0\n").expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(
+        result.is_ok(),
+        "result={result:?} diagnostics={:?}",
+        vm.parser_diagnostics
+    );
+    assert!(vm.undefined_names.is_empty());
+}
+
+#[test]
 fn load_file_accepts_n_plus_k_pattern_and_binds_inner_name() {
     let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("n_plus_k_formal.m");
     std::fs::write(&source_path, "pred (x+1) = x\n").expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(
+        result.is_ok(),
+        "result={result:?} diagnostics={:?}",
+        vm.parser_diagnostics
+    );
+    assert!(vm.undefined_names.is_empty());
+}
+
+#[test]
+fn load_file_accepts_unparenthesized_n_plus_k_pattern_and_binds_inner_name() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("unparenthesized_n_plus_k_formal.m");
+    std::fs::write(&source_path, "pred x+1 = x\n").expect("failed to write source test file");
     let source_path_str = source_path.to_string_lossy().to_string();
 
     let result = vm.load_file(&source_path_str);
@@ -1170,12 +1208,50 @@ fn load_file_rejects_non_canonical_plus_pattern_in_formal() {
 }
 
 #[test]
+fn load_file_rejects_unparenthesized_non_canonical_plus_pattern_in_formal() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("load_file_unparenthesized_non_canonical_plus_pattern_formal.m");
+    std::fs::write(&source_path, "f x+y = x\n").expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::NonCanonicalPlusPatternsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
 fn load_file_rejects_unary_minus_pattern_in_formal() {
     let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("load_file_unary_minus_pattern_formal.m");
     std::fs::write(&source_path, "f (-x) = x\n").expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::UnaryMinusPatternsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
+fn load_file_rejects_unparenthesized_unary_minus_pattern_in_formal() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("load_file_unparenthesized_unary_minus_pattern_formal.m");
+    std::fs::write(&source_path, "f -x = x\n").expect("failed to write source test file");
     let source_path_str = source_path.to_string_lossy().to_string();
 
     let result = vm.load_file(&source_path_str);
@@ -1229,6 +1305,64 @@ fn load_file_reports_arithmetic_head_application_before_undefined_name() {
 }
 
 #[test]
+fn load_file_rejects_unparenthesized_binary_minus_pattern_in_formal() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("load_file_unparenthesized_binary_minus_pattern_formal.m");
+    std::fs::write(&source_path, "f x-y = y\n").expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::MalformedMinusApplicationsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
+fn load_file_rejects_unparenthesized_arithmetic_head_application_in_formal() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("load_file_unparenthesized_arithmetic_head_application_formal.m");
+    std::fs::write(&source_path, "bad x+1 y = y\n").expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::MalformedPlusApplicationsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
+fn load_file_unparenthesized_arithmetic_head_application_still_binds_interior_names() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("load_file_unparenthesized_arithmetic_head_binding.m");
+    std::fs::write(&source_path, "bad x+1 y = missing\n")
+        .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::MalformedPlusApplicationsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
 fn parse_source_text_reaches_non_canonical_plus_pattern_typecheck_error() {
     let mut vm = VM::new();
     vm.initializing = false;
@@ -1237,6 +1371,28 @@ fn parse_source_text_reaches_non_canonical_plus_pattern_typecheck_error() {
     let source_path_str = source_path.to_string_lossy().to_string();
     let outcome = vm
         .parse_source_text(&source_path_str, "f (x+y) = x\n", UNIX_EPOCH, false)
+        .expect("source parse should succeed");
+
+    assert!(outcome.parsed_without_error);
+    vm.files = outcome.files;
+
+    let result = vm.run_checktypes_phase();
+
+    assert!(matches!(
+        result,
+        Err(TypecheckError::NonCanonicalPlusPatternsInFormals { count: 1 })
+    ));
+}
+
+#[test]
+fn parse_source_text_reaches_unparenthesized_non_canonical_plus_pattern_typecheck_error() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("source_unparenthesized_non_canonical_plus_pattern_formal.m");
+    let source_path_str = source_path.to_string_lossy().to_string();
+    let outcome = vm
+        .parse_source_text(&source_path_str, "f x+y = x\n", UNIX_EPOCH, false)
         .expect("source parse should succeed");
 
     assert!(outcome.parsed_without_error);
@@ -1297,6 +1453,28 @@ fn parse_source_text_reaches_unary_minus_pattern_typecheck_error() {
 }
 
 #[test]
+fn parse_source_text_reaches_unparenthesized_unary_minus_pattern_typecheck_error() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("source_unparenthesized_unary_minus_pattern_formal.m");
+    let source_path_str = source_path.to_string_lossy().to_string();
+    let outcome = vm
+        .parse_source_text(&source_path_str, "f -x = x\n", UNIX_EPOCH, false)
+        .expect("source parse should succeed");
+
+    assert!(outcome.parsed_without_error);
+    vm.files = outcome.files;
+
+    let result = vm.run_checktypes_phase();
+
+    assert!(matches!(
+        result,
+        Err(TypecheckError::UnaryMinusPatternsInFormals { count: 1 })
+    ));
+}
+
+#[test]
 fn parse_source_text_reaches_malformed_plus_application_typecheck_error() {
     let mut vm = VM::new();
     vm.initializing = false;
@@ -1305,6 +1483,28 @@ fn parse_source_text_reaches_malformed_plus_application_typecheck_error() {
     let source_path_str = source_path.to_string_lossy().to_string();
     let outcome = vm
         .parse_source_text(&source_path_str, "f (((x+y)) z) = z\n", UNIX_EPOCH, false)
+        .expect("source parse should succeed");
+
+    assert!(outcome.parsed_without_error);
+    vm.files = outcome.files;
+
+    let result = vm.run_checktypes_phase();
+
+    assert!(matches!(
+        result,
+        Err(TypecheckError::MalformedPlusApplicationsInFormals { count: 1 })
+    ));
+}
+
+#[test]
+fn parse_source_text_reaches_unparenthesized_malformed_plus_application_typecheck_error() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("source_unparenthesized_malformed_plus_application_formal.m");
+    let source_path_str = source_path.to_string_lossy().to_string();
+    let outcome = vm
+        .parse_source_text(&source_path_str, "f x+1 y = y\n", UNIX_EPOCH, false)
         .expect("source parse should succeed");
 
     assert!(outcome.parsed_without_error);
@@ -1338,6 +1538,52 @@ fn parse_source_text_reaches_malformed_minus_application_typecheck_error() {
         result,
         Err(TypecheckError::MalformedMinusApplicationsInFormals { count: 1 })
     ));
+}
+
+#[test]
+fn parse_source_text_reaches_unparenthesized_malformed_minus_application_typecheck_error() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("source_unparenthesized_malformed_minus_pattern_formal.m");
+    let source_path_str = source_path.to_string_lossy().to_string();
+    let outcome = vm
+        .parse_source_text(&source_path_str, "f x-y = y\n", UNIX_EPOCH, false)
+        .expect("source parse should succeed");
+
+    assert!(outcome.parsed_without_error);
+    vm.files = outcome.files;
+
+    let result = vm.run_checktypes_phase();
+
+    assert!(matches!(
+        result,
+        Err(TypecheckError::MalformedMinusApplicationsInFormals { count: 1 })
+    ));
+}
+
+#[test]
+fn parse_source_text_reaches_unparenthesized_application_headed_plus_pattern_typecheck_error() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("source_unparenthesized_application_headed_plus_pattern_formal.m");
+    let source_path_str = source_path.to_string_lossy().to_string();
+    let outcome = vm
+        .parse_source_text(&source_path_str, "f g x+y = y\n", UNIX_EPOCH, false)
+        .expect("source parse should succeed");
+
+    assert!(outcome.parsed_without_error);
+    vm.files = outcome.files;
+
+    let inputs = typecheck::TypecheckBoundaryInputs::from_vm(&vm);
+    let result = typecheck::run_partial_typecheck(&mut vm.heap, inputs);
+
+    assert!(matches!(
+        &result.failure,
+        Some(TypecheckError::NonCanonicalPlusPatternsInFormals { count: 1 })
+    ));
+    assert!(result.undefined_names.is_empty());
 }
 
 #[test]

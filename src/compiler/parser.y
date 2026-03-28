@@ -650,6 +650,18 @@ top_level_definition_lhs:
                   let combined_pattern = self.heap.apply2(operator, combined_left, right);
                   source_order_parameters.truncate(0);
                   source_order_parameters.push(combined_pattern);
+                } else if Value::from(outer_application.function_raw(&self.heap)) == Combinator::Minus.into() {
+                  let mut combined_left = source_order_parameters[0];
+                  for argument in source_order_parameters[1..source_order_parameters.len() - 1].iter().copied() {
+                    combined_left = self.heap.apply_ref(self.top_level_application_head(combined_left), argument);
+                  }
+                  let combined_pattern = self.heap.apply2(
+                    Combinator::Minus.into(),
+                    combined_left,
+                    Value::from(outer_application.argument_raw(&self.heap)),
+                  );
+                  source_order_parameters.truncate(0);
+                  source_order_parameters.push(combined_pattern);
                 }
               }
             }
@@ -725,7 +737,42 @@ top_level_definition_parameters_start:
     ;
 
 top_level_definition_parameter:
-    top_level_pattern_atom InfixName top_level_pattern_arithmetic {
+    top_level_pattern_atom Plus Constant {
+        let inner = $1;
+        let constant = $3;
+        let constant_raw: RawValue = constant.into();
+        if constant_raw < ATOM_LIMIT
+          || self.heap[constant_raw].tag != Tag::Int
+          || (self.heap[constant_raw].head & SIGN_BIT_MASK) != 0
+        {
+          self.syntax("inappropriate use of \"+\" in pattern\n");
+        }
+        $$ = self.heap.apply2(Combinator::Plus.into(), constant, inner);
+      }
+    | top_level_pattern_atom Plus top_level_pattern_non_constant_application_or_atom {
+        $$ = self.heap.apply2(Combinator::Plus.into(), $1, $3);
+      }
+    | Minus Constant {
+        let constant = $2;
+        let constant_raw: RawValue = constant.into();
+        if constant_raw >= ATOM_LIMIT && self.heap[constant_raw].tag == Tag::Int {
+          let negated = IntegerRef::from_ref(constant_raw).negate(self.heap);
+          $$ = self.heap.cons_ref(
+            Token::Constant.into(),
+            negated.into(),
+          );
+        } else {
+          self.syntax("inappropriate use of \"-\" in pattern\n");
+          $$ = self.heap.cons_ref(Token::Constant.into(), constant);
+        }
+      }
+    | Minus top_level_pattern_non_constant_application_or_atom {
+        $$ = self.heap.apply_ref(Combinator::Minus.into(), $2);
+      }
+    | top_level_pattern_atom Minus top_level_pattern_non_constant_application_or_atom {
+        $$ = self.heap.apply2(Combinator::Minus.into(), $1, $3);
+      }
+    | top_level_pattern_atom InfixName top_level_pattern_arithmetic {
         $$ = self.heap.apply2($2, $1, $3);
       }
     | top_level_pattern_atom InfixCName top_level_pattern_arithmetic {

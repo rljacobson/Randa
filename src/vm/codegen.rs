@@ -25,9 +25,10 @@ pub(super) struct CodegenBoundaryInputs {
 }
 
 impl CodegenBoundaryInputs {
-    /// Captures the committed load-time substrate the partial codegen boundary reads.
-    /// This exists so the codegen subsystem owns its input surface instead of re-reading phase state ad hoc from `load.rs`.
-    /// The invariant is that codegen only sees committed file-graph state and post-typecheck unresolved-name state for the active load cycle.
+    /// Captures the committed load-time substrate the partial codegen boundary reads. This exists
+    /// so the codegen subsystem owns its input surface instead of re-reading phase state ad hoc
+    /// from `load.rs`. The invariant is that codegen only sees committed file-graph state and
+    /// post-typecheck unresolved-name state for the active load cycle.
     pub(super) fn from_vm(vm: &VM) -> Self {
         Self {
             files: vm.files,
@@ -482,9 +483,11 @@ fn constructor_template_value(heap: &Heap, template: Value) -> Option<Value> {
     }
 }
 
-/// Lowers one active committed binder/template against one lowered expression using the current Miranda-shaped subset.
-/// This exists so codegen owns the active lambda-binder family in one place instead of scattering template cases through the `Tag::Lambda` branch.
-/// The invariant is that simple binders use bracket abstraction, constant/structural patterns use `MATCH`/`MATCHINT`/`U`/`U_`, constructor applications use `Ug`, and canonical `n+k` uses `ATLEAST`.
+/// Lowers one active committed binder/template against one lowered expression using the current
+/// Miranda-shaped subset. This exists so codegen owns the active lambda-binder family in one place
+/// instead of scattering template cases through the `Tag::Lambda` branch. The invariant is that
+/// simple binders use bracket abstraction, constant/structural patterns use `MATCH` / `MATCHINT` /
+/// `U` / `U_`, constructor applications use `Ug`, and canonical `n+k` uses `ATLEAST`.
 fn abstract_template_from_expression(heap: &mut Heap, template: Value, expression: Value) -> Value {
     if let Some(constructor_value) = constructor_template_value(heap, template) {
         return heap.apply2(Combinator::Ug.into(), constructor_value, expression);

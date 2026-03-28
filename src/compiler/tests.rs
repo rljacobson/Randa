@@ -1422,6 +1422,27 @@ fn parser_parses_negative_integer_literal_pattern_in_top_level_formals() {
 }
 
 #[test]
+fn parser_parses_unparenthesized_negative_integer_literal_pattern_in_top_level_formals() {
+    let (heap, result) = run_parser(
+        "unparenthesized_minus_pattern_form_substrate.m",
+        "sign -1 = 0\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success");
+    };
+    assert_eq!(payload.definitions.len(), 1);
+
+    let lambda_raw = payload.definitions[0].body;
+    assert_eq!(heap[lambda_raw].tag, Tag::Lambda);
+    let pattern_raw = heap[lambda_raw].head;
+    assert_eq!(heap[pattern_raw].tag, Tag::Cons);
+    let integer_raw = heap[pattern_raw].tail;
+    assert_eq!(heap[integer_raw].tag, Tag::Int);
+    assert_ne!(heap[integer_raw].head & SIGN_BIT_MASK, 0);
+}
+
+#[test]
 fn parser_parses_n_plus_k_pattern_in_top_level_formals() {
     let (heap, result) = run_parser("n_plus_k_pattern_form_substrate.m", "pred (x+1) = x\n");
 
@@ -1448,6 +1469,155 @@ fn parser_parses_n_plus_k_pattern_in_top_level_formals() {
 
     let body_identifier = IdentifierRecordRef::from_ref(heap[lambda_raw].tail);
     assert_eq!(body_identifier.get_name(&heap), "x");
+}
+
+#[test]
+fn parser_parses_unparenthesized_n_plus_k_pattern_in_top_level_formals() {
+    let (heap, result) = run_parser(
+        "unparenthesized_n_plus_k_pattern_form_substrate.m",
+        "pred x+1 = x\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success");
+    };
+    assert_eq!(payload.definitions.len(), 1);
+
+    let lambda_raw = payload.definitions[0].body;
+    assert_eq!(heap[lambda_raw].tag, Tag::Lambda);
+    let pattern_raw = heap[lambda_raw].head;
+    assert_eq!(heap[pattern_raw].tag, Tag::Ap);
+
+    let operator_application_raw = heap[pattern_raw].head;
+    assert_eq!(heap[operator_application_raw].tag, Tag::Ap);
+    assert_eq!(
+        Value::from(heap[operator_application_raw].head),
+        Combinator::Plus.into()
+    );
+
+    let offset_raw = heap[operator_application_raw].tail;
+    assert_eq!(heap[offset_raw].tag, Tag::Int);
+    assert_eq!(heap[offset_raw].head & SIGN_BIT_MASK, 0);
+
+    let body_identifier = IdentifierRecordRef::from_ref(heap[lambda_raw].tail);
+    assert_eq!(body_identifier.get_name(&heap), "x");
+}
+
+#[test]
+fn parser_parses_unparenthesized_non_canonical_plus_pattern_in_top_level_formals() {
+    let (heap, result) = run_parser(
+        "unparenthesized_non_canonical_plus_pattern_form_substrate.m",
+        "f x+y = x\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success");
+    };
+    assert_eq!(payload.definitions.len(), 1);
+
+    let lambda_raw = payload.definitions[0].body;
+    assert_eq!(heap[lambda_raw].tag, Tag::Lambda);
+    let pattern_raw = heap[lambda_raw].head;
+    assert_eq!(heap[pattern_raw].tag, Tag::Ap);
+
+    let operator_application_raw = heap[pattern_raw].head;
+    assert_eq!(heap[operator_application_raw].tag, Tag::Ap);
+    assert_eq!(
+        Value::from(heap[operator_application_raw].head),
+        Combinator::Plus.into()
+    );
+
+    let left_identifier = IdentifierRecordRef::from_ref(heap[operator_application_raw].tail);
+    assert_eq!(left_identifier.get_name(&heap), "x");
+    let right_identifier = IdentifierRecordRef::from_ref(heap[pattern_raw].tail);
+    assert_eq!(right_identifier.get_name(&heap), "y");
+}
+
+#[test]
+fn parser_parses_unparenthesized_unary_minus_pattern_in_top_level_formals() {
+    let (heap, result) = run_parser(
+        "unparenthesized_unary_minus_pattern_form_substrate.m",
+        "f -x = x\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success");
+    };
+    assert_eq!(payload.definitions.len(), 1);
+
+    let lambda_raw = payload.definitions[0].body;
+    assert_eq!(heap[lambda_raw].tag, Tag::Lambda);
+    let pattern_raw = heap[lambda_raw].head;
+    assert_eq!(heap[pattern_raw].tag, Tag::Ap);
+    assert_eq!(Value::from(heap[pattern_raw].head), Combinator::Minus.into());
+
+    let operand_identifier = IdentifierRecordRef::from_ref(heap[pattern_raw].tail);
+    assert_eq!(operand_identifier.get_name(&heap), "x");
+}
+
+#[test]
+fn parser_parses_unparenthesized_binary_minus_pattern_in_top_level_formals() {
+    let (heap, result) = run_parser(
+        "unparenthesized_binary_minus_pattern_form_substrate.m",
+        "f x-y = y\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success");
+    };
+    assert_eq!(payload.definitions.len(), 1);
+
+    let lambda_raw = payload.definitions[0].body;
+    assert_eq!(heap[lambda_raw].tag, Tag::Lambda);
+    let pattern_raw = heap[lambda_raw].head;
+    assert_eq!(heap[pattern_raw].tag, Tag::Ap);
+
+    let operator_application_raw = heap[pattern_raw].head;
+    assert_eq!(heap[operator_application_raw].tag, Tag::Ap);
+    assert_eq!(
+        Value::from(heap[operator_application_raw].head),
+        Combinator::Minus.into()
+    );
+
+    let left_identifier = IdentifierRecordRef::from_ref(heap[operator_application_raw].tail);
+    assert_eq!(left_identifier.get_name(&heap), "x");
+    let right_identifier = IdentifierRecordRef::from_ref(heap[pattern_raw].tail);
+    assert_eq!(right_identifier.get_name(&heap), "y");
+}
+
+#[test]
+fn parser_parses_unparenthesized_application_headed_plus_pattern_in_top_level_formals() {
+    let (heap, result) = run_parser(
+        "unparenthesized_application_headed_plus_pattern_form_substrate.m",
+        "f g x+y = x\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success");
+    };
+    assert_eq!(payload.definitions.len(), 1);
+
+    let lambda_raw = payload.definitions[0].body;
+    assert_eq!(heap[lambda_raw].tag, Tag::Lambda);
+    let pattern_raw = heap[lambda_raw].head;
+    assert_eq!(heap[pattern_raw].tag, Tag::Ap);
+
+    let operator_application_raw = heap[pattern_raw].head;
+    assert_eq!(heap[operator_application_raw].tag, Tag::Ap);
+    assert_eq!(
+        Value::from(heap[operator_application_raw].head),
+        Combinator::Plus.into()
+    );
+
+    let left_operand_raw = heap[operator_application_raw].tail;
+    assert_eq!(heap[left_operand_raw].tag, Tag::Ap);
+    let left_head_identifier = IdentifierRecordRef::from_ref(heap[left_operand_raw].head);
+    assert_eq!(left_head_identifier.get_name(&heap), "g");
+    let left_argument_identifier = IdentifierRecordRef::from_ref(heap[left_operand_raw].tail);
+    assert_eq!(left_argument_identifier.get_name(&heap), "x");
+
+    let right_identifier = IdentifierRecordRef::from_ref(heap[pattern_raw].tail);
+    assert_eq!(right_identifier.get_name(&heap), "y");
 }
 
 #[test]
