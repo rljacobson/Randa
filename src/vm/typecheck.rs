@@ -335,6 +335,119 @@ fn collect_formal_pattern_issues(
                 non_identifier_application_heads_in_formals,
             );
         }
+        Tag::Tries => {
+            let mut alternatives: Value = heap[raw_reference].tail.into();
+            while RawValue::from(alternatives) >= ATOM_LIMIT
+                && heap[RawValue::from(alternatives)].tag == Tag::Cons
+            {
+                let alternatives_ref = RawValue::from(alternatives);
+                collect_formal_pattern_issues(
+                    heap,
+                    heap[alternatives_ref].head.into(),
+                    undeclared_constructors_in_formals,
+                    constructor_arity_mismatch_in_formals,
+                    non_canonical_plus_patterns_in_formals,
+                    unary_minus_patterns_in_formals,
+                    malformed_plus_applications_in_formals,
+                    malformed_minus_applications_in_formals,
+                    invalid_successor_patterns_in_formals,
+                    value_head_applications_in_formals,
+                    non_identifier_application_heads_in_formals,
+                );
+                alternatives = heap[alternatives_ref].tail.into();
+            }
+        }
+        Tag::Let => {
+            let definition = DefinitionRef::from_ref(heap[raw_reference].head);
+            collect_formal_pattern_issues_in_pattern(
+                heap,
+                definition.lhs_value(heap),
+                undeclared_constructors_in_formals,
+                constructor_arity_mismatch_in_formals,
+                non_canonical_plus_patterns_in_formals,
+                unary_minus_patterns_in_formals,
+                malformed_plus_applications_in_formals,
+                malformed_minus_applications_in_formals,
+                invalid_successor_patterns_in_formals,
+                value_head_applications_in_formals,
+                non_identifier_application_heads_in_formals,
+            );
+            collect_formal_pattern_issues(
+                heap,
+                definition.body_value(heap),
+                undeclared_constructors_in_formals,
+                constructor_arity_mismatch_in_formals,
+                non_canonical_plus_patterns_in_formals,
+                unary_minus_patterns_in_formals,
+                malformed_plus_applications_in_formals,
+                malformed_minus_applications_in_formals,
+                invalid_successor_patterns_in_formals,
+                value_head_applications_in_formals,
+                non_identifier_application_heads_in_formals,
+            );
+            collect_formal_pattern_issues(
+                heap,
+                heap[raw_reference].tail.into(),
+                undeclared_constructors_in_formals,
+                constructor_arity_mismatch_in_formals,
+                non_canonical_plus_patterns_in_formals,
+                unary_minus_patterns_in_formals,
+                malformed_plus_applications_in_formals,
+                malformed_minus_applications_in_formals,
+                invalid_successor_patterns_in_formals,
+                value_head_applications_in_formals,
+                non_identifier_application_heads_in_formals,
+            );
+        }
+        Tag::LetRec => {
+            let mut definitions: Value = heap[raw_reference].head.into();
+            while RawValue::from(definitions) >= ATOM_LIMIT
+                && heap[RawValue::from(definitions)].tag == Tag::Cons
+            {
+                let definitions_ref = RawValue::from(definitions);
+                let definition = DefinitionRef::from_ref(heap[definitions_ref].head);
+                collect_formal_pattern_issues_in_pattern(
+                    heap,
+                    definition.lhs_value(heap),
+                    undeclared_constructors_in_formals,
+                    constructor_arity_mismatch_in_formals,
+                    non_canonical_plus_patterns_in_formals,
+                    unary_minus_patterns_in_formals,
+                    malformed_plus_applications_in_formals,
+                    malformed_minus_applications_in_formals,
+                    invalid_successor_patterns_in_formals,
+                    value_head_applications_in_formals,
+                    non_identifier_application_heads_in_formals,
+                );
+                collect_formal_pattern_issues(
+                    heap,
+                    definition.body_value(heap),
+                    undeclared_constructors_in_formals,
+                    constructor_arity_mismatch_in_formals,
+                    non_canonical_plus_patterns_in_formals,
+                    unary_minus_patterns_in_formals,
+                    malformed_plus_applications_in_formals,
+                    malformed_minus_applications_in_formals,
+                    invalid_successor_patterns_in_formals,
+                    value_head_applications_in_formals,
+                    non_identifier_application_heads_in_formals,
+                );
+                definitions = heap[definitions_ref].tail.into();
+            }
+            collect_formal_pattern_issues(
+                heap,
+                heap[raw_reference].tail.into(),
+                undeclared_constructors_in_formals,
+                constructor_arity_mismatch_in_formals,
+                non_canonical_plus_patterns_in_formals,
+                unary_minus_patterns_in_formals,
+                malformed_plus_applications_in_formals,
+                malformed_minus_applications_in_formals,
+                invalid_successor_patterns_in_formals,
+                value_head_applications_in_formals,
+                non_identifier_application_heads_in_formals,
+            );
+        }
         _ => {}
     }
 }

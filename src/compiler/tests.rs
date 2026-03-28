@@ -223,6 +223,66 @@ fn parser_rejects_local_spec_under_top_level_where() {
 }
 
 #[test]
+fn parser_parses_top_level_where_with_local_cons_pattern_helper() {
+    let (heap, result) = run_parser(
+        "top_level_where_local_cons_pattern_helper.m",
+        "f xs = g xs where g (x:rest) = x\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success, got {result:?}");
+    };
+    let outer_lambda_raw = payload.definitions[0].body;
+    assert_eq!(heap[outer_lambda_raw].tag, Tag::Lambda);
+    let letrec_raw = heap[outer_lambda_raw].tail;
+    assert_eq!(heap[letrec_raw].tag, Tag::LetRec);
+    let definitions_raw = heap[letrec_raw].head;
+    let local_definition = DefinitionRef::from_ref(heap[definitions_raw].head);
+    let local_body_raw = RawValue::from(local_definition.body_value(&heap));
+    assert_eq!(heap[local_body_raw].tag, Tag::Tries);
+    let local_alternatives_raw = heap[local_body_raw].tail;
+    let local_labeled_body_raw = heap[local_alternatives_raw].head;
+    assert_eq!(heap[local_labeled_body_raw].tag, Tag::Label);
+    let local_lambda_raw = heap[local_labeled_body_raw].tail;
+    assert_eq!(heap[local_lambda_raw].tag, Tag::Lambda);
+    let local_pattern_raw = heap[local_lambda_raw].head;
+    assert_eq!(heap[local_pattern_raw].tag, Tag::Cons);
+}
+
+#[test]
+fn parser_parses_top_level_where_with_local_n_plus_k_helper() {
+    let (heap, result) = run_parser(
+        "top_level_where_local_n_plus_k_helper.m",
+        "f x = g x where g (y+1) = y\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success, got {result:?}");
+    };
+    let outer_lambda_raw = payload.definitions[0].body;
+    assert_eq!(heap[outer_lambda_raw].tag, Tag::Lambda);
+    let letrec_raw = heap[outer_lambda_raw].tail;
+    assert_eq!(heap[letrec_raw].tag, Tag::LetRec);
+    let definitions_raw = heap[letrec_raw].head;
+    let local_definition = DefinitionRef::from_ref(heap[definitions_raw].head);
+    let local_body_raw = RawValue::from(local_definition.body_value(&heap));
+    assert_eq!(heap[local_body_raw].tag, Tag::Tries);
+    let local_alternatives_raw = heap[local_body_raw].tail;
+    let local_labeled_body_raw = heap[local_alternatives_raw].head;
+    assert_eq!(heap[local_labeled_body_raw].tag, Tag::Label);
+    let local_lambda_raw = heap[local_labeled_body_raw].tail;
+    assert_eq!(heap[local_lambda_raw].tag, Tag::Lambda);
+    let successor_raw = heap[local_lambda_raw].head;
+    assert_eq!(heap[successor_raw].tag, Tag::Ap);
+    let operator_application_raw = heap[successor_raw].head;
+    assert_eq!(heap[operator_application_raw].tag, Tag::Ap);
+    assert_eq!(
+        Value::from(heap[operator_application_raw].head),
+        Combinator::Plus.into()
+    );
+}
+
+#[test]
 fn parser_parses_top_level_cons_pattern_form() {
     let (heap, result) = run_parser("cons_pattern_form_substrate.m", "head (x:xs) = x\n");
 

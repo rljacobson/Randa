@@ -599,7 +599,7 @@ top_level_local_definitions:
     ;
 
 top_level_local_definition:
-    top_level_definition_lhs act2 top_level_definition_anchor Equal rhs {
+    v act2 top_level_definition_anchor Equal rhs {
         let (lowered_lhs, lowered_body) = self.heap.lower_function_form_lambdas($1, $5);
         let labeled_body = self.heap.label_ref($3, lowered_body);
         $$ = DefinitionRef::new(&mut self.heap, lowered_lhs, Type::Undefined.into(), labeled_body).into();
@@ -2361,23 +2361,26 @@ v:
 
 v1:
     v1 Plus Constant  /* n+k pattern */ {
-        let constant_raw: RawValue = $3.into();
+        let inner = $1;
+        let constant = $3;
+        let constant_raw: RawValue = constant.into();
         if constant_raw < ATOM_LIMIT
           || self.heap[constant_raw].tag != Tag::Int
           || (self.heap[constant_raw].head & SIGN_BIT_MASK) != 0
         {
           self.syntax("inappropriate use of \"+\" in pattern\n");
         }
-        $$ = self.heap.apply2(Combinator::Plus.into(), $3, $1);
+        $$ = self.heap.apply2(Combinator::Plus.into(), constant, inner);
       }
     | Minus Constant {
-        let constant_raw: RawValue = $2.into();
+        let constant = $2;
+        let constant_raw: RawValue = constant.into();
         if constant_raw >= ATOM_LIMIT && self.heap[constant_raw].tag == Tag::Int {
           let negated = IntegerRef::from_ref(constant_raw).negate(self.heap);
           $$ = self.heap.cons_ref(Token::Constant.into(), negated.into());
         } else {
           self.syntax("inappropriate use of \"-\" in pattern\n");
-          $$ = self.heap.cons_ref(Token::Constant.into(), $2);
+          $$ = self.heap.cons_ref(Token::Constant.into(), constant);
         }
       }
     | v2 InfixName v1 { $$ = self.heap.apply2($2, $1, $3); }
@@ -2425,13 +2428,14 @@ v3:
           $$ = identifier;
         }
       }
-    | ConstructorName
+    | ConstructorName { $$ = $1; }
     | Constant {
-        let constant_raw: RawValue = $1.into();
+        let constant = $1;
+        let constant_raw: RawValue = constant.into();
         if constant_raw >= ATOM_LIMIT && self.heap[constant_raw].tag == Tag::Double {
           self.syntax("use of floating point literal in pattern\n");
         }
-        $$ = self.heap.cons_ref(Token::Constant.into(), $1);
+        $$ = self.heap.cons_ref(Token::Constant.into(), constant);
       }
     | OpenBracket CloseBracket { $$ = self.heap.nill; }
     | OpenBracket vlist CloseBracket {

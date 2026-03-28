@@ -3105,6 +3105,86 @@ fn load_file_reports_undefined_name_inside_nested_local_where() {
 }
 
 #[test]
+fn load_file_accepts_top_level_where_with_local_cons_pattern_helper() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("top_level_where_local_cons_pattern_helper.m");
+    std::fs::write(&source_path, "f xs = g xs where g (x:rest) = x\n")
+        .expect("failed to write source test file");
+
+    let result = vm.load_file(&source_path.to_string_lossy());
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+}
+
+#[test]
+fn load_file_accepts_top_level_where_with_local_n_plus_k_helper() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("top_level_where_local_n_plus_k_helper.m");
+    std::fs::write(&source_path, "f x = g x where g (y+1) = y\n")
+        .expect("failed to write source test file");
+
+    let result = vm.load_file(&source_path.to_string_lossy());
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+}
+
+#[test]
+fn load_file_accepts_grouped_local_helper_mixing_pattern_and_identifier_equations() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("top_level_where_grouped_local_pattern_helper.m");
+    std::fs::write(&source_path, "f xs = g xs where g (x:rest) = x; g y = y\n")
+        .expect("failed to write source test file");
+
+    let result = vm.load_file(&source_path.to_string_lossy());
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+}
+
+#[test]
+fn load_file_rejects_undeclared_constructor_in_local_pattern_under_top_level_where() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("top_level_where_local_undeclared_constructor_pattern.m");
+    std::fs::write(&source_path, "f = g 0 where g (Nope x) = x\n")
+        .expect("failed to write source test file");
+
+    let result = vm.load_file(&source_path.to_string_lossy());
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::UndeclaredConstructorsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
+fn load_file_reports_local_pattern_error_before_undefined_name_under_top_level_where() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("top_level_where_local_pattern_precedes_undefined_name.m");
+    std::fs::write(&source_path, "f = g 0 where g (((x:xs)+1)) = missing\n")
+        .expect("failed to write source test file");
+
+    let result = vm.load_file(&source_path.to_string_lossy());
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::InvalidSuccessorPatternsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
 fn load_file_typechecks_include_target_before_parent_commit() {
     let mut vm = VM::new();
     vm.initializing = false;
@@ -5054,6 +5134,117 @@ fn typecheck_phase_binary_minus_pattern_still_binds_both_operands() {
     assert!(matches!(
         &result.failure,
         Some(TypecheckError::MalformedMinusApplicationsInFormals { count: 1 })
+    ));
+    assert!(result.undefined_names.is_empty());
+}
+
+#[test]
+fn typecheck_phase_rejects_undeclared_constructor_in_local_pattern_definition() {
+    let mut vm = VM::new();
+
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("local_pattern_undeclared_constructor.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        ConsList::EMPTY,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+
+    let f = vm.heap.make_empty_identifier("f");
+    let nope = vm.heap.make_empty_identifier("Nope");
+    let x = vm.heap.make_empty_identifier("x");
+    let local_pattern = vm.heap.apply_ref(nope.into(), x.into());
+    let local_definition = DefinitionRef::new(&mut vm.heap, local_pattern, Type::Undefined.into(), x.into());
+    let definitions = vm.heap.cons_ref(local_definition.into(), NIL);
+    let letrec_body = vm.heap.letrec_ref(definitions, x.into());
+    f.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(letrec_body));
+    current_file.push_item_onto_definienda(&mut vm.heap, f);
+
+    let inputs = typecheck::TypecheckBoundaryInputs::from_vm(&vm);
+    let result = typecheck::run_partial_typecheck(&mut vm.heap, inputs);
+
+    assert!(matches!(
+        &result.failure,
+        Some(TypecheckError::UndeclaredConstructorsInFormals { count: 1 })
+    ));
+    assert_eq!(result.undefined_names.len(&vm.heap), 1);
+}
+
+#[test]
+fn typecheck_phase_rejects_invalid_successor_pattern_in_local_definition_and_preserves_binding() {
+    let mut vm = VM::new();
+
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("local_pattern_invalid_successor.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        ConsList::EMPTY,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+
+    let f = vm.heap.make_empty_identifier("f");
+    let x = vm.heap.make_empty_identifier("x");
+    let xs = vm.heap.make_empty_identifier("xs");
+    let one = IntegerRef::from_i64(&mut vm.heap, 1);
+    let inner_pattern = vm.heap.cons_ref(x.into(), xs.into());
+    let local_pattern = vm
+        .heap
+        .apply2(Combinator::Plus.into(), one.into(), inner_pattern);
+    let local_definition = DefinitionRef::new(&mut vm.heap, local_pattern, Type::Undefined.into(), xs.into());
+    let definitions = vm.heap.cons_ref(local_definition.into(), NIL);
+    let letrec_body = vm.heap.letrec_ref(definitions, xs.into());
+    f.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(letrec_body));
+    current_file.push_item_onto_definienda(&mut vm.heap, f);
+
+    let inputs = typecheck::TypecheckBoundaryInputs::from_vm(&vm);
+    let result = typecheck::run_partial_typecheck(&mut vm.heap, inputs);
+
+    assert!(matches!(
+        &result.failure,
+        Some(TypecheckError::InvalidSuccessorPatternsInFormals { count: 1 })
+    ));
+    assert!(result.undefined_names.is_empty());
+}
+
+#[test]
+fn typecheck_phase_rejects_malformed_plus_application_in_local_definition_and_preserves_binding() {
+    let mut vm = VM::new();
+
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("local_pattern_malformed_plus.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        ConsList::EMPTY,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+
+    let f = vm.heap.make_empty_identifier("f");
+    let x = vm.heap.make_empty_identifier("x");
+    let y = vm.heap.make_empty_identifier("y");
+    let one = IntegerRef::from_i64(&mut vm.heap, 1);
+    let partial_pattern = vm.heap.apply2(Combinator::Plus.into(), one.into(), x.into());
+    let local_pattern = vm.heap.apply_ref(partial_pattern, y.into());
+    let local_definition = DefinitionRef::new(&mut vm.heap, local_pattern, Type::Undefined.into(), y.into());
+    let definitions = vm.heap.cons_ref(local_definition.into(), NIL);
+    let letrec_body = vm.heap.letrec_ref(definitions, y.into());
+    f.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(letrec_body));
+    current_file.push_item_onto_definienda(&mut vm.heap, f);
+
+    let inputs = typecheck::TypecheckBoundaryInputs::from_vm(&vm);
+    let result = typecheck::run_partial_typecheck(&mut vm.heap, inputs);
+
+    assert!(matches!(
+        &result.failure,
+        Some(TypecheckError::MalformedPlusApplicationsInFormals { count: 1 })
     ));
     assert!(result.undefined_names.is_empty());
 }
