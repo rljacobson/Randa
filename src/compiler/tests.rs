@@ -1303,6 +1303,107 @@ fn parser_rejects_floating_point_literal_pattern_in_top_level_formals() {
 }
 
 #[test]
+fn parser_parses_non_canonical_plus_pattern_in_top_level_formals() {
+    let (heap, result) = run_parser("non_canonical_plus_pattern_form_substrate.m", "sumlike (x+y) = x\n");
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success");
+    };
+    assert_eq!(payload.definitions.len(), 1);
+
+    let lambda_raw = payload.definitions[0].body;
+    assert_eq!(heap[lambda_raw].tag, Tag::Lambda);
+    let pattern_raw = heap[lambda_raw].head;
+    assert_eq!(heap[pattern_raw].tag, Tag::Ap);
+
+    let operator_application_raw = heap[pattern_raw].head;
+    assert_eq!(heap[operator_application_raw].tag, Tag::Ap);
+    assert_eq!(
+        Value::from(heap[operator_application_raw].head),
+        Combinator::Plus.into()
+    );
+
+    let left_identifier = IdentifierRecordRef::from_ref(heap[operator_application_raw].tail);
+    assert_eq!(left_identifier.get_name(&heap), "x");
+    let right_identifier = IdentifierRecordRef::from_ref(heap[pattern_raw].tail);
+    assert_eq!(right_identifier.get_name(&heap), "y");
+}
+
+#[test]
+fn parser_parses_unary_minus_pattern_in_top_level_formals() {
+    let (heap, result) = run_parser("unary_minus_pattern_form_substrate.m", "negateMatch (-x) = x\n");
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success");
+    };
+    assert_eq!(payload.definitions.len(), 1);
+
+    let lambda_raw = payload.definitions[0].body;
+    assert_eq!(heap[lambda_raw].tag, Tag::Lambda);
+    let pattern_raw = heap[lambda_raw].head;
+    assert_eq!(heap[pattern_raw].tag, Tag::Ap);
+    assert_eq!(Value::from(heap[pattern_raw].head), Combinator::Minus.into());
+
+    let operand_identifier = IdentifierRecordRef::from_ref(heap[pattern_raw].tail);
+    assert_eq!(operand_identifier.get_name(&heap), "x");
+}
+
+#[test]
+fn parser_parses_top_level_where_with_local_arithmetic_patterns() {
+    let (heap, result) = run_parser(
+        "top_level_where_local_arithmetic_patterns.m",
+        "f x = g x where g (a+b) = a; h (-y) = y\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success, got {result:?}");
+    };
+    assert_eq!(payload.definitions.len(), 1);
+
+    let outer_lambda_raw = payload.definitions[0].body;
+    assert_eq!(heap[outer_lambda_raw].tag, Tag::Lambda);
+    let letrec_raw = heap[outer_lambda_raw].tail;
+    assert_eq!(heap[letrec_raw].tag, Tag::LetRec);
+    let definitions_raw = heap[letrec_raw].head;
+    let first_definition = DefinitionRef::from_ref(heap[definitions_raw].head);
+    let second_definition = DefinitionRef::from_ref(heap[heap[definitions_raw].tail].head);
+
+    let first_name = IdentifierRecordRef::from_ref(first_definition.lhs_value(&heap).into()).get_name(&heap);
+    let second_name = IdentifierRecordRef::from_ref(second_definition.lhs_value(&heap).into()).get_name(&heap);
+
+    let (plus_definition, minus_definition) = if first_name == "g" {
+        (first_definition, second_definition)
+    } else {
+        assert_eq!(first_name, "h");
+        assert_eq!(second_name, "g");
+        (second_definition, first_definition)
+    };
+
+    let plus_body_raw = RawValue::from(plus_definition.body_value(&heap));
+    assert_eq!(heap[plus_body_raw].tag, Tag::Tries);
+    let plus_alternatives_raw = heap[plus_body_raw].tail;
+    let plus_labeled_body_raw = heap[plus_alternatives_raw].head;
+    let plus_lambda_raw = heap[plus_labeled_body_raw].tail;
+    let plus_pattern_raw = heap[plus_lambda_raw].head;
+    assert_eq!(heap[plus_pattern_raw].tag, Tag::Ap);
+    let plus_operator_application_raw = heap[plus_pattern_raw].head;
+    assert_eq!(heap[plus_operator_application_raw].tag, Tag::Ap);
+    assert_eq!(
+        Value::from(heap[plus_operator_application_raw].head),
+        Combinator::Plus.into()
+    );
+
+    let minus_body_raw = RawValue::from(minus_definition.body_value(&heap));
+    assert_eq!(heap[minus_body_raw].tag, Tag::Tries);
+    let minus_alternatives_raw = heap[minus_body_raw].tail;
+    let minus_labeled_body_raw = heap[minus_alternatives_raw].head;
+    let minus_lambda_raw = heap[minus_labeled_body_raw].tail;
+    let minus_pattern_raw = heap[minus_lambda_raw].head;
+    assert_eq!(heap[minus_pattern_raw].tag, Tag::Ap);
+    assert_eq!(Value::from(heap[minus_pattern_raw].head), Combinator::Minus.into());
+}
+
+#[test]
 fn parser_parses_negative_integer_literal_pattern_in_top_level_formals() {
     let (heap, result) = run_parser("minus_pattern_form_substrate.m", "sign (-1) = 0\n");
 

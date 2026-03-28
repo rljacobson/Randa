@@ -786,6 +786,9 @@ top_level_pattern_arithmetic:
         }
         $$ = self.heap.apply2(Combinator::Plus.into(), constant, inner);
       }
+    | top_level_pattern_arithmetic Plus top_level_pattern_non_constant_application_or_atom {
+        $$ = self.heap.apply2(Combinator::Plus.into(), $1, $3);
+      }
     | Minus Constant {
         let constant = $2;
         let constant_raw: RawValue = constant.into();
@@ -800,6 +803,12 @@ top_level_pattern_arithmetic:
           $$ = self.heap.cons_ref(Token::Constant.into(), constant);
         }
       }
+    | Minus top_level_pattern_non_constant_application_or_atom {
+        $$ = self.heap.apply_ref(Combinator::Minus.into(), $2);
+      }
+    | top_level_pattern_arithmetic Minus top_level_pattern_non_constant_application_or_atom {
+        $$ = self.heap.apply2(Combinator::Minus.into(), $1, $3);
+      }
     | top_level_pattern_application_or_atom InfixName top_level_pattern_arithmetic {
         $$ = self.heap.apply2($2, $1, $3);
       }
@@ -812,6 +821,11 @@ top_level_pattern_arithmetic:
 top_level_pattern_application_or_atom:
     top_level_pattern_application { $$ = $1; }
     | top_level_pattern_atom { $$ = $1; }
+    ;
+
+top_level_pattern_non_constant_application_or_atom:
+    top_level_pattern_application { $$ = $1; }
+    | top_level_pattern_non_constant_atom { $$ = $1; }
     ;
 
 top_level_pattern_tuple_tail:
@@ -859,6 +873,31 @@ top_level_pattern_atom:
         }
         $$ = self.heap.cons_ref(Token::Constant.into(), constant);
       }
+    | OpenBracket CloseBracket { $$ = self.heap.nill; }
+    | OpenBracket top_level_pattern_list CloseBracket {
+        let mut x: RawValue = $2.into();
+        let mut y = self.heap.nill;
+        while x != NIL_RAW {
+          y = self.heap.cons_ref(self.heap[x].head.into(), y);
+          x = self.heap[x].tail;
+        }
+        $$ = y;
+      }
+    | OpenParenthesis CloseParenthesis { $$ = self.vm.void_tuple(); }
+    | OpenParenthesis top_level_pattern CloseParenthesis { $$ = $2; }
+    ;
+
+top_level_pattern_non_constant_atom:
+    Name {
+        let identifier = $1;
+        if self.used_identifiers.contains(self.heap, identifier) {
+          $$ = self.heap.cons_ref(Token::Constant.into(), identifier);
+        } else {
+          self.used_identifiers.push(self.heap, identifier);
+          $$ = identifier;
+        }
+      }
+    | ConstructorName { $$ = $1; }
     | OpenBracket CloseBracket { $$ = self.heap.nill; }
     | OpenBracket top_level_pattern_list CloseBracket {
         let mut x: RawValue = $2.into();
@@ -2372,6 +2411,7 @@ v1:
         }
         $$ = self.heap.apply2(Combinator::Plus.into(), constant, inner);
       }
+    | v1 Plus v_non_constant_application_or_atom { $$ = self.heap.apply2(Combinator::Plus.into(), $1, $3); }
     | Minus Constant {
         let constant = $2;
         let constant_raw: RawValue = constant.into();
@@ -2383,9 +2423,16 @@ v1:
           $$ = self.heap.cons_ref(Token::Constant.into(), constant);
         }
       }
+    | Minus v_non_constant_application_or_atom { $$ = self.heap.apply_ref(Combinator::Minus.into(), $2); }
+    | v1 Minus v_non_constant_application_or_atom { $$ = self.heap.apply2(Combinator::Minus.into(), $1, $3); }
     | v2 InfixName v1 { $$ = self.heap.apply2($2, $1, $3); }
     | v2 InfixCName v1 { $$ = self.heap.apply2($2, $1, $3); }
     | v2 { $$ = $1; }
+
+v_non_constant_application_or_atom:
+    v2 { $$ = $1; }
+    | v_non_constant_atom { $$ = $1; }
+    ;
 
 v2:
     v3 { $$ = $1; }
@@ -2437,6 +2484,53 @@ v3:
         }
         $$ = self.heap.cons_ref(Token::Constant.into(), constant);
       }
+    | OpenBracket CloseBracket { $$ = self.heap.nill; }
+    | OpenBracket vlist CloseBracket {
+        let mut x: RawValue = $2.into();
+        let mut y = self.heap.nill;
+        while x != NIL_RAW {
+          y = self.heap.cons_ref(self.heap[x].head.into(), y);
+          x = self.heap[x].tail;
+        }
+        $$ = y;
+      }
+    | OpenParenthesis CloseParenthesis { $$ = self.vm.void_tuple(); }
+    | OpenParenthesis v CloseParenthesis { $$ = $2; }
+    | OpenParenthesis v Comma vlist CloseParenthesis {
+        /* representation of the tuple (a1, ..., an) is
+             self.heap.cons_ref(a1, self.heap.cons_ref(a2, ...pair(a(n-1), an))) */
+        let tuple_tail_raw: RawValue = $4.into();
+        if self.heap[tuple_tail_raw].tail == NIL_RAW {
+          $$ = self.heap.pair_ref($2, self.heap[tuple_tail_raw].head.into());
+        } else {
+          let second_pair = self.heap[tuple_tail_raw].tail;
+          $$ = self.heap.pair_ref(self.heap[second_pair].head.into(), self.heap[tuple_tail_raw].head.into());
+          let mut rest = self.heap[second_pair].tail;
+          while rest != NIL_RAW {
+            $$ = self.heap.cons_ref(self.heap[rest].head.into(), $$);
+            rest = self.heap[rest].tail;
+          }
+          $$ = self.heap.cons_ref($2, $$);
+        }
+
+      }
+    ;
+
+v_non_constant_atom:
+    Name {
+        let identifier = $1;
+        if self.semantic_reduction_count != 0 {
+          // `%bnf` grammar-variable legality remains deferred with `%bnf` itself.
+          self.syntax("illegal use of $num symbol\n");
+        }
+        if self.used_identifiers.contains(self.heap, identifier) {
+          $$ = self.heap.cons_ref(Token::Constant.into(), identifier);
+        } else {
+          self.used_identifiers.push(self.heap, identifier);
+          $$ = identifier;
+        }
+      }
+    | ConstructorName { $$ = $1; }
     | OpenBracket CloseBracket { $$ = self.heap.nill; }
     | OpenBracket vlist CloseBracket {
         let mut x: RawValue = $2.into();

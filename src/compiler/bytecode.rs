@@ -153,6 +153,5 @@ mod tests {
         for code in bc {
             println!("{}: {}", code, code.code()); // encode and print string,
         }
-        // println!("{{{}}}", bc.join(", "));
     }
 }
