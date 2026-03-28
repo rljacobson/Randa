@@ -2922,6 +2922,36 @@ fn load_file_routes_include_type_actual_bindings_through_bindparams() {
 }
 
 #[test]
+fn load_file_include_typename_audit_allows_parameterized_type_binding() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let include_path = unique_test_path("parameterized_include_typename_audit_target.m");
+    std::fs::write(&include_path, "%free { t :: type }\nid :: t -> t\nid x = x\n")
+        .expect("failed to write include source test file");
+    let include_path_str = include_path.to_string_lossy().to_string();
+
+    let source_path = unique_test_path("parameterized_include_typename_audit_driver.m");
+    std::fs::write(
+        &source_path,
+        format!("%include \"{}\" {{ t == num }}\n", include_path_str),
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+    let id = vm.heap.get_identifier("id").expect("expected included id identifier");
+    assert_ne!(
+        id.get_value(&vm.heap)
+            .expect("expected lowered included id body")
+            .get_ref(),
+        RawValue::from(Combinator::Undef)
+    );
+}
+
+#[test]
 fn load_file_parameterized_include_missing_actual_binding_errors_before_commit() {
     let mut vm = VM::new();
     vm.initializing = false;
@@ -3468,6 +3498,154 @@ fn load_file_applies_include_suppress_modifier_to_materialized_definienda() {
 }
 
 #[test]
+fn load_file_rejects_include_suppress_algebraic_typename() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let include_path = unique_test_path("suppress_algebraic_typename_include_target.m");
+    std::fs::write(&include_path, "maybe * ::= Nothing | Just *\n")
+        .expect("failed to write include source test file");
+    let include_path_str = include_path.to_string_lossy().to_string();
+
+    let source_path = unique_test_path("suppress_algebraic_typename_driver.m");
+    std::fs::write(
+        &source_path,
+        format!("%include \"{}\" -maybe\n", include_path_str),
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::IncludeDirective(
+            IncludeDirectiveError::IllegalTypeNameSuppression { name }
+        )) if name == "maybe"
+    ));
+    assert_eq!(vm.files.len(&vm.heap), 1);
+}
+
+#[test]
+fn load_file_rejects_include_suppress_abstract_typename() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let include_path = unique_test_path("suppress_abstract_typename_include_target.m");
+    std::fs::write(
+        &include_path,
+        "abstype thing with showthing :: num\nthing == num\nshowthing = 0\n",
+    )
+    .expect("failed to write include source test file");
+    let include_path_str = include_path.to_string_lossy().to_string();
+
+    let source_path = unique_test_path("suppress_abstract_typename_driver.m");
+    std::fs::write(
+        &source_path,
+        format!("%include \"{}\" -thing\n", include_path_str),
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::IncludeDirective(
+            IncludeDirectiveError::IllegalTypeNameSuppression { name }
+        )) if name == "thing"
+    ));
+    assert_eq!(vm.files.len(&vm.heap), 1);
+}
+
+#[test]
+fn load_file_reports_missing_include_typename_after_synonym_suppression_in_value_spec() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let include_path = unique_test_path("missing_typename_value_spec_include_target.m");
+    std::fs::write(&include_path, "thing == num\nfoo :: thing\nfoo = 1\n")
+        .expect("failed to write include source test file");
+    let include_path_str = include_path.to_string_lossy().to_string();
+
+    let source_path = unique_test_path("missing_typename_value_spec_driver.m");
+    std::fs::write(
+        &source_path,
+        format!("%include \"{}\" -thing\n", include_path_str),
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::IncludeDirective(
+            IncludeDirectiveError::MissingVisibleTypeNames { names }
+        )) if names == vec!["thing"]
+    ));
+    assert_eq!(vm.files.len(&vm.heap), 1);
+}
+
+#[test]
+fn load_file_reports_missing_include_typename_after_synonym_suppression_in_type_decl() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let include_path = unique_test_path("missing_typename_type_decl_include_target.m");
+    std::fs::write(&include_path, "thing == num\nother == thing\n")
+        .expect("failed to write include source test file");
+    let include_path_str = include_path.to_string_lossy().to_string();
+
+    let source_path = unique_test_path("missing_typename_type_decl_driver.m");
+    std::fs::write(
+        &source_path,
+        format!("%include \"{}\" -thing\n", include_path_str),
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::IncludeDirective(
+            IncludeDirectiveError::MissingVisibleTypeNames { names }
+        )) if names == vec!["thing"]
+    ));
+    assert_eq!(vm.files.len(&vm.heap), 1);
+}
+
+#[test]
+fn load_file_reports_missing_include_typename_after_synonym_rename() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let include_path = unique_test_path("missing_typename_rename_include_target.m");
+    std::fs::write(&include_path, "thing == num\nfoo :: thing\nfoo = 1\n")
+        .expect("failed to write include source test file");
+    let include_path_str = include_path.to_string_lossy().to_string();
+
+    let source_path = unique_test_path("missing_typename_rename_driver.m");
+    std::fs::write(
+        &source_path,
+        format!("%include \"{}\" renamed / thing\n", include_path_str),
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::IncludeDirective(
+            IncludeDirectiveError::MissingVisibleTypeNames { names }
+        )) if names == vec!["thing"]
+    ));
+    assert_eq!(vm.files.len(&vm.heap), 1);
+}
+
+#[test]
 fn load_file_include_modifier_failure_leaves_no_authoritative_commit() {
     let mut vm = VM::new();
     vm.initializing = false;
@@ -3561,6 +3739,44 @@ fn load_file_nested_include_failure_leaves_no_authoritative_commit() {
             if path == missing_leaf_path_str
     ));
     assert_eq!(vm.files.len(&vm.heap), 1);
+    assert_eq!(vm.exported_identifiers, NIL);
+    assert_eq!(vm.export_paths, NIL);
+    assert_eq!(vm.export_embargoes, NIL);
+}
+
+#[test]
+fn load_file_nested_include_modifier_missing_typename_failure_leaves_no_authoritative_commit() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let leaf_path = unique_test_path("nested_typename_leaf.m");
+    std::fs::write(&leaf_path, "leaf = 1\n").expect("failed to write leaf include source test file");
+    let leaf_path_str = leaf_path.to_string_lossy().to_string();
+
+    let middle_path = unique_test_path("nested_typename_middle.m");
+    std::fs::write(
+        &middle_path,
+        format!("%include \"{}\"\nthing == num\nfoo :: thing\nfoo = 1\n", leaf_path_str),
+    )
+    .expect("failed to write middle include source test file");
+    let middle_path_str = middle_path.to_string_lossy().to_string();
+
+    let source_path = unique_test_path("nested_typename_driver.m");
+    std::fs::write(&source_path, format!("%include \"{}\" -thing\n", middle_path_str))
+        .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::IncludeDirective(
+            IncludeDirectiveError::MissingVisibleTypeNames { names }
+        )) if names == vec!["thing"]
+    ));
+    assert_eq!(vm.files.len(&vm.heap), 1);
+    let only_file = vm.files.head(&vm.heap).expect("expected source file anchor");
+    assert_eq!(only_file.get_file_name(&vm.heap), source_path_str);
     assert_eq!(vm.exported_identifiers, NIL);
     assert_eq!(vm.export_paths, NIL);
     assert_eq!(vm.export_embargoes, NIL);

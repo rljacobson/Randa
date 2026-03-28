@@ -86,6 +86,10 @@ pub enum IncludeDirectiveError {
     SyntaxErrorsPresent { path: String },
     #[error("Include modifier references a name not defined in included file: {name}")]
     ModifierTargetNotFound { name: String },
+    #[error("Illegal include suppression of typename: {name}")]
+    IllegalTypeNameSuppression { name: String },
+    #[error("Included graph still needs typenames not visible after modifier application: {names:?}")]
+    MissingVisibleTypeNames { names: Vec<String> },
     #[error("Include rename target already defined: {name}")]
     RenameDestinationClash { name: String },
     #[error("Included file defines repeated non-synonym types in one scope: {path} ({names:?})")]

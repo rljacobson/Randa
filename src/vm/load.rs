@@ -699,6 +699,21 @@ impl VM {
                                 }
                                 .into());
                             };
+
+                            let suppressed_identifier = rewritten_definienda[matching_index];
+                            let suppressed_kind = suppressed_identifier
+                                .get_value(&self.heap)
+                                .and_then(|value| value.typed_kind(&self.heap));
+                            if suppressed_identifier.get_type_expr(&self.heap).is_builtin_type(Type::Type)
+                                && suppressed_kind
+                                    .is_some_and(|kind| kind != IdentifierValueTypeKind::Synonym)
+                            {
+                                return Err(IncludeDirectiveError::IllegalTypeNameSuppression {
+                                    name: suppressed_name,
+                                }
+                                .into());
+                            }
+
                             rewritten_definienda.remove(matching_index);
                         }
                         ParserIncludeModifierPayload::Rename {
@@ -831,6 +846,21 @@ impl VM {
                     current_file.push_item_onto_definienda(&mut self.heap, definiendum);
                 }
             }
+
+            let mut include_free_type_identifiers = ConsList::EMPTY;
+            if let Some(top_level_payload) = parse_outcome.top_level_payload.as_ref() {
+                for free_binding in &top_level_payload.free_bindings {
+                    if free_binding.identifier.get_type_expr(&self.heap).is_builtin_type(Type::Type)
+                    {
+                        include_free_type_identifiers
+                            .insert_ordered(&mut self.heap, free_binding.identifier);
+                    }
+                }
+            }
+            self.audit_staged_include_graph_typename_visibility(
+                compiled_include_graph,
+                include_free_type_identifiers,
+            )?;
 
             Ok(compiled_include_graph)
         })();
@@ -1287,9 +1317,9 @@ impl VM {
         }
     }
 
-    /// Classifies one committed identifier into bereaved-warning exported-type and referenced-type sets.
-    /// This exists so bereaved analysis reuses one load-owned Miranda-shaped basis over current-file, export-closed, and `%free` identifiers instead of repeating synonym-vs-non-synonym type handling at each call site.
-    /// The invariant is that non-synonym type identifiers count as retained/exported typenames, while synonym rhs payloads and non-type datatypes contribute referenced typenames.
+    /// Classifies one committed identifier into retained-type and referenced-type sets.
+    /// This exists so bereaved analysis and staged-include typename audits reuse one load-owned basis over current-file, export-closed, and `%free` identifiers instead of repeating type-metadata walks at each call site.
+    /// The invariant is that visible typenames are retained, while datatype annotations, synonym rhs payloads, algebraic constructor fields, and abstract bases contribute referenced typenames.
     fn collect_bereaved_type_basis_for_identifier(
         &mut self,
         identifier: IdentifierRecordRef,
@@ -1306,19 +1336,59 @@ impl VM {
                 if retain_synonym_typenames {
                     exported_type_identifiers.insert_ordered(&mut self.heap, identifier);
                 }
-                if let Some(value) = identifier.get_value(&self.heap) {
-                    let IdentifierValueData::Typed { value_type, .. } = value.get_data(&self.heap) else {
-                        return;
-                    };
-                    self.collect_export_type_dependencies_from_type_expr(
-                        value_type.synonym_rhs_type_expr(&self.heap),
-                        referenced_type_identifiers,
-                    );
-                }
             } else {
                 exported_type_identifiers.insert_ordered(&mut self.heap, identifier);
             }
-            return;
+        }
+
+        if let Some(value) = identifier.get_value(&self.heap) {
+            let value_raw = value.get_ref();
+            if value_raw >= ATOM_LIMIT {
+                let IdentifierValueData::Typed { value_type, .. } = value.get_data(&self.heap) else {
+                    if !datatype.is_builtin_type(Type::Undefined) {
+                        self.collect_export_type_dependencies_from_type_expr(
+                            datatype,
+                            referenced_type_identifiers,
+                        );
+                    }
+                    return;
+                };
+
+                match value_type.get_identifier_value_type_kind(&self.heap) {
+                    IdentifierValueTypeKind::Synonym => {
+                        self.collect_export_type_dependencies_from_type_expr(
+                            value_type.synonym_rhs_type_expr(&self.heap),
+                            referenced_type_identifiers,
+                        );
+                    }
+                    IdentifierValueTypeKind::Algebraic => {
+                        if let Some(mut constructors) = value_type.algebraic_constructor_metadata(&self.heap)
+                        {
+                            while let Some(constructor) = constructors.pop(&self.heap) {
+                                let mut fields = constructor.fields(&self.heap);
+                                while let Some(field) = fields.pop(&self.heap) {
+                                    self.collect_export_type_dependencies_from_type_expr(
+                                        field.type_expr(&self.heap),
+                                        referenced_type_identifiers,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    IdentifierValueTypeKind::Abstract => {
+                        if let Some(basis) = value_type.abstract_basis(&self.heap) {
+                            let basis_type = TypeExprRef::new(basis);
+                            if !basis_type.is_builtin_type(Type::Undefined) {
+                                self.collect_export_type_dependencies_from_type_expr(
+                                    basis_type,
+                                    referenced_type_identifiers,
+                                );
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
         }
 
         if !datatype.is_builtin_type(Type::Undefined) {
@@ -1327,6 +1397,50 @@ impl VM {
                 referenced_type_identifiers,
             );
         }
+    }
+
+    /// Audits one staged include graph after modifier application and rejects typenames no longer visible in that graph.
+    /// This exists so include loading stops before commit when rename/suppress changes leave imported definitions or type metadata referring to hidden typenames.
+    /// The invariant is that every type identifier referenced by the staged graph is either still retained in the graph's visible type scope or the load fails before append.
+    fn audit_staged_include_graph_typename_visibility(
+        &mut self,
+        staged_include_graph: ConsList<FileRecord>,
+        mut include_free_type_identifiers: ConsList<IdentifierRecordRef>,
+    ) -> Result<(), IncludeDirectiveError> {
+        let mut retained_type_identifiers = ConsList::EMPTY;
+        let mut referenced_type_identifiers = ConsList::EMPTY;
+        let mut staged_files = staged_include_graph;
+        while let Some(file) = staged_files.pop(&self.heap) {
+            let mut definienda = file.get_definienda(&self.heap);
+            while let Some(identifier) = definienda.pop(&self.heap) {
+                self.collect_bereaved_type_basis_for_identifier(
+                    identifier,
+                    true,
+                    &mut retained_type_identifiers,
+                    &mut referenced_type_identifiers,
+                );
+            }
+        }
+
+        while let Some(identifier) = include_free_type_identifiers.pop(&self.heap) {
+            retained_type_identifiers.insert_ordered(&mut self.heap, identifier);
+        }
+
+        let mut missing_type_identifiers = referenced_type_identifiers
+            .difference(&mut self.heap, retained_type_identifiers);
+        if missing_type_identifiers.is_empty() {
+            return Ok(());
+        }
+
+        let mut names = Vec::new();
+        while let Some(identifier) = missing_type_identifiers.pop(&self.heap) {
+            let name = identifier.get_name(&self.heap);
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+
+        Err(IncludeDirectiveError::MissingVisibleTypeNames { names })
     }
 
     /// Applies export-closure gating after typecheck.
