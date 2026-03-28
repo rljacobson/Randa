@@ -836,7 +836,7 @@ fn collect_type_expression_issues(
 /// invariant is that constructor heads and wrapped constant/repeated-name leaves stay non-binding,
 /// while malformed active-subset applications and unsupported arithmetic forms still recurse
 /// through their interior pattern subtrees the way Miranda's pattern walkers do.
-fn collect_pattern_bound_identifiers(
+pub(super) fn collect_pattern_bound_identifiers(
     heap: &Heap,
     pattern: Value,
     bound_identifiers: &mut Vec<IdentifierRecordRef>,

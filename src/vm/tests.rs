@@ -3492,6 +3492,63 @@ fn load_file_accepts_grouped_local_helper_with_guarded_first_equation() {
 }
 
 #[test]
+fn load_file_accepts_grouped_local_helper_with_multiple_guarded_equations_and_final_plain_equation() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("grouped_local_multiple_guarded_equations.m");
+    std::fs::write(
+        &source_path,
+        "f x = g x where g y = y, if x = x; g z = z, if x = x; g w = w\n",
+    )
+    .expect("failed to write source test file");
+
+    let result = vm.load_file(&source_path.to_string_lossy());
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+}
+
+#[test]
+fn load_file_accepts_grouped_local_helper_with_terminal_otherwise_equation() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("grouped_local_terminal_otherwise_equation.m");
+    std::fs::write(&source_path, "f x = g x where g y = y, if x = x; g z = z, otherwise\n")
+        .expect("failed to write source test file");
+
+    let result = vm.load_file(&source_path.to_string_lossy());
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+}
+
+#[test]
+fn load_file_reports_grouped_local_case_after_terminal_otherwise() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("grouped_local_case_after_otherwise.m");
+    std::fs::write(&source_path, "f x = g x where g y = y, otherwise; g z = z\n")
+        .expect("failed to write source test file");
+
+    let result = vm.load_file(&source_path.to_string_lossy());
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+    assert_eq!(
+        vm.last_load_phase_trace,
+        vec![
+            "begin",
+            "parse",
+            "syntax-fallback",
+            "syntax-unload",
+            "syntax-dump-decision",
+            "dump-write",
+            "syntax-state-reset",
+        ]
+    );
+}
+
+#[test]
 fn load_file_accepts_grouped_local_helper_with_guarded_and_nested_local_family() {
     let mut vm = VM::new();
     vm.initializing = false;
@@ -6019,6 +6076,126 @@ fn export_closure_phase_preserves_embargo_filtering_after_explicit_validation() 
 }
 
 #[test]
+fn export_closure_phase_adds_constructors_for_exported_algebraic_typename() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("export_closure_adds_algebraic_constructors.m");
+    std::fs::write(
+        &source_path,
+        "maybe * ::= Nothing | Just *\n%export maybe\n",
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+    let exported = ConsList::<IdentifierRecordRef>::from_ref(vm.exported_identifiers.into());
+    let maybe = vm.heap.get_identifier("maybe").expect("expected maybe typename");
+    let nothing = vm.heap.get_identifier("Nothing").expect("expected Nothing constructor");
+    let just = vm.heap.get_identifier("Just").expect("expected Just constructor");
+    assert!(exported.contains(&vm.heap, maybe));
+    assert!(exported.contains(&vm.heap, nothing));
+    assert!(exported.contains(&vm.heap, just));
+}
+
+#[test]
+fn export_closure_phase_adds_same_load_definition_dependency() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("export_closure_definition_dependency.m");
+    std::fs::write(&source_path, "helper = 1\nentry = helper\n%export entry\n")
+        .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+    let exported = ConsList::<IdentifierRecordRef>::from_ref(vm.exported_identifiers.into());
+    let entry = vm.heap.get_identifier("entry").expect("expected entry identifier");
+    let helper = vm.heap.get_identifier("helper").expect("expected helper identifier");
+    assert!(exported.contains(&vm.heap, entry));
+    assert!(exported.contains(&vm.heap, helper));
+}
+
+#[test]
+fn export_closure_phase_path_expansion_adds_include_constructors_and_type_dependencies() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let include_path = unique_test_path("export_closure_include_target.m");
+    std::fs::write(
+        &include_path,
+        "thing == num\nmaybe ::= Nothing | Just thing\n",
+    )
+    .expect("failed to write include source test file");
+    let include_path_str = include_path.to_string_lossy().to_string();
+
+    let source_path = unique_test_path("export_closure_include_driver.m");
+    std::fs::write(
+        &source_path,
+        format!("%include \"{}\"\n%export \"{}\"\n", include_path_str, include_path_str),
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+    let exported = ConsList::<IdentifierRecordRef>::from_ref(vm.exported_identifiers.into());
+    let maybe = vm.heap.get_identifier("maybe").expect("expected maybe typename");
+    let nothing = vm.heap.get_identifier("Nothing").expect("expected Nothing constructor");
+    let just = vm.heap.get_identifier("Just").expect("expected Just constructor");
+    let thing = vm.heap.get_identifier("thing").expect("expected thing typename");
+    assert!(exported.contains(&vm.heap, maybe));
+    assert!(exported.contains(&vm.heap, nothing));
+    assert!(exported.contains(&vm.heap, just));
+    assert!(exported.contains(&vm.heap, thing));
+}
+
+#[test]
+fn export_closure_phase_embargo_filters_constructed_closure_members_after_closure() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("export_closure_embargoed_constructor_member.m");
+    std::fs::write(&source_path, "thing == num\nmaybe ::= Nothing | Just thing\n")
+        .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let load_result = vm.load_file(&source_path_str);
+    assert!(
+        load_result.is_ok(),
+        "result={load_result:?} diagnostics={:?}",
+        vm.parser_diagnostics
+    );
+
+    let payload = export_payload(
+        &mut vm,
+        &source_path_str,
+        1,
+        &["maybe"],
+        &[],
+        false,
+        &["Just", "thing"],
+    );
+    let result = vm.run_export_closure_phase_partial(Some(&payload), ConsList::EMPTY);
+
+    let committed = result.expect("expected embargoed constructor closure to succeed");
+    let exported = ConsList::<IdentifierRecordRef>::from_ref(committed.exported_identifiers.into());
+    let maybe = vm.heap.get_identifier("maybe").expect("expected maybe typename");
+    let nothing = vm.heap.get_identifier("Nothing").expect("expected Nothing constructor");
+    let just = vm.heap.get_identifier("Just").expect("expected Just constructor");
+    let thing = vm.heap.get_identifier("thing").expect("expected thing typename");
+    assert!(exported.contains(&vm.heap, maybe));
+    assert!(exported.contains(&vm.heap, nothing));
+    assert!(!exported.contains(&vm.heap, just));
+    assert!(!exported.contains(&vm.heap, thing));
+}
+
+#[test]
 fn export_closure_phase_clears_bereaved_risk_when_closed_export_keeps_required_typename() {
     let mut vm = VM::new();
     vm.initializing = false;
@@ -6054,6 +6231,77 @@ fn export_closure_phase_sets_bereaved_risk_when_embargo_removes_required_typenam
 
     assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
     assert!(vm.unused_types);
+}
+
+#[test]
+fn bereaved_analysis_free_type_binding_can_keep_required_typename_alive() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("bereaved_free_type_binding_keeps_typename.m");
+    std::fs::write(
+        &source_path,
+        "%free { t :: type; id :: t -> t }\nid x = x\n%export id - t\n",
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+    assert!(!vm.unused_types);
+}
+
+#[test]
+fn bereaved_analysis_include_backed_load_without_explicit_export_still_flags_risk() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let include_path = unique_test_path("bereaved_include_backed_target.m");
+    std::fs::write(&include_path, "helper = 1\n")
+        .expect("failed to write include source test file");
+    let include_path_str = include_path.to_string_lossy().to_string();
+
+    let source_path = unique_test_path("bereaved_include_backed_driver.m");
+    std::fs::write(
+        &source_path,
+        format!(
+            "thing == num\nid :: thing -> thing\nid x = x\n%include \"{}\"\n",
+            include_path_str
+        ),
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+    assert!(vm.exported_identifiers == NIL);
+    assert!(vm.unused_types);
+}
+
+#[test]
+fn bereaved_analysis_include_and_free_binding_basis_can_close_risk() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let include_path = unique_test_path("bereaved_include_and_free_target.m");
+    std::fs::write(&include_path, "helper = 1\n")
+        .expect("failed to write include source test file");
+    let include_path_str = include_path.to_string_lossy().to_string();
+
+    let source_path = unique_test_path("bereaved_include_and_free_driver.m");
+    std::fs::write(
+        &source_path,
+        format!("%free {{ t :: type; id :: t -> t }}\nid x = x\n%include \"{}\"\n", include_path_str),
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+    assert!(!vm.unused_types);
 }
 
 #[test]

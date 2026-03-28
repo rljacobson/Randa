@@ -209,6 +209,92 @@ fn parser_accepts_grouped_local_with_guarded_first_equation() {
 }
 
 #[test]
+fn parser_accepts_grouped_local_with_multiple_guarded_equations_and_final_plain_equation() {
+    let (heap, result) = run_parser(
+        "grouped_local_multiple_guarded_equations.m",
+        "f x = g x where g y = y, if p; g z = z, if q; g w = w\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success, got {result:?}");
+    };
+    let outer_lambda_raw = payload.definitions[0].body;
+    let letrec_raw = heap[outer_lambda_raw].tail;
+    let definitions_raw = heap[letrec_raw].head;
+    assert_eq!(heap[definitions_raw].tag, Tag::Cons);
+    assert_eq!(heap[definitions_raw].tail, RawValue::from(Combinator::Nil));
+
+    let local_definition = DefinitionRef::from_ref(heap[definitions_raw].head);
+    let local_body_raw = RawValue::from(local_definition.body_value(&heap));
+    assert_eq!(heap[local_body_raw].tag, Tag::Tries);
+    let alternatives_raw = heap[local_body_raw].tail;
+    assert_eq!(heap[alternatives_raw].tag, Tag::Cons);
+    let second_alternatives_raw = heap[alternatives_raw].tail;
+    assert_eq!(heap[second_alternatives_raw].tag, Tag::Cons);
+    let third_alternatives_raw = heap[second_alternatives_raw].tail;
+    assert_eq!(heap[third_alternatives_raw].tag, Tag::Cons);
+    assert_eq!(heap[third_alternatives_raw].tail, RawValue::from(Combinator::Nil));
+}
+
+#[test]
+fn parser_accepts_grouped_local_with_terminal_otherwise_equation() {
+    let (heap, result) = run_parser(
+        "grouped_local_terminal_otherwise_equation.m",
+        "f x = g x where g y = y, if p; g z = z, otherwise\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success, got {result:?}");
+    };
+    let outer_lambda_raw = payload.definitions[0].body;
+    let letrec_raw = heap[outer_lambda_raw].tail;
+    let definitions_raw = heap[letrec_raw].head;
+    let local_definition = DefinitionRef::from_ref(heap[definitions_raw].head);
+    let local_body_raw = RawValue::from(local_definition.body_value(&heap));
+    assert_eq!(heap[local_body_raw].tag, Tag::Tries);
+    let alternatives_raw = heap[local_body_raw].tail;
+    assert_eq!(heap[alternatives_raw].tag, Tag::Cons);
+    let second_alternatives_raw = heap[alternatives_raw].tail;
+    assert_eq!(heap[second_alternatives_raw].tag, Tag::Cons);
+    assert_eq!(heap[second_alternatives_raw].tail, RawValue::from(Combinator::Nil));
+}
+
+#[test]
+fn parser_accepts_grouped_guarded_local_family_nearby_nested_local_where() {
+    let (heap, result) = run_parser(
+        "grouped_guarded_local_nearby_nested_local_where.m",
+        "f x = g x where\n  g y = y, if p\n  g z = z, if q\n  g w = w\n  h = k where\n    k = x\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success, got {result:?}");
+    };
+    let outer_lambda_raw = payload.definitions[0].body;
+    let letrec_raw = heap[outer_lambda_raw].tail;
+    assert_eq!(heap[letrec_raw].tag, Tag::LetRec);
+    let definitions_raw = heap[letrec_raw].head;
+    assert_eq!(heap[definitions_raw].tag, Tag::Cons);
+    let second_definition_link_raw = heap[definitions_raw].tail;
+    assert_eq!(heap[second_definition_link_raw].tag, Tag::Cons);
+    assert_eq!(heap[second_definition_link_raw].tail, RawValue::from(Combinator::Nil));
+}
+
+#[test]
+fn parser_reports_unreachable_grouped_local_case_after_terminal_otherwise() {
+    let (_heap, result) = run_parser(
+        "grouped_local_case_after_otherwise.m",
+        "f x = g x where g y = y, otherwise; g z = z\n",
+    );
+
+    let ParserRunResult::SyntaxError(diagnostics) = result else {
+        panic!("expected syntax error result");
+    };
+    assert!(diagnostics.diagnostics.iter().any(|diagnostic| {
+        diagnostic.message.contains("unreachable case in defn of \"g\"")
+    }));
+}
+
+#[test]
 fn parser_reports_unreachable_local_case_when_local_pattern_is_nearby() {
     let (_heap, result) = run_parser(
         "unreachable_local_case_with_local_pattern.m",
