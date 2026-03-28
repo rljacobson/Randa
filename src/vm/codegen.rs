@@ -760,9 +760,10 @@ fn lower_letrec_value(
     heap.apply_ref(lowered_function, recursive_application)
 }
 
-/// Returns whether the committed rhs is fallible in the currently owned `transtries` subset.
-/// This exists so codegen owns the active default-`BADCASE` decision for `Tag::Tries` lowering instead of leaving it implicit in tests.
-/// The invariant is that refutable lambda binders and explicit `FAIL` survive as fallible, while irrefutable simple-id lambdas recurse into their bodies.
+/// Returns whether the committed rhs is fallible in the currently owned `transtries` subset. This
+/// exists so codegen owns the active default-`BADCASE` decision for `Tag::Tries` lowering instead
+/// of leaving it implicit in tests. The invariant is that refutable lambda binders and explicit
+/// `FAIL` survive as fallible, while irrefutable simple-id lambdas recurse into their bodies.
 fn is_fallible_rhs(heap: &Heap, mut expression: Value) -> bool {
     loop {
         let raw: RawValue = expression.into();
@@ -773,6 +774,31 @@ fn is_fallible_rhs(heap: &Heap, mut expression: Value) -> bool {
         match heap[raw].tag {
             Tag::Label => expression = heap[raw].tail.into(),
             Tag::Let | Tag::LetRec => expression = heap[raw].tail.into(),
+            Tag::Tries => {
+                if heap[raw].head == Combinator::Nil as RawValue {
+                    let mut alternatives = heap[raw].tail;
+                    while alternatives >= ATOM_LIMIT && heap[alternatives].tag == Tag::Cons {
+                        let alternative: Value = heap[alternatives].head.into();
+                        let alternative_raw: RawValue = alternative.into();
+                        if alternative_raw >= ATOM_LIMIT
+                            && heap[alternative_raw].tag == Tag::Ap
+                            && ApNodeRef::from_ref(alternative_raw).function_raw(heap)
+                                == RawValue::from(Token::Otherwise.into_value())
+                        {
+                            return false;
+                        }
+                        alternatives = heap[alternatives].tail;
+                    }
+                    return true;
+                }
+
+                let alternatives = heap[raw].tail;
+                if alternatives >= ATOM_LIMIT && heap[alternatives].tag == Tag::Cons {
+                    expression = heap[alternatives].head.into();
+                } else {
+                    return false;
+                }
+            }
             Tag::Lambda => {
                 let binder_raw = heap[raw].head;
                 if binder_raw >= ATOM_LIMIT && heap[binder_raw].tag == Tag::Id {
@@ -781,14 +807,29 @@ fn is_fallible_rhs(heap: &Heap, mut expression: Value) -> bool {
                     return true;
                 }
             }
+            Tag::Ap => {
+                let application = ApNodeRef::from_ref(raw);
+                if let Some(function_application) = application.function_application(heap) {
+                    if let Some(condition_application) = function_application.function_application(heap)
+                    {
+                        if condition_application.function_raw(heap) == Combinator::Cond as RawValue {
+                            expression = application.argument_raw(heap).into();
+                            continue;
+                        }
+                    }
+                }
+                return expression == Combinator::Fail.into();
+            }
             _ => return expression == Combinator::Fail.into(),
         }
     }
 }
 
-/// Lowers one committed `Tag::Tries` body through the current Miranda-shaped active subset.
-/// This exists so codegen owns nested `TRY` construction and active default-case insertion for multi-clause definition bodies.
-/// The invariant is that reversed alternatives lower into right-associated `TRY` applications, with a terminal `BADCASE` only when the earliest alternative is fallible.
+/// Lowers one committed `Tag::Tries` body through the current Miranda-shaped active subset. This
+/// exists so codegen owns nested `TRY` construction and active default-case insertion for
+/// multi-clause definition bodies. The invariant is that reversed alternatives lower into
+/// right-associated `TRY` applications, with a terminal `BADCASE` only when the earliest
+/// alternative is fallible.
 fn lower_tries_value(heap: &mut Heap, inputs: &CodegenBoundaryInputs, tries_value: Value) -> Value {
     let tries_raw: RawValue = tries_value.into();
     let _diagnostic_id: Value = heap[tries_raw].head.into();

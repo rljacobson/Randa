@@ -192,6 +192,106 @@ fn parser_groups_local_equations_when_nested_local_where_is_present() {
 }
 
 #[test]
+fn parser_accepts_grouped_local_with_guarded_first_equation() {
+    let (heap, result) = run_parser(
+        "grouped_local_guarded_first_equation.m",
+        "f x = g x where g y = y, if p; g z = z\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success, got {result:?}");
+    };
+    let outer_lambda_raw = payload.definitions[0].body;
+    let letrec_raw = heap[outer_lambda_raw].tail;
+    let definitions_raw = heap[letrec_raw].head;
+    assert_eq!(heap[definitions_raw].tag, Tag::Cons);
+    assert_eq!(heap[definitions_raw].tail, RawValue::from(Combinator::Nil));
+}
+
+#[test]
+fn parser_reports_unreachable_local_case_when_local_pattern_is_nearby() {
+    let (_heap, result) = run_parser(
+        "unreachable_local_case_with_local_pattern.m",
+        "f xs = g 0 where g x = x; g z = z; h (y:ys) = y\n",
+    );
+
+    let ParserRunResult::SyntaxError(diagnostics) = result else {
+        panic!("expected syntax error result");
+    };
+    assert!(diagnostics.diagnostics.iter().any(|diagnostic| {
+        diagnostic.message.contains("unreachable case in defn of \"g\"")
+    }));
+}
+
+#[test]
+fn parser_reports_grouped_local_nameclash_in_mixed_local_family() {
+    let (_heap, result) = run_parser(
+        "grouped_local_nameclash_mixed_family.m",
+        "f = g 0 where g 0 = 0; g y = y; (g, z) = pair\n",
+    );
+
+    let ParserRunResult::SyntaxError(diagnostics) = result else {
+        panic!("expected syntax error result");
+    };
+    assert!(diagnostics.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("conflicting definitions of \"g\" in where clause")
+    }));
+}
+
+#[test]
+fn parser_reports_top_level_where_nameclash_as_where_clause_conflict_for_identifier_then_pattern_local() {
+    let (_heap, result) = run_parser(
+        "top_level_where_identifier_then_pattern_nameclash.m",
+        "f = h where g = 1; (g, x) = pair\n",
+    );
+
+    let ParserRunResult::SyntaxError(diagnostics) = result else {
+        panic!("expected syntax error result");
+    };
+    assert!(diagnostics.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("conflicting definitions of \"g\" in where clause")
+    }));
+}
+
+#[test]
+fn parser_reports_top_level_where_nameclash_as_where_clause_conflict_for_pattern_then_identifier_local() {
+    let (_heap, result) = run_parser(
+        "top_level_where_pattern_then_identifier_nameclash.m",
+        "f = h where (g, x) = pair; g y = y\n",
+    );
+
+    let ParserRunResult::SyntaxError(diagnostics) = result else {
+        panic!("expected syntax error result");
+    };
+    assert!(diagnostics.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("conflicting definitions of \"g\" in where clause")
+    }));
+}
+
+#[test]
+fn parser_reports_nested_top_level_where_nameclash_as_where_clause_conflict() {
+    let (_heap, result) = run_parser(
+        "nested_top_level_where_nameclash.m",
+        "f = g where\n  g = h where\n    u = 1\n    (u, v) = pair\n",
+    );
+
+    let ParserRunResult::SyntaxError(diagnostics) = result else {
+        panic!("expected syntax error result");
+    };
+    assert!(diagnostics.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("conflicting definitions of \"u\" in where clause")
+    }));
+}
+
+#[test]
 fn parser_reports_unreachable_grouped_local_case_under_top_level_where() {
     let (_heap, result) = run_parser(
         "top_level_where_unreachable_local_case.m",

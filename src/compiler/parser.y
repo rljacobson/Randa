@@ -584,7 +584,7 @@ top_level_local_definitions:
             }
             for binder in &binders {
               if self.local_definition_group_contains_binder(prior_definitions, *binder) {
-                self.syntax(&format!("nameclash, \"{}\" already defined\n", binder.get_name(&self.heap)));
+                self.syntax(&format!("conflicting definitions of \"{}\" in where clause\n", binder.get_name(&self.heap)));
                 break;
               }
             }
@@ -2305,7 +2305,7 @@ ldefs:
           }
           for binder in &binders {
             if self.local_definition_group_contains_binder(prior_definitions, *binder) {
-              self.syntax(&format!("nameclash, \"{}\" already defined\n", binder.get_name(&self.heap)));
+              self.syntax(&format!("conflicting definitions of \"{}\" in where clause\n", binder.get_name(&self.heap)));
               break;
             }
           }
@@ -3285,6 +3285,22 @@ impl<'ctx /* 'fix quotes */> Parser<'ctx /* 'fix quotes */> {
           Tag::Label => expression = self.heap[raw].tail.into(),
           Tag::Let | Tag::LetRec => expression = self.heap[raw].tail.into(),
           Tag::Tries => {
+            if self.heap[raw].head == NIL_RAW {
+              let mut alternatives = self.heap[raw].tail;
+              while alternatives >= ATOM_LIMIT && self.heap[alternatives].tag == Tag::Cons {
+                let alternative: Value = self.heap[alternatives].head.into();
+                let alternative_raw = RawValue::from(alternative);
+                if alternative_raw >= ATOM_LIMIT
+                  && self.heap[alternative_raw].tag == Tag::Ap
+                  && ApNodeRef::from_ref(alternative_raw).function_raw(&self.heap) == RawValue::from(Token::Otherwise.into_value())
+                {
+                  return false;
+                }
+                alternatives = self.heap[alternatives].tail;
+              }
+              return true;
+            }
+
             let alternatives = self.heap[raw].tail;
             if alternatives >= ATOM_LIMIT && self.heap[alternatives].tag == Tag::Cons {
               expression = self.heap[alternatives].head.into();
@@ -3299,6 +3315,18 @@ impl<'ctx /* 'fix quotes */> Parser<'ctx /* 'fix quotes */> {
             } else {
               return true;
             }
+          }
+          Tag::Ap => {
+            let application = ApNodeRef::from_ref(raw);
+            if let Some(function_application) = application.function_application(&self.heap) {
+              if let Some(condition_application) = function_application.function_application(&self.heap) {
+                if condition_application.function_raw(&self.heap) == Combinator::Cond as RawValue {
+                  expression = application.argument_raw(&self.heap).into();
+                  continue;
+                }
+              }
+            }
+            return expression == Combinator::Fail.into();
           }
           _ => return expression == Combinator::Fail.into(),
         }

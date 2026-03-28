@@ -3026,6 +3026,59 @@ fn load_file_accepts_top_level_where_with_guarded_local_helper() {
 }
 
 #[test]
+fn load_file_accepts_grouped_local_helper_with_guarded_first_equation() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("grouped_local_guarded_first_equation.m");
+    std::fs::write(&source_path, "f x = g x where g y = y, if x = x; g z = z\n")
+        .expect("failed to write source test file");
+
+    let result = vm.load_file(&source_path.to_string_lossy());
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+}
+
+#[test]
+fn load_file_accepts_grouped_local_helper_with_guarded_and_nested_local_family() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("grouped_local_guarded_nested_family.m");
+    std::fs::write(
+        &source_path,
+        "f x = g x where\n  g y = y, if x = x\n  g z = z\n  h = k where\n    k = x\n",
+    )
+    .expect("failed to write source test file");
+
+    let result = vm.load_file(&source_path.to_string_lossy());
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+}
+
+#[test]
+fn parse_source_text_rejects_unreachable_grouped_local_case_with_nearby_local_pattern() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("unreachable_grouped_local_case_with_pattern.m");
+    let source_path_str = source_path.to_string_lossy().to_string();
+    let result = vm.parse_source_text(
+        &source_path_str,
+        "f xs = g 0 where g x = x; g z = z; h (y:ys) = y\n",
+        UNIX_EPOCH,
+        false,
+    );
+
+    let outcome = result.expect("parser boundary should complete with diagnostics");
+
+    assert!(!outcome.parsed_without_error);
+    assert!(vm.parser_diagnostics.iter().any(|diagnostic| {
+        diagnostic.message.contains("unreachable case in defn of \"g\"")
+    }));
+}
+
+#[test]
 fn load_file_reports_undefined_local_name_in_top_level_where_definition() {
     let mut vm = VM::new();
     vm.initializing = false;
