@@ -16,7 +16,23 @@ fn run_parser(source_path: &str, source_text: &str) -> (Heap, ParserRunResult) {
         vm: ParserVmContext::new(Combinator::Undef.into(), TEST_VOID_TUPLE),
         session: ParserSessionState::default(),
         deferred: ParserDeferredState::default(),
-        entry_mode: ParserEntryMode::Mixed,
+        entry_mode: ParserEntryMode::TopLevelScript,
+    };
+    let mut parser = parser::Parser::new(lexer, activation);
+    let parsed = parser.parse();
+    let result = parser.finish_run(parsed);
+    (heap, result)
+}
+
+fn run_expression_parser(source_path: &str, source_text: &str) -> (Heap, ParserRunResult) {
+    let mut heap = Heap::default();
+    let lexer = Lexer::new(source_path, source_text);
+    let activation = ParserActivation {
+        heap: &mut heap,
+        vm: ParserVmContext::new(Combinator::Undef.into(), TEST_VOID_TUPLE),
+        session: ParserSessionState::default(),
+        deferred: ParserDeferredState::default(),
+        entry_mode: ParserEntryMode::Expression,
     };
     let mut parser = parser::Parser::new(lexer, activation);
     let parsed = parser.parse();
@@ -1372,6 +1388,76 @@ fn parser_returns_syntax_diagnostics_for_invalid_source() {
         unexpected_token.here_info.as_ref().unwrap().script_file,
         "parse_boundary_syntax.m"
     );
+}
+
+#[test]
+fn expression_entry_still_parses_plain_identifier_expression() {
+    let (heap, result) = run_expression_parser("identifier_expression.m", "value");
+
+    let ParserRunResult::ParsedExpression(result) = result else {
+        panic!("expected expression parse success, got {result:?}");
+    };
+    let identifier = IdentifierRecordRef::from_ref(result.into());
+    assert_eq!(identifier.get_name(&heap), "value");
+}
+
+#[test]
+fn parser_records_bare_tuple_pattern_definition_payload() {
+    let (heap, result) = run_parser("bare_tuple_pattern_definition.m", "(x,y) = pair\n");
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success");
+    };
+    assert!(payload.definitions.is_empty());
+    assert_eq!(payload.pattern_definitions.len(), 1);
+
+    let pattern_definition = &payload.pattern_definitions[0];
+    let lhs_raw: RawValue = pattern_definition.lhs.into();
+    assert_eq!(heap[lhs_raw].tag, Tag::Pair);
+}
+
+#[test]
+fn parser_records_bare_list_pattern_definition_payload() {
+    let (heap, result) = run_parser("bare_list_pattern_definition.m", "[x,y] = pair\n");
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success");
+    };
+    assert!(payload.definitions.is_empty());
+    assert_eq!(payload.pattern_definitions.len(), 1);
+
+    let pattern_definition = &payload.pattern_definitions[0];
+    let lhs_raw: RawValue = pattern_definition.lhs.into();
+    assert_eq!(heap[lhs_raw].tag, Tag::Cons);
+}
+
+#[test]
+fn parser_records_bare_constructor_pattern_definition_payload() {
+    let (heap, result) = run_parser("bare_constructor_pattern_definition.m", "Just x = x\n");
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success, got {result:?}");
+    };
+    assert!(payload.definitions.is_empty());
+    assert_eq!(payload.pattern_definitions.len(), 1);
+
+    let pattern_definition = &payload.pattern_definitions[0];
+    let lhs_raw: RawValue = pattern_definition.lhs.into();
+    assert_eq!(heap[lhs_raw].tag, Tag::Ap);
+}
+
+#[test]
+fn parser_rejects_floating_point_literal_pattern_in_top_level_pattern_definition() {
+    let (_heap, result) = run_parser("float_pattern_definition_syntax.m", "1.5 = 0\n");
+
+    let ParserRunResult::SyntaxError(diagnostics) = result else {
+        panic!("expected syntax error result");
+    };
+    assert!(diagnostics.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("floating point literal in pattern")
+    }));
 }
 
 #[test]

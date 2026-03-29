@@ -62,12 +62,12 @@ pub enum Value {
     Stolen,
 
     // ToDo: This should wrap a `crate::data::tag::Tag`.
-    Tag(RawValue), // 0..23, distinguished from context.
-    Char(char),    // 0..TOKEN_BASE-1               ==   0..255
+    Tag(RawValue),          // 0..23, distinguished from context.
+    Char(char),             // 0..TOKEN_BASE-1               ==   0..255
     /// Required by parser and used by compiler.
     /// Represents a token returned from a Lexer.
-    Token(Token), // TOKEN_BASE..COMBINATOR_BASE-1 == 256..305
-    Combinator(Combinator), // COMBINATOR_BASE..ATOM_LIMIT-1 == 306..446
+    Token(Token),           // TOKEN_BASE..COMBINATOR_BASE-1 == 256..337
+    Combinator(Combinator), // COMBINATOR_BASE..ATOM_LIMIT-1 == 338..478
     // ToDo: We should probably create a `HeapReference` newtype.
     /// Reference to another cell.
     Reference(RawValue),
@@ -132,5 +132,24 @@ impl From<Combinator> for Value {
 impl From<Token> for Value {
     fn from(token: Token) -> Value {
         Value::Token(token)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::compiler::Token;
+
+    #[test]
+    fn token_and_combinator_boundary_values_decode_unambiguously() {
+        assert_eq!(RawValue::from(Value::Token(Token::EOF)), COMBINATOR_BASE - 2);
+        assert_eq!(RawValue::from(Value::Token(Token::Error)), COMBINATOR_BASE - 1);
+        assert_eq!(RawValue::from(Value::Combinator(Combinator::S)), COMBINATOR_BASE);
+        assert_eq!(RawValue::from(Value::Combinator(Combinator::K)), COMBINATOR_BASE + 1);
+
+        assert_eq!(Value::from(COMBINATOR_BASE - 2), Value::Token(Token::EOF));
+        assert_eq!(Value::from(COMBINATOR_BASE - 1), Value::Token(Token::Error));
+        assert_eq!(Value::from(COMBINATOR_BASE), Value::Combinator(Combinator::S));
+        assert_eq!(Value::from(COMBINATOR_BASE + 1), Value::Combinator(Combinator::K));
     }
 }

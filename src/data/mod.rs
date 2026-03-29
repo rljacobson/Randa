@@ -79,7 +79,7 @@ pub use crate::data::{
 /// If the bit-width of `RawValue` changes, synchronize it with
 ///    * `Heap::resolve_string()`
 ///    * instances of `IdentifierValueType::from_usize`
-pub const TOKEN_BASE: RawValue = 256; // There are 80 token values.
-pub const COMBINATOR_BASE: RawValue = TOKEN_BASE + 80; // 336; // There are 141 combinators.
-pub const ATOM_LIMIT: RawValue = COMBINATOR_BASE + 141; // = 477
-                                                        // Note: X_LIMIT=`ATOM_LIMIT` - 256 + 16 must remain >=512 for bytecode representation to work.
+pub const TOKEN_BASE: RawValue = 256; // There are 82 token values.
+pub const COMBINATOR_BASE: RawValue = TOKEN_BASE + 82; // 338; // There are 141 combinators.
+pub const ATOM_LIMIT: RawValue = COMBINATOR_BASE + 141; // = 479
+// Note: X_LIMIT=`ATOM_LIMIT` - 256 + 16 must remain >=512 for bytecode representation to work.

@@ -25,6 +25,7 @@ use super::{
   ParserEntryMode,
   ParserConstructorPayload,
   ParserDefinitionPayload,
+  ParserPatternDefinitionPayload,
   ParserExportDirectivePayload,
   ParserFreeBindingPayload,
   ParserAbstypeGroupPayload,
@@ -83,8 +84,10 @@ use crate::{
   diagnostics: ParserRunDiagnostics,
   top_level_script_parsed: bool,
   entry_mode: ParserEntryMode,
+  entry_token_emitted: bool,
   directive_include_requests: Vec<ParserIncludeDirectivePayload>,
   definition_payloads: Vec<ParserDefinitionPayload>,
+  pattern_definition_payloads: Vec<ParserPatternDefinitionPayload>,
   specification_payloads: Vec<ParserSpecificationPayload>,
   type_declaration_payloads: Vec<ParserTypeDeclarationPayload>,
   constructor_payloads: Vec<ParserConstructorPayload>,
@@ -134,7 +137,7 @@ use crate::{
     InfixCName Colon Ampersand Greater Equal Less Plus Minus Times DivideFloat
     Caret Dot Bang Tilde Hash Comma Pipe QuestionMark Semicolon Newline
     OpenBrace CloseBrace OpenParenthesis CloseParenthesis OpenBracket
-    CloseBracket StringLiteral Integer Float
+    CloseBracket StringLiteral Integer Float ParserScriptStart ParserExpressionStart
 
 %right RightArrow
 %right PlusPlus Colon MinusMinus
@@ -219,14 +222,11 @@ Miranda uses the following utility functions:
 %%
 
 parse_entry:
-    exp {
-        if self.entry_mode == ParserEntryMode::TopLevelScriptOnly {
-          self.syntax("expected top-level source form\n");
-        }
-        self.result = Some($1);
-        $$ = $1;
+    ParserExpressionStart exp {
+        self.result = Some($2);
+        $$ = $2;
       }
-    | top_level_script {
+    | ParserScriptStart top_level_script {
         self.top_level_script_parsed = true;
         $$ = NIL;
       }
@@ -492,6 +492,25 @@ include_export_item:
     | include_directive directive_terminators { $$ = NIL; }
     ;
 
+top_level_pattern_definition_start:
+    /* empty */ {
+        self.type_variable_scope = false;
+        self.used_identifiers = ConsList::EMPTY;
+        $$ = NIL;
+      }
+    ;
+
+constructor_led_top_level_pattern:
+    ConstructorName {
+        self.type_variable_scope = false;
+        self.used_identifiers = ConsList::EMPTY;
+        $$ = $1;
+      }
+    | constructor_led_top_level_pattern v3 {
+        $$ = self.heap.apply_ref(self.top_level_application_head($1), $2);
+      }
+    ;
+
 top_level_definition_item:
     top_level_definition_lhs act2 top_level_definition_anchor Equal top_level_rhs directive_terminators {
         let anchor = FileInfoRef::from_ref($3.into());
@@ -510,6 +529,48 @@ top_level_definition_item:
           self.last_identifier = identifier.get_ref();
           $$ = NIL;
         }
+      }
+    | constructor_led_top_level_pattern act2 top_level_definition_anchor Equal top_level_rhs directive_terminators {
+        let anchor = FileInfoRef::from_ref($3.into());
+        let (lowered_lhs, lowered_body) = self.heap.lower_function_form_lambdas($1, $5);
+        let lowered_identifier_ref: RawValue = lowered_lhs.into();
+        if lowered_identifier_ref >= ATOM_LIMIT && self.heap[lowered_identifier_ref].tag == Tag::Id {
+          let identifier = IdentifierRecordRef::from_ref(lowered_identifier_ref);
+          self.definition_payloads.push(ParserDefinitionPayload {
+            identifier,
+            body: lowered_body.into(),
+            anchor,
+          });
+          self.last_identifier = identifier.get_ref();
+        } else {
+          self.pattern_definition_payloads.push(ParserPatternDefinitionPayload {
+            lhs: lowered_lhs,
+            body: lowered_body.into(),
+            anchor,
+          });
+        }
+        $$ = NIL;
+      }
+    | top_level_pattern_definition_start v act2 top_level_definition_anchor Equal top_level_rhs directive_terminators {
+        let anchor = FileInfoRef::from_ref($4.into());
+        let (lowered_lhs, lowered_body) = self.heap.lower_function_form_lambdas($2, $6);
+        let lowered_identifier_ref: RawValue = lowered_lhs.into();
+        if lowered_identifier_ref >= ATOM_LIMIT && self.heap[lowered_identifier_ref].tag == Tag::Id {
+          let identifier = IdentifierRecordRef::from_ref(lowered_identifier_ref);
+          self.definition_payloads.push(ParserDefinitionPayload {
+            identifier,
+            body: lowered_body.into(),
+            anchor,
+          });
+          self.last_identifier = identifier.get_ref();
+        } else {
+          self.pattern_definition_payloads.push(ParserPatternDefinitionPayload {
+            lhs: lowered_lhs,
+            body: lowered_body.into(),
+            anchor,
+          });
+        }
+        $$ = NIL;
       }
     ;
 
@@ -3111,8 +3172,10 @@ impl<'ctx /* 'fix quotes */> Parser<'ctx /* 'fix quotes */> {
         diagnostics: ParserRunDiagnostics::default(),
         top_level_script_parsed: false,
         entry_mode,
+        entry_token_emitted: false,
         directive_include_requests: Vec::new(),
         definition_payloads: Vec::new(),
+        pattern_definition_payloads: Vec::new(),
         specification_payloads: Vec::new(),
         type_declaration_payloads: Vec::new(),
         constructor_payloads: Vec::new(),
@@ -3151,6 +3214,19 @@ impl<'ctx /* 'fix quotes */> Parser<'ctx /* 'fix quotes */> {
 
 
     fn next_token(&mut self) -> ParserLookahead {
+      if !self.entry_token_emitted {
+        self.entry_token_emitted = true;
+        let token = match self.entry_mode {
+          ParserEntryMode::Expression => Token::ParserExpressionStart,
+          ParserEntryMode::TopLevelScript => Token::ParserScriptStart,
+        };
+        return ParserLookahead {
+          token_type: token as i32 + 2,
+          token,
+          value: Value::Token(token),
+          loc: Loc::new(0, 0),
+        };
+      }
       match self.yylexer.yylex() {
         Ok(mut lookahead) => {
           let source_text = self.yylexer.source_text();
@@ -3790,6 +3866,7 @@ impl<'ctx /* 'fix quotes */> Parser<'ctx /* 'fix quotes */> {
                     export,
                 },
                 definitions: self.definition_payloads,
+                pattern_definitions: self.pattern_definition_payloads,
                 specifications: self.specification_payloads,
                 type_declarations: self.type_declaration_payloads,
                 constructor_declarations: self.constructor_payloads,

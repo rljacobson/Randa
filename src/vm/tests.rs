@@ -413,6 +413,43 @@ fn classify_load_script_form_distinguishes_supported_top_level_forms() {
 }
 
 #[test]
+fn parse_source_text_treats_bare_tuple_pattern_definition_as_script_input() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("bare_tuple_pattern_script_input.m");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let outcome = vm
+        .parse_source_text(&source_path_str, "(x,y) = pair\n", UNIX_EPOCH, false)
+        .expect("script parse should return diagnostics, not io failure");
+
+    assert!(outcome.parsed_without_error);
+    let payload = outcome
+        .top_level_payload
+        .as_ref()
+        .expect("script parse should return top-level payload");
+    assert_eq!(payload.pattern_definitions.len(), 1);
+    assert!(vm.parser_diagnostics.is_empty());
+}
+
+#[test]
+fn parse_source_text_treats_plain_expression_like_input_as_script_mode_request() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("expression_like_script_input.m");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let outcome = vm
+        .parse_source_text(&source_path_str, "+", UNIX_EPOCH, false)
+        .expect("script parse should return diagnostics, not io failure");
+
+    assert!(!outcome.parsed_without_error);
+    assert!(!vm.parser_diagnostics.is_empty());
+}
+
+#[test]
 fn load_file_keeps_cons_pattern_tail_name_bound_after_constructor_formal_checks() {
     let mut vm = VM::new();
     vm.initializing = false;
@@ -4385,12 +4422,12 @@ fn load_file_lowers_tuple_pattern_definition_body_during_codegen() {
 }
 
 #[test]
-fn load_file_runs_phase_pipeline_when_expression_parse_succeeds() {
+fn load_file_runs_phase_pipeline_when_script_parse_succeeds() {
     let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("phase_pipeline.m");
-    std::fs::write(&source_path, "+").expect("failed to write source test file");
+    std::fs::write(&source_path, "entry = 1\n").expect("failed to write source test file");
     let source_path_str = source_path.to_string_lossy().to_string();
 
     let result = vm.load_file(&source_path_str);
@@ -4682,7 +4719,7 @@ fn success_postlude_phase_resets_syntax_editor_state() {
     vm.error_locations = vec![Combinator::True.into()];
 
     let source_path = unique_test_path("success_postlude_reset.m");
-    std::fs::write(&source_path, "+").expect("failed to write source test file");
+    std::fs::write(&source_path, "entry = 1\n").expect("failed to write source test file");
     let source_path_str = source_path.to_string_lossy().to_string();
 
     let result = vm.load_file(&source_path_str);
@@ -4948,10 +4985,10 @@ fn include_expansion_phase_appends_includees_and_clears_bookkeeping() {
     vm.files = ConsList::new(&mut vm.heap, main_file);
 
     let include_a_path = unique_test_path("include_a.m");
-    std::fs::write(&include_a_path, "1").expect("failed to write include_a test file");
+    std::fs::write(&include_a_path, "includeA = 1\n").expect("failed to write include_a test file");
     let include_a_path = include_a_path.to_string_lossy().to_string();
     let include_b_path = unique_test_path("include_b.m");
-    std::fs::write(&include_b_path, "1").expect("failed to write include_b test file");
+    std::fs::write(&include_b_path, "includeB = 1\n").expect("failed to write include_b test file");
     let include_b_path = include_b_path.to_string_lossy().to_string();
     let payload = ParserTopLevelDirectivePayload {
         include_requests: vec![

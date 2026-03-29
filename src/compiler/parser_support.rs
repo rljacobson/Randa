@@ -75,6 +75,13 @@ pub struct ParserDefinitionPayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParserPatternDefinitionPayload {
+    pub lhs: Value,
+    pub body: RawValue,
+    pub anchor: FileInfoRef,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParserSpecificationPayload {
     pub identifier: IdentifierRecordRef,
     pub type_expr: TypeExprRef,
@@ -147,6 +154,7 @@ pub struct ParserTopLevelDirectivePayload {
 pub struct ParserTopLevelScriptPayload {
     pub directives: ParserTopLevelDirectivePayload,
     pub definitions: Vec<ParserDefinitionPayload>,
+    pub pattern_definitions: Vec<ParserPatternDefinitionPayload>,
     pub specifications: Vec<ParserSpecificationPayload>,
     pub type_declarations: Vec<ParserTypeDeclarationPayload>,
     pub constructor_declarations: Vec<ParserConstructorPayload>,

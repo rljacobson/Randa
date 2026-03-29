@@ -99,22 +99,22 @@ pub static BYTECODE_NAMES: [&str; 16] = [
 #[allow(non_camel_case_types)]
 #[allow(clippy::upper_case_acronyms)]
 pub enum Bytecode {
-    Char = 221,         // = X_BASE +  0, CHAR_X
-    Short = 222,        // = X_BASE +  1, SHORT_X
-    Integer = 223,      // = X_BASE +  2, INT_X
-    Double = 224,       // = X_BASE +  3, DBL_X
-    ID = 225,           // = X_BASE +  4, ID_X
-    AKA = 226,          // = X_BASE +  5, AKA_X
-    Here = 227,         // = X_BASE +  6, HERE_X
-    Construct = 228,    // = X_BASE +  7, CONSTRUCT_X
-    ReadVals = 229,     // = X_BASE +  8, RV_X
-    PrivateName = 230,  // = X_BASE +  9, PN_X
-    PrivateName1 = 231, // = X_BASE + 10, PN1_X
-    Definition = 232,   // = X_BASE + 11, DEF_X
-    Apply = 233,        // = X_BASE + 12, AP_X
-    Cons = 234,         // = X_BASE + 13, CONS_X
-    TypeVariable = 235, // = X_BASE + 14, TVAR_X
-    Unicode = 236,      // = X_BASE + 15, UNICODE_X
+    Char         = 223,  // = X_BASE +  0, CHAR_X
+    Short        = 224,  // = X_BASE +  1, SHORT_X
+    Integer      = 225,  // = X_BASE +  2, INT_X
+    Double       = 226,  // = X_BASE +  3, DBL_X
+    ID           = 227,  // = X_BASE +  4, ID_X
+    AKA          = 228,  // = X_BASE +  5, AKA_X
+    Here         = 229,  // = X_BASE +  6, HERE_X
+    Construct    = 230,  // = X_BASE +  7, CONSTRUCT_X
+    ReadVals     = 231,  // = X_BASE +  8, RV_X
+    PrivateName  = 232,  // = X_BASE +  9, PN_X
+    PrivateName1 = 233,  // = X_BASE + 10, PN1_X
+    Definition   = 234,  // = X_BASE + 11, DEF_X
+    Apply        = 235,  // = X_BASE + 12, AP_X
+    Cons         = 236,  // = X_BASE + 13, CONS_X
+    TypeVariable = 237,  // = X_BASE + 14, TVAR_X
+    Unicode      = 238,  // = X_BASE + 15, UNICODE_X
 }
 
 impl Bytecode {

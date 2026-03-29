@@ -6,8 +6,8 @@ use super::{ParserDeferredState, ParserSessionState};
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum ParserEntryMode {
-    Mixed,
-    TopLevelScriptOnly,
+    Expression,
+    TopLevelScript,
 }
 
 #[derive(Debug, Copy, Clone)]

@@ -2141,19 +2141,16 @@ impl VM {
         _is_main_script: bool,
     ) -> Result<ParsePhaseOutcome, LoadFileError> {
         let load_script_form = self.classify_load_script_form(source_path, source_text)?;
-        match load_script_form {
-            LoadScriptForm::Expression | LoadScriptForm::TopLevelScript => {}
-            LoadScriptForm::OtherTopLevelForm => {
-                return Err(SourceParseError::UnsupportedTopLevelForm {
-                    path: source_path.to_string(),
-                }
-                .into());
+        if load_script_form == LoadScriptForm::OtherTopLevelForm {
+            return Err(SourceParseError::UnsupportedTopLevelForm {
+                path: source_path.to_string(),
             }
+            .into());
         }
 
         let placeholder_files = self.empty_environment_for_source(source_path, modified_time);
         let lexer = Lexer::new(source_path, source_text);
-        let activation = self.parser_activation(load_script_form);
+        let activation = self.parser_activation(ParserEntryMode::TopLevelScript);
         let mut parser = Parser::new(lexer, activation);
         let parsed = parser.parse();
 
@@ -2619,7 +2616,7 @@ impl VM {
         )
     }
 
-    fn parser_activation(&mut self, load_script_form: LoadScriptForm) -> ParserActivation<'_> {
+    fn parser_activation(&mut self, entry_mode: ParserEntryMode) -> ParserActivation<'_> {
         let listdiff_function = self.listdiff_fn.into();
         let void_tuple = self
             .void_
@@ -2632,12 +2629,7 @@ impl VM {
             vm: ParserVmContext::new(listdiff_function, void_tuple),
             session: ParserSessionState::default(),
             deferred: ParserDeferredState::default(),
-            entry_mode: match load_script_form {
-                LoadScriptForm::TopLevelScript | LoadScriptForm::OtherTopLevelForm => {
-                    ParserEntryMode::TopLevelScriptOnly
-                }
-                LoadScriptForm::Expression => ParserEntryMode::Mixed,
-            },
+            entry_mode,
         }
     }
 

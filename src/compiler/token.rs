@@ -14,7 +14,7 @@ use crate::data::{Value, TOKEN_BASE};
 
 // region Token Strings
 /// Equivalent to `char *yysterm[]` in y.tab.c. This list must be kept in sync with the `Token` enum.
-static TOKEN_STRINGS: [&str; 80] = [
+static TOKEN_STRINGS: [&str; 82] = [
     "VALUE",                // 256 = 0 + TOKEN_BASE
     "EVAL",                 // 257 = 1 + TOKEN_BASE
     "\"where\"",            // 258 = 2 + TOKEN_BASE
@@ -93,8 +93,10 @@ static TOKEN_STRINGS: [&str; 80] = [
     "STRING",               // 331 = 75 + TOKEN_BASE
     "INTEGER",              // 332 = 76 + TOKEN_BASE
     "FLOAT",                // 333 = 77 + TOKEN_BASE
-    "EOF",                  // 334 = 78 + TOKEN_BASE
-    "ERROR",                // 335 = 79 + TOKEN_BASE
+    "PARSER_SCRIPT_START",  // 334 = 78 + TOKEN_BASE
+    "PARSER_EXPRESSION_START", // 335 = 79 + TOKEN_BASE
+    "EOF",                  // 336 = 80 + TOKEN_BASE
+    "ERROR",                // 337 = 81 + TOKEN_BASE
 ];
 // endregion
 
@@ -250,11 +252,13 @@ pub enum Token {
     Integer = 332, // = 76 + TOKEN_BASE, // INTEGER
     #[regex(r"[0-9]+\.[0-9]*")]
     Float = 333, // = 77 + TOKEN_BASE, // FLOAT
-    EOF = 334,   // = 78 + TOKEN_BASE, // EOF
+    ParserScriptStart = 334, // = 78 + TOKEN_BASE, // PARSER_SCRIPT_START
+    ParserExpressionStart = 335, // = 79 + TOKEN_BASE, // PARSER_EXPRESSION_START
+    EOF = 336,   // = 80 + TOKEN_BASE, // EOF
 
     #[regex(r"[ \t]*\|\|[^\n]*\n", logos::skip, allow_greedy = true)]
     #[regex(r"[ \t]+", logos::skip)]
-    Error = 335, // = 79 + TOKEN_BASE,  // ERROR
+    Error = 337, // = 81 + TOKEN_BASE,  // ERROR
 }
 
 impl Display for Token {

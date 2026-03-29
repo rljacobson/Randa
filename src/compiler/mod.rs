@@ -35,8 +35,9 @@ pub use parser_support::{
     ParserAbstypeGroupPayload, ParserConstructorFieldPayload, ParserConstructorPayload,
     ParserDefinitionPayload, ParserExportDirectivePayload, ParserFreeBindingPayload,
     ParserIncludeBindingPayload, ParserIncludeDirectivePayload, ParserIncludeModifierPayload,
-    ParserRunDiagnostics, ParserRunResult, ParserSpecificationPayload, ParserSupportError,
-    ParserTopLevelDirectivePayload, ParserTopLevelScriptPayload, ParserTypeDeclarationPayload,
+    ParserPatternDefinitionPayload, ParserRunDiagnostics, ParserRunResult,
+    ParserSpecificationPayload, ParserSupportError, ParserTopLevelDirectivePayload,
+    ParserTopLevelScriptPayload, ParserTypeDeclarationPayload,
 };
 pub use token::Token;
 
