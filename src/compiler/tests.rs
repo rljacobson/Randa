@@ -1461,6 +1461,53 @@ fn parser_rejects_floating_point_literal_pattern_in_top_level_pattern_definition
 }
 
 #[test]
+fn parser_records_bare_non_canonical_plus_pattern_definition_payload() {
+    let (heap, result) = run_parser("bare_non_canonical_plus_pattern_definition.m", "(x+y) = x\n");
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success, got {result:?}");
+    };
+    assert!(payload.definitions.is_empty());
+    assert_eq!(payload.pattern_definitions.len(), 1);
+
+    let pattern_definition = &payload.pattern_definitions[0];
+    let lhs_raw: RawValue = pattern_definition.lhs.into();
+    assert_eq!(heap[lhs_raw].tag, Tag::Ap);
+    let operator_application_raw = heap[lhs_raw].head;
+    assert_eq!(heap[operator_application_raw].tag, Tag::Ap);
+    assert_eq!(
+        Value::from(heap[operator_application_raw].head),
+        Combinator::Plus.into()
+    );
+}
+
+#[test]
+fn parser_records_bare_malformed_plus_application_pattern_definition_payload() {
+    let (heap, result) = run_parser(
+        "bare_malformed_plus_application_pattern_definition.m",
+        "(((x+y)) z) = z\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success, got {result:?}");
+    };
+    assert!(payload.definitions.is_empty());
+    assert_eq!(payload.pattern_definitions.len(), 1);
+
+    let pattern_definition = &payload.pattern_definitions[0];
+    let lhs_raw: RawValue = pattern_definition.lhs.into();
+    assert_eq!(heap[lhs_raw].tag, Tag::Ap);
+    let arithmetic_head_application_raw = heap[lhs_raw].head;
+    assert_eq!(heap[arithmetic_head_application_raw].tag, Tag::Ap);
+    let operator_application_raw = heap[arithmetic_head_application_raw].head;
+    assert_eq!(heap[operator_application_raw].tag, Tag::Ap);
+    assert_eq!(
+        Value::from(heap[operator_application_raw].head),
+        Combinator::Plus.into()
+    );
+}
+
+#[test]
 fn parser_rejects_floating_point_literal_pattern_in_top_level_formals() {
     let (_heap, result) = run_parser("float_pattern_form_syntax.m", "bad 1.5 = 0\n");
 

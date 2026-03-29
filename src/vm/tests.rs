@@ -1364,6 +1364,26 @@ fn load_file_reports_arithmetic_head_application_before_undefined_name() {
 }
 
 #[test]
+fn load_file_reports_nested_constructor_inside_malformed_plus_before_generic_formal_error() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("malformed_plus_nested_constructor_formal_precedence.m");
+    std::fs::write(&source_path, "bad (((Nope x)+y) z) = z\n")
+        .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::UndeclaredConstructorsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
 fn load_file_rejects_unparenthesized_binary_minus_pattern_in_formal() {
     let mut vm = VM::new();
     vm.initializing = false;
@@ -4359,6 +4379,44 @@ fn load_file_top_level_pattern_non_canonical_plus_still_precedes_undefined_name(
 }
 
 #[test]
+fn load_file_reports_local_malformed_plus_application_before_undefined_name_under_top_level_where() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("top_level_where_local_malformed_plus_precedes_undefined_name.m");
+    std::fs::write(&source_path, "f x = g x where g (((a+b)) c) = missing\n")
+        .expect("failed to write source test file");
+
+    let result = vm.load_file(&source_path.to_string_lossy());
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::MalformedPlusApplicationsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
+fn load_file_reports_nested_constructor_inside_local_malformed_plus_before_generic_formal_error() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("top_level_where_local_malformed_plus_nested_constructor_precedence.m");
+    std::fs::write(&source_path, "f x = g x where g (((Nope a)+b) c) = c\n")
+        .expect("failed to write source test file");
+
+    let result = vm.load_file(&source_path.to_string_lossy());
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::UndeclaredConstructorsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
 fn load_file_top_level_where_unparenthesized_application_headed_plus_still_binds_interior_names() {
     let mut vm = VM::new();
     vm.initializing = false;
@@ -4392,6 +4450,44 @@ fn load_file_new_arithmetic_head_application_still_binds_interior_names() {
         result,
         Err(LoadFileError::Typecheck(
             TypecheckError::MalformedPlusApplicationsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
+fn load_file_top_level_pattern_malformed_plus_application_still_precedes_undefined_name() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("top_level_pattern_malformed_plus_precedes_undefined_name.m");
+    std::fs::write(&source_path, "(((x+y)) z) = missing\n")
+        .expect("failed to write source test file");
+
+    let result = vm.load_file(&source_path.to_string_lossy());
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::MalformedPlusApplicationsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
+fn load_file_reports_nested_constructor_inside_top_level_pattern_malformed_plus_before_generic_formal_error() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("top_level_pattern_malformed_plus_nested_constructor_precedence.m");
+    std::fs::write(&source_path, "(((Nope x)+y) z) = z\n")
+        .expect("failed to write source test file");
+
+    let result = vm.load_file(&source_path.to_string_lossy());
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::UndeclaredConstructorsInFormals { count: 1 }
         ))
     ));
 }
@@ -6370,6 +6466,125 @@ fn typecheck_phase_malformed_plus_application_still_binds_all_pattern_operands()
         Some(TypecheckError::MalformedPlusApplicationsInFormals { count: 1 })
     ));
     assert!(result.undefined_names.is_empty());
+}
+
+#[test]
+fn typecheck_phase_non_canonical_plus_still_reports_nested_constructor_misuse() {
+    let mut vm = VM::new();
+
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("non_canonical_plus_nested_constructor_formal.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        ConsList::EMPTY,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+
+    let f = vm.heap.make_empty_identifier("f");
+    let nope = vm.heap.make_empty_identifier("Nope");
+    let x = vm.heap.make_empty_identifier("x");
+    let y = vm.heap.make_empty_identifier("y");
+    let constructor_operand = vm.heap.apply_ref(nope.into(), x.into());
+    let arithmetic_pattern = vm.heap.apply2(Combinator::Plus.into(), constructor_operand, y.into());
+    let lambda_body = vm.heap.lambda_ref(arithmetic_pattern, y.into());
+    f.set_value_from_data(
+        &mut vm.heap,
+        IdentifierValueData::Arbitrary(lambda_body),
+    );
+    current_file.push_item_onto_definienda(&mut vm.heap, f);
+
+    let result = vm.run_checktypes_phase();
+
+    assert!(matches!(
+        result,
+        Err(TypecheckError::UndeclaredConstructorsInFormals { count: 1 })
+    ));
+}
+
+#[test]
+fn typecheck_phase_malformed_plus_application_still_reports_nested_constructor_misuse() {
+    let mut vm = VM::new();
+
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("malformed_plus_nested_constructor_formal.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        ConsList::EMPTY,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+
+    let f = vm.heap.make_empty_identifier("f");
+    let nope = vm.heap.make_empty_identifier("Nope");
+    let x = vm.heap.make_empty_identifier("x");
+    let y = vm.heap.make_empty_identifier("y");
+    let z = vm.heap.make_empty_identifier("z");
+    let constructor_operand = vm.heap.apply_ref(nope.into(), x.into());
+    let partial_pattern = vm
+        .heap
+        .apply2(Combinator::Plus.into(), constructor_operand, y.into());
+    let malformed_pattern = vm.heap.apply_ref(partial_pattern, z.into());
+    let lambda_body = vm.heap.lambda_ref(malformed_pattern, z.into());
+    f.set_value_from_data(
+        &mut vm.heap,
+        IdentifierValueData::Arbitrary(lambda_body),
+    );
+    current_file.push_item_onto_definienda(&mut vm.heap, f);
+
+    let result = vm.run_checktypes_phase();
+
+    assert!(matches!(
+        result,
+        Err(TypecheckError::UndeclaredConstructorsInFormals { count: 1 })
+    ));
+}
+
+#[test]
+fn typecheck_phase_malformed_plus_application_keeps_repeated_name_head_non_binding() {
+    let mut vm = VM::new();
+
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("malformed_plus_repeated_head_binding.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        ConsList::EMPTY,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+
+    let f = vm.heap.make_empty_identifier("f");
+    let x = vm.heap.make_empty_identifier("x");
+    let y = vm.heap.make_empty_identifier("y");
+    let z = vm.heap.make_empty_identifier("z");
+    let w = vm.heap.make_empty_identifier("w");
+    let repeated_head = vm.heap.cons_ref(Token::Constant.into(), x.into());
+    let repeated_head_application = vm.heap.apply_ref(repeated_head, y.into());
+    let partial_pattern = vm
+        .heap
+        .apply2(Combinator::Plus.into(), repeated_head_application, z.into());
+    let malformed_pattern = vm.heap.apply_ref(partial_pattern, w.into());
+    let lambda_body = vm.heap.lambda_ref(malformed_pattern, x.into());
+    f.set_value_from_data(
+        &mut vm.heap,
+        IdentifierValueData::Arbitrary(lambda_body),
+    );
+    current_file.push_item_onto_definienda(&mut vm.heap, f);
+
+    let inputs = typecheck::TypecheckBoundaryInputs::from_vm(&vm);
+    let result = typecheck::run_partial_typecheck(&mut vm.heap, inputs);
+
+    assert!(matches!(
+        &result.failure,
+        Some(TypecheckError::MalformedPlusApplicationsInFormals { count: 1 })
+    ));
+    assert_eq!(result.undefined_names.len(&vm.heap), 1);
 }
 
 #[test]
