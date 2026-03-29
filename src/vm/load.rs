@@ -572,34 +572,35 @@ impl VM {
                 }
             }
 
+            let mut include_formal_bindings: ConsList<FreeFormalBindingRef> = ConsList::EMPTY;
+            if let Some(top_level_payload) = parse_outcome.top_level_payload.as_ref() {
+                for free_binding in &top_level_payload.free_bindings {
+                    let original_name = IdentifierDefinitionRef::alias_metadata_from_source_identifier(
+                        &mut self.heap,
+                        free_binding.identifier,
+                    );
+                    let formal_binding = FreeFormalBindingRef::new(
+                        &mut self.heap,
+                        free_binding.identifier,
+                        original_name,
+                        free_binding.type_expr,
+                    );
+                    include_formal_bindings.push(&mut self.heap, formal_binding);
+                }
+            }
+
+            let sorted_formals = ConsList::<FreeFormalBindingRef>::from_ref(
+                super::bytecode::hdsort_binding_list_ref(&mut self.heap, include_formal_bindings.get_ref()),
+            );
             if include_request.bindings.is_empty() {
                 self.detritus_parameter_bindings = ConsList::EMPTY;
                 self.missing_parameter_bindings = ConsList::EMPTY;
-            } else {
-                let mut include_formal_bindings: ConsList<FreeFormalBindingRef> = ConsList::EMPTY;
-                if let Some(top_level_payload) = parse_outcome.top_level_payload.as_ref() {
-                    for free_binding in &top_level_payload.free_bindings {
-                        let original_name =
-                            IdentifierDefinitionRef::alias_metadata_from_source_identifier(
-                                &mut self.heap,
-                                free_binding.identifier,
-                            );
-                        let formal_binding = FreeFormalBindingRef::new(
-                            &mut self.heap,
-                            free_binding.identifier,
-                            original_name,
-                            free_binding.type_expr,
-                        );
-                        include_formal_bindings.push(&mut self.heap, formal_binding);
-                    }
+                if !sorted_formals.is_empty() {
+                    self.free_binding_sets.push(&mut self.heap, sorted_formals);
                 }
-
-                let sorted_formals = super::bytecode::hdsort_binding_list_ref(
-                    &mut self.heap,
-                    include_formal_bindings.get_ref(),
-                );
+            } else {
                 let actuals = self.lower_include_binding_actuals(&include_request.bindings);
-                self.bindparams(sorted_formals.into(), actuals);
+                self.bindparams(sorted_formals.get_ref().into(), actuals);
                 if !self.detritus_parameter_bindings.is_empty() {
                     return Err(TypecheckError::InvalidFreeBindings {
                         count: self.detritus_parameter_bindings.len(&self.heap),
@@ -1266,6 +1267,11 @@ impl VM {
         }
 
         if let Some(value) = identifier.get_value(&self.heap) {
+            let value_raw = value.get_ref();
+            if value_raw < ATOM_LIMIT && !value.is_undefined() {
+                return;
+            }
+
             match value.get_data(&self.heap) {
                 IdentifierValueData::Typed { value_type, .. } => match value_type
                     .get_identifier_value_type_kind(&self.heap)
@@ -1501,16 +1507,37 @@ impl VM {
         if export.is_some() && !self.undefined_names.is_empty() {
             return Err(ExportValidationError::BlockedByUndefinedNames);
         }
+        let mut free_only_identifiers = ConsList::EMPTY;
+        let mut current_free_identifiers = self.free_identifiers;
+        while let Some(formal_binding) = current_free_identifiers.pop(&self.heap) {
+            let free_identifier = formal_binding.identifier(&self.heap);
+            free_only_identifiers.insert_ordered(&mut self.heap, free_identifier);
+        }
+        let mut include_free_binding_sets = self.free_binding_sets;
+        while let Some(mut free_binding_set) = include_free_binding_sets.pop(&self.heap) {
+            while let Some(formal_binding) = free_binding_set.pop(&self.heap) {
+                let free_identifier = formal_binding.identifier(&self.heap);
+                free_only_identifiers.insert_ordered(&mut self.heap, free_identifier);
+            }
+        }
+
+        let mut committed_definienda = ConsList::EMPTY;
         let mut exportable_definienda = ConsList::EMPTY;
         let mut current_exportable = current_file_definienda;
         while let Some(definiendum) = current_exportable.pop(&self.heap) {
-            exportable_definienda.insert_ordered(&mut self.heap, definiendum);
+            committed_definienda.insert_ordered(&mut self.heap, definiendum);
+            if !free_only_identifiers.contains(&self.heap, definiendum) {
+                exportable_definienda.insert_ordered(&mut self.heap, definiendum);
+            }
         }
         let mut includees = materialized_includees;
         while let Some(includee) = includees.pop(&self.heap) {
             let mut definienda = includee.get_definienda(&self.heap);
             while let Some(definiendum) = definienda.pop(&self.heap) {
-                exportable_definienda.insert_ordered(&mut self.heap, definiendum);
+                committed_definienda.insert_ordered(&mut self.heap, definiendum);
+                if !free_only_identifiers.contains(&self.heap, definiendum) {
+                    exportable_definienda.insert_ordered(&mut self.heap, definiendum);
+                }
             }
         }
 
@@ -1519,7 +1546,7 @@ impl VM {
             let mut explicit_exports: ConsList<IdentifierRecordRef> =
                 ConsList::from_ref(export.exported_ids);
             while let Some(export_id) = explicit_exports.pop(&self.heap) {
-                if !exportable_definienda.contains(&self.heap, export_id) {
+                if !committed_definienda.contains(&self.heap, export_id) {
                     return Err(ExportValidationError::UndefinedExportedIdentifier {
                         name: export_id.get_name(&self.heap),
                     });
@@ -1536,6 +1563,9 @@ impl VM {
                 if entry == Combinator::Plus.into() {
                     let mut current_exports = current_file_definienda;
                     while let Some(definiendum) = current_exports.pop(&self.heap) {
+                        if free_only_identifiers.contains(&self.heap, definiendum) {
+                            continue;
+                        }
                         committed_exports = ConsList::<Value>::insert_ordered_value(
                             &mut self.heap,
                             committed_exports,
@@ -1557,6 +1587,10 @@ impl VM {
 
                     let mut definienda = includee.get_definienda(&self.heap);
                     while let Some(definiendum) = definienda.pop_value(&self.heap) {
+                        let definiendum_ref = IdentifierRecordRef::from_ref(definiendum.into());
+                        if free_only_identifiers.contains(&self.heap, definiendum_ref) {
+                            continue;
+                        }
                         committed_exports = ConsList::<Value>::insert_ordered_value(
                             &mut self.heap,
                             committed_exports,
@@ -1578,6 +1612,10 @@ impl VM {
             );
 
             while let Some(dependency) = dependencies.pop(&self.heap) {
+                if !exportable_definienda.contains(&self.heap, dependency) {
+                    continue;
+                }
+
                 let dependency_value: Value = dependency.into();
                 if !ConsList::<Value>::contains_value(&self.heap, committed_exports, dependency_value)
                 {

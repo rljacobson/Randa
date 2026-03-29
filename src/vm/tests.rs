@@ -2926,6 +2926,26 @@ fn load_file_include_and_exportfile_success_commits_after_validation() {
 }
 
 #[test]
+fn load_file_export_closure_does_not_promote_free_type_dependency() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("export_closure_ignores_free_type_dependency.m");
+    std::fs::write(&source_path, "%free { t :: type }\nfoo :: t -> t\nfoo x = x\n%export foo\n")
+        .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+    let exported = ConsList::<IdentifierRecordRef>::from_ref(vm.exported_identifiers.into());
+    let foo = vm.heap.get_identifier("foo").expect("expected foo identifier");
+    let t = vm.heap.get_identifier("t").expect("expected free type identifier");
+    assert!(exported.contains(&vm.heap, foo));
+    assert!(!exported.contains(&vm.heap, t));
+}
+
+#[test]
 fn load_file_export_closure_adds_synonym_type_dependency() {
     let mut vm = VM::new();
     vm.initializing = false;
@@ -2992,6 +3012,64 @@ fn load_file_export_closure_adds_abstract_basis_dependency() {
     let base = vm.heap.get_identifier("base").expect("expected base identifier");
     assert!(exported.contains(&vm.heap, thing));
     assert!(exported.contains(&vm.heap, base));
+}
+
+#[test]
+fn load_file_export_plus_excludes_current_script_free_bindings() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("export_plus_excludes_current_free_bindings.m");
+    std::fs::write(
+        &source_path,
+        "%free { t :: type }\nfoo :: t -> t\nfoo x = x\nbar :: t -> t\nbar x = x\n%export +\n",
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+    let exported = ConsList::<IdentifierRecordRef>::from_ref(vm.exported_identifiers.into());
+    let foo = vm.heap.get_identifier("foo").expect("expected foo identifier");
+    let bar = vm.heap.get_identifier("bar").expect("expected bar identifier");
+    let t = vm.heap.get_identifier("t").expect("expected free type identifier");
+    assert!(exported.contains(&vm.heap, foo));
+    assert!(exported.contains(&vm.heap, bar));
+    assert!(!exported.contains(&vm.heap, t));
+}
+
+#[test]
+fn load_file_export_path_expansion_excludes_included_free_bindings() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let include_path = unique_test_path("export_path_excludes_included_free_bindings_target.m");
+    std::fs::write(&include_path, "%free { x :: num }\nfoo y = x\nbar y = y\n")
+        .expect("failed to write include source test file");
+    let include_path_str = include_path.to_string_lossy().to_string();
+
+    let source_path = unique_test_path("export_path_excludes_included_free_bindings_driver.m");
+    std::fs::write(
+        &source_path,
+        format!(
+            "%include \"{}\" {{ x = 1 }}\n%export \"{}\"\n",
+            include_path_str, include_path_str
+        ),
+    )
+    .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+    let exported = ConsList::<IdentifierRecordRef>::from_ref(vm.exported_identifiers.into());
+    let foo = vm.heap.get_identifier("foo").expect("expected included foo identifier");
+    let bar = vm.heap.get_identifier("bar").expect("expected included bar identifier");
+    let x = vm.heap.get_identifier("x").expect("expected included free identifier");
+    assert!(exported.contains(&vm.heap, foo));
+    assert!(exported.contains(&vm.heap, bar));
+    assert!(!exported.contains(&vm.heap, x));
 }
 
 #[test]
