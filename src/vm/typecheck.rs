@@ -654,8 +654,36 @@ fn collect_formal_pattern_issues_in_pattern(
         | CommittedFormalPattern::RepeatedNameHeadApplication { .. } => {
             *value_head_applications_in_formals += 1;
         }
-        CommittedFormalPattern::NonIdentifierHeadApplication { .. } => {
+        CommittedFormalPattern::NonIdentifierHeadApplication { head, arguments } => {
             *non_identifier_application_heads_in_formals += 1;
+            collect_formal_pattern_issues_in_pattern(
+                heap,
+                head,
+                undeclared_constructors_in_formals,
+                constructor_arity_mismatch_in_formals,
+                non_canonical_plus_patterns_in_formals,
+                unary_minus_patterns_in_formals,
+                malformed_plus_applications_in_formals,
+                malformed_minus_applications_in_formals,
+                invalid_successor_patterns_in_formals,
+                value_head_applications_in_formals,
+                non_identifier_application_heads_in_formals,
+            );
+            for argument in arguments {
+                collect_formal_pattern_issues_in_pattern(
+                    heap,
+                    argument,
+                    undeclared_constructors_in_formals,
+                    constructor_arity_mismatch_in_formals,
+                    non_canonical_plus_patterns_in_formals,
+                    unary_minus_patterns_in_formals,
+                    malformed_plus_applications_in_formals,
+                    malformed_minus_applications_in_formals,
+                    invalid_successor_patterns_in_formals,
+                    value_head_applications_in_formals,
+                    non_identifier_application_heads_in_formals,
+                );
+            }
         }
         CommittedFormalPattern::StructuralCons { head, tail }
         | CommittedFormalPattern::StructuralTuple { head, tail } => {

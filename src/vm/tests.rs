@@ -1146,6 +1146,51 @@ fn load_file_rejects_non_identifier_head_application_in_formal() {
 }
 
 #[test]
+fn load_file_rejects_symbolic_infix_pattern_in_formal() {
+    for (file_name, source_text) in [
+        ("symbolic_infix_times_formal.m", "bad (x*y) = y\n"),
+        ("symbolic_infix_equal_formal.m", "bad (a=b) = b\n"),
+        ("symbolic_infix_append_formal.m", "bad (u++v) = v\n"),
+    ] {
+        let mut vm = VM::new();
+        vm.initializing = false;
+
+        let source_path = unique_test_path(file_name);
+        std::fs::write(&source_path, source_text).expect("failed to write source test file");
+        let source_path_str = source_path.to_string_lossy().to_string();
+
+        let result = vm.load_file(&source_path_str);
+
+        assert!(matches!(
+            result,
+            Err(LoadFileError::Typecheck(
+                TypecheckError::NonIdentifierApplicationHeadsInFormals { count: 1 }
+            ))
+        ));
+    }
+}
+
+#[test]
+fn load_file_reports_nested_constructor_inside_symbolic_infix_before_generic_formal_error() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("symbolic_infix_nested_constructor_precedence.m");
+    std::fs::write(&source_path, "bad ((Nope x)*y) = y\n")
+        .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::UndeclaredConstructorsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
 fn load_file_repeated_name_application_head_still_reaches_value_head_bucket() {
     let mut vm = VM::new();
     vm.initializing = false;
@@ -1438,6 +1483,33 @@ fn load_file_unparenthesized_arithmetic_head_application_still_binds_interior_na
         Err(LoadFileError::Typecheck(
             TypecheckError::MalformedPlusApplicationsInFormals { count: 1 }
         ))
+    ));
+}
+
+#[test]
+fn parse_source_text_top_level_where_reaches_symbolic_infix_pattern_typecheck_error() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("source_top_level_where_symbolic_infix_pattern.m");
+    let source_path_str = source_path.to_string_lossy().to_string();
+    let outcome = vm
+        .parse_source_text(
+            &source_path_str,
+            "f x = g x where g (x*y) = y\n",
+            UNIX_EPOCH,
+            false,
+        )
+        .expect("source parse should succeed");
+
+    assert!(outcome.parsed_without_error);
+    vm.files = outcome.files;
+
+    let result = vm.run_checktypes_phase();
+
+    assert!(matches!(
+        result,
+        Err(TypecheckError::NonIdentifierApplicationHeadsInFormals { count: 1 })
     ));
 }
 
@@ -4438,6 +4510,25 @@ fn load_file_rejects_invalid_successor_pattern_in_top_level_pattern_definition()
 }
 
 #[test]
+fn load_file_top_level_pattern_symbolic_infix_still_precedes_undefined_name() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("top_level_pattern_symbolic_infix_precedes_undefined_name.m");
+    std::fs::write(&source_path, "(a=b) = b\n").expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::NonIdentifierApplicationHeadsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
 fn load_file_top_level_pattern_non_canonical_plus_still_precedes_undefined_name() {
     let mut vm = VM::new();
     vm.initializing = false;
@@ -5681,6 +5772,60 @@ fn typecheck_phase_rejects_non_identifier_application_head_in_formal() {
 }
 
 #[test]
+fn typecheck_phase_rejects_symbolic_infix_pattern_in_non_identifier_bucket() {
+    for (file_name, operator, left_name, right_name, body_name) in [
+        (
+            "typecheck_symbolic_times_formal.m",
+            Combinator::Times.into(),
+            "x",
+            "y",
+            "y",
+        ),
+        (
+            "typecheck_symbolic_equal_formal.m",
+            Combinator::Nil.into(),
+            "a",
+            "b",
+            "b",
+        ),
+        (
+            "typecheck_symbolic_append_formal.m",
+            Combinator::Append.into(),
+            "u",
+            "v",
+            "v",
+        ),
+    ] {
+        let mut vm = VM::new();
+
+        let current_file = FileRecord::new(
+            &mut vm.heap,
+            unique_test_path(file_name).to_string_lossy().to_string(),
+            UNIX_EPOCH,
+            false,
+            ConsList::EMPTY,
+        );
+        vm.files = ConsList::new(&mut vm.heap, current_file);
+
+        let f = vm.heap.make_empty_identifier("f");
+        let left = vm.heap.make_empty_identifier(left_name);
+        let right = vm.heap.make_empty_identifier(right_name);
+        let body = vm.heap.make_empty_identifier(body_name);
+        let malformed_pattern = vm.heap.apply2(operator, left.into(), right.into());
+        let lambda_body = vm.heap.lambda_ref(malformed_pattern, body.into());
+        f.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(lambda_body));
+        current_file.push_item_onto_definienda(&mut vm.heap, f);
+
+        let result = vm.run_checktypes_phase();
+
+        assert!(matches!(
+            result,
+            Err(TypecheckError::NonIdentifierApplicationHeadsInFormals { count: 1 })
+        ));
+    }
+}
+
+#[test]
 fn typecheck_phase_rejects_repeated_name_application_head_in_value_head_bucket() {
     let mut vm = VM::new();
 
@@ -5779,6 +5924,39 @@ fn typecheck_phase_non_identifier_application_head_still_binds_head_subtree_name
         &mut vm.heap,
         IdentifierValueData::Arbitrary(lambda_body),
     );
+    current_file.push_item_onto_definienda(&mut vm.heap, f);
+
+    let inputs = typecheck::TypecheckBoundaryInputs::from_vm(&vm);
+    let result = typecheck::run_partial_typecheck(&mut vm.heap, inputs);
+
+    assert!(matches!(
+        &result.failure,
+        Some(TypecheckError::NonIdentifierApplicationHeadsInFormals { count: 1 })
+    ));
+    assert!(result.undefined_names.is_empty());
+}
+
+#[test]
+fn typecheck_phase_symbolic_infix_pattern_still_binds_interior_names() {
+    let mut vm = VM::new();
+
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("symbolic_infix_pattern_binding.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        ConsList::EMPTY,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+
+    let f = vm.heap.make_empty_identifier("f");
+    let x = vm.heap.make_empty_identifier("x");
+    let y = vm.heap.make_empty_identifier("y");
+    let malformed_pattern = vm.heap.apply2(Combinator::Times.into(), x.into(), y.into());
+    let lambda_body = vm.heap.lambda_ref(malformed_pattern, y.into());
+    f.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(lambda_body));
     current_file.push_item_onto_definienda(&mut vm.heap, f);
 
     let inputs = typecheck::TypecheckBoundaryInputs::from_vm(&vm);
@@ -6807,6 +6985,41 @@ fn typecheck_phase_rejects_invalid_successor_pattern_in_local_definition_and_pre
     assert!(matches!(
         &result.failure,
         Some(TypecheckError::InvalidSuccessorPatternsInFormals { count: 1 })
+    ));
+    assert!(result.undefined_names.is_empty());
+}
+
+#[test]
+fn typecheck_phase_rejects_symbolic_infix_pattern_in_local_definition_and_preserves_binding() {
+    let mut vm = VM::new();
+
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("local_pattern_symbolic_infix.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        ConsList::EMPTY,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+
+    let f = vm.heap.make_empty_identifier("f");
+    let x = vm.heap.make_empty_identifier("x");
+    let y = vm.heap.make_empty_identifier("y");
+    let local_pattern = vm.heap.apply2(Combinator::Append.into(), x.into(), y.into());
+    let local_definition = DefinitionRef::new(&mut vm.heap, local_pattern, Type::Undefined.into(), y.into());
+    let definitions = vm.heap.cons_ref(local_definition.into(), NIL);
+    let letrec_body = vm.heap.letrec_ref(definitions, y.into());
+    f.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(letrec_body));
+    current_file.push_item_onto_definienda(&mut vm.heap, f);
+
+    let inputs = typecheck::TypecheckBoundaryInputs::from_vm(&vm);
+    let result = typecheck::run_partial_typecheck(&mut vm.heap, inputs);
+
+    assert!(matches!(
+        &result.failure,
+        Some(TypecheckError::NonIdentifierApplicationHeadsInFormals { count: 1 })
     ));
     assert!(result.undefined_names.is_empty());
 }

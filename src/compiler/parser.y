@@ -551,7 +551,7 @@ top_level_definition_item:
         }
         $$ = NIL;
       }
-    | top_level_pattern_definition_start v act2 top_level_definition_anchor Equal top_level_rhs directive_terminators {
+    | top_level_pattern_definition_start top_level_pattern_definition act2 top_level_definition_anchor Equal top_level_rhs directive_terminators {
         let anchor = FileInfoRef::from_ref($4.into());
         let (lowered_lhs, lowered_body) = self.heap.lower_function_form_lambdas($2, $6);
         let lowered_identifier_ref: RawValue = lowered_lhs.into();
@@ -665,7 +665,7 @@ top_level_local_definition:
         let labeled_body = self.heap.label_ref($3, lowered_body);
         $$ = DefinitionRef::new(&mut self.heap, lowered_lhs, Type::Undefined.into(), labeled_body).into();
       }
-    | v act2 top_level_definition_anchor Equal rhs {
+    | top_level_pattern_definition act2 top_level_definition_anchor Equal rhs {
         let normalized_lhs = self.normalize_local_function_form_lhs($1);
         let (lowered_lhs, lowered_body) = self.heap.lower_function_form_lambdas(normalized_lhs, $5);
         let labeled_body = self.heap.label_ref($3, lowered_body);
@@ -765,6 +765,9 @@ top_level_definition_parameter:
     | top_level_pattern_atom InfixCName top_level_pattern_arithmetic {
         $$ = self.heap.apply2($2, $1, $3);
       }
+    | top_level_pattern_atom top_level_pattern_symbolic_infix_operator top_level_pattern_arithmetic {
+        $$ = self.heap.apply2($2, $1, $3);
+      }
     | Name {
         let identifier = $1;
         if self.used_identifiers.contains(self.heap, identifier) {
@@ -793,6 +796,12 @@ top_level_definition_parameter:
         $$ = y;
       }
     | OpenParenthesis CloseParenthesis { $$ = self.vm.void_tuple(); }
+    | OpenParenthesis top_level_pattern_application_or_atom Equal top_level_pattern CloseParenthesis {
+        $$ = self.heap.apply2(NIL, $2, $4);
+      }
+    | OpenParenthesis top_level_pattern_application_or_atom EqualEqual top_level_pattern CloseParenthesis {
+        $$ = self.heap.apply2(NIL, $2, $4);
+      }
     | OpenParenthesis top_level_pattern Comma top_level_pattern CloseParenthesis {
         $$ = self.heap.pair_ref($2, $4);
       }
@@ -805,6 +814,11 @@ top_level_definition_parameter:
 top_level_pattern:
     top_level_pattern_arithmetic Colon top_level_pattern { $$ = self.heap.cons_ref($1, $3); }
     | top_level_pattern_arithmetic { $$ = $1; }
+    ;
+
+top_level_pattern_definition:
+    top_level_pattern_definition_arithmetic Colon top_level_pattern { $$ = self.heap.cons_ref($1, $3); }
+    | top_level_pattern_definition_arithmetic { $$ = $1; }
     ;
 
 top_level_pattern_arithmetic:
@@ -847,6 +861,57 @@ top_level_pattern_arithmetic:
         $$ = self.heap.apply2($2, $1, $3);
       }
     | top_level_pattern_application_or_atom InfixCName top_level_pattern_arithmetic {
+        $$ = self.heap.apply2($2, $1, $3);
+      }
+    | top_level_pattern_application_or_atom top_level_pattern_symbolic_infix_operator top_level_pattern_arithmetic {
+        $$ = self.heap.apply2($2, $1, $3);
+      }
+    | top_level_pattern_application_or_atom { $$ = $1; }
+    ;
+
+top_level_pattern_definition_arithmetic:
+    top_level_pattern_definition_arithmetic Plus Constant {
+        let inner = $1;
+        let constant = $3;
+        let constant_raw: RawValue = constant.into();
+        if constant_raw < ATOM_LIMIT
+          || self.heap[constant_raw].tag != Tag::Int
+          || (self.heap[constant_raw].head & SIGN_BIT_MASK) != 0
+        {
+          self.syntax("inappropriate use of \"+\" in pattern\n");
+        }
+        $$ = self.heap.apply2(Combinator::Plus.into(), constant, inner);
+      }
+    | top_level_pattern_definition_arithmetic Plus top_level_pattern_non_constant_application_or_atom {
+        $$ = self.heap.apply2(Combinator::Plus.into(), $1, $3);
+      }
+    | Minus Constant {
+        let constant = $2;
+        let constant_raw: RawValue = constant.into();
+        if constant_raw >= ATOM_LIMIT && self.heap[constant_raw].tag == Tag::Int {
+          let negated = IntegerRef::from_ref(constant_raw).negate(self.heap);
+          $$ = self.heap.cons_ref(
+            Token::Constant.into(),
+            negated.into(),
+          );
+        } else {
+          self.syntax("inappropriate use of \"-\" in pattern\n");
+          $$ = self.heap.cons_ref(Token::Constant.into(), constant);
+        }
+      }
+    | Minus top_level_pattern_non_constant_application_or_atom {
+        $$ = self.heap.apply_ref(Combinator::Minus.into(), $2);
+      }
+    | top_level_pattern_definition_arithmetic Minus top_level_pattern_non_constant_application_or_atom {
+        $$ = self.heap.apply2(Combinator::Minus.into(), $1, $3);
+      }
+    | top_level_pattern_application_or_atom InfixName top_level_pattern_definition_arithmetic {
+        $$ = self.heap.apply2($2, $1, $3);
+      }
+    | top_level_pattern_application_or_atom InfixCName top_level_pattern_definition_arithmetic {
+        $$ = self.heap.apply2($2, $1, $3);
+      }
+    | top_level_pattern_application_or_atom top_level_pattern_definition_symbolic_infix_operator top_level_pattern_definition_arithmetic {
         $$ = self.heap.apply2($2, $1, $3);
       }
     | top_level_pattern_application_or_atom { $$ = $1; }
@@ -918,6 +983,18 @@ top_level_pattern_atom:
         $$ = y;
       }
     | OpenParenthesis CloseParenthesis { $$ = self.vm.void_tuple(); }
+    | OpenParenthesis top_level_pattern_application_or_atom Equal top_level_pattern CloseParenthesis {
+        $$ = self.heap.apply2(NIL, $2, $4);
+      }
+    | OpenParenthesis top_level_pattern_application_or_atom EqualEqual top_level_pattern CloseParenthesis {
+        $$ = self.heap.apply2(NIL, $2, $4);
+      }
+    | OpenParenthesis top_level_pattern Comma top_level_pattern CloseParenthesis {
+        $$ = self.heap.pair_ref($2, $4);
+      }
+    | OpenParenthesis top_level_pattern Comma top_level_pattern_tuple_tail CloseParenthesis {
+        $$ = self.heap.cons_ref($2, $4);
+      }
     | OpenParenthesis top_level_pattern CloseParenthesis { $$ = $2; }
     ;
 
@@ -943,6 +1020,12 @@ top_level_pattern_non_constant_atom:
         $$ = y;
       }
     | OpenParenthesis CloseParenthesis { $$ = self.vm.void_tuple(); }
+    | OpenParenthesis top_level_pattern Comma top_level_pattern CloseParenthesis {
+        $$ = self.heap.pair_ref($2, $4);
+      }
+    | OpenParenthesis top_level_pattern Comma top_level_pattern_tuple_tail CloseParenthesis {
+        $$ = self.heap.cons_ref($2, $4);
+      }
     | OpenParenthesis top_level_pattern CloseParenthesis { $$ = $2; }
     ;
 
@@ -1297,6 +1380,42 @@ diop:
     | diop1 { $$ = $1; }
     ;
 
+top_level_pattern_symbolic_infix_operator:
+    PlusPlus { $$ = Combinator::Append.into(); }
+    | Vel { $$ = Combinator::Or.into(); }
+    | Ampersand { $$ = Combinator::And.into(); }
+    | Greater { $$ = Combinator::Gr.into(); }
+    | GreaterEqual { $$ = Combinator::Gre.into(); }
+    | NotEqual { $$ = Combinator::NEq.into(); }
+    | LessEqual { $$ = self.heap.apply_ref(Combinator::C.into(), Combinator::Gre.into()); }
+    | Less { $$ = self.heap.apply_ref(Combinator::C.into(), Combinator::Gr.into()); }
+    | Times { $$ = Combinator::Times.into(); }
+    | DivideFloat { $$ = Combinator::DivideFloat.into(); }
+    | DivideInteger { $$ = Combinator::DivideInteger.into(); }
+    | Remainder { $$ = Combinator::Remainder.into(); }
+    | Caret { $$ = Combinator::Power.into(); }
+    | Dot { $$ = Combinator::B.into(); }
+    | Bang { $$ = self.heap.apply_ref(Combinator::C.into(), Combinator::Subscript.into()); }
+    ;
+
+top_level_pattern_definition_symbolic_infix_operator:
+    PlusPlus { $$ = Combinator::Append.into(); }
+    | Vel { $$ = Combinator::Or.into(); }
+    | Ampersand { $$ = Combinator::And.into(); }
+    | Greater { $$ = Combinator::Gr.into(); }
+    | GreaterEqual { $$ = Combinator::Gre.into(); }
+    | NotEqual { $$ = Combinator::NEq.into(); }
+    | LessEqual { $$ = self.heap.apply_ref(Combinator::C.into(), Combinator::Gre.into()); }
+    | Less { $$ = self.heap.apply_ref(Combinator::C.into(), Combinator::Gr.into()); }
+    | Times { $$ = Combinator::Times.into(); }
+    | DivideFloat { $$ = Combinator::DivideFloat.into(); }
+    | DivideInteger { $$ = Combinator::DivideInteger.into(); }
+    | Remainder { $$ = Combinator::Remainder.into(); }
+    | Caret { $$ = Combinator::Power.into(); }
+    | Dot { $$ = Combinator::B.into(); }
+    | Bang { $$ = self.heap.apply_ref(Combinator::C.into(), Combinator::Subscript.into()); }
+    ;
+
 diop1:
     Plus { $$ = Combinator::Plus.into(); }
     | PlusPlus { $$ = Combinator::Append.into(); }
@@ -1643,18 +1762,20 @@ arg:
     	A tuple. The heap representation of the tuple `(a1, ..., an)` is
         `self.heap.cons(a1, self.heap.cons(a2, ...pair(a(n-1), an)))`.
         */
-        if self.heap[$4].tail == NIL_RAW {
-          $$ = self.heap.pair_ref($2, self.heap[$4].head.into());
+        let first_item = $2;
+        let tail_items_raw: RawValue = $4.into();
+        if self.heap[tail_items_raw].tail == NIL_RAW {
+          $$ = self.heap.pair_ref(first_item, self.heap[tail_items_raw].head.into());
         } else {
-          let tl = self.heap[$4].tail;
-          $$ = self.heap.pair_ref(self.heap[tl].head.into(), self.heap[$4].head.into());
+          let tl = self.heap[tail_items_raw].tail;
+          $$ = self.heap.pair_ref(self.heap[tl].head.into(), self.heap[tail_items_raw].head.into());
           let mut next_item = self.heap[tl].tail;
           while next_item != NIL_RAW {
             let hd = self.heap[next_item].head;
             $$ = self.heap.cons_ref(hd.into(), $$);
             next_item = self.heap[next_item].tail;
           }
-          $$ = self.heap.cons_ref($2, $$);
+          $$ = self.heap.cons_ref(first_item, $$);
         }
 
       }
@@ -1892,7 +2013,7 @@ defs:
     ;
 
 def:
-    v act2 indent Equal here exp Where ldefs outdent {
+    top_level_pattern_definition act2 indent Equal here exp Where ldefs outdent {
         let body = self.build_local_block($8, $6);
         let (lowered_lhs, lowered_body) = self.heap.lower_function_form_lambdas($1, body);
         let labeled_body = self.heap.label_ref($5, lowered_body);
@@ -1900,7 +2021,7 @@ def:
         self.last_identifier = lowered_lhs.into();
       }
 
-    | v act2 indent Equal here non_where_rhs outdent {
+    | top_level_pattern_definition act2 indent Equal here non_where_rhs outdent {
         let (lowered_lhs, lowered_body) = self.heap.lower_function_form_lambdas($1, $6);
         let labeled_body = self.heap.label_ref($5, lowered_body);
         declare(lowered_lhs, labeled_body);
@@ -2417,14 +2538,14 @@ ldef:
         let labeled_body = self.heap.label_ref($5, lowered_body);
         $$ = DefinitionRef::new(&mut self.heap, lowered_lhs, Type::Undefined.into(), labeled_body).into();
       }
-    | v act2 indent Equal here exp Where ldefs outdent {
+    | top_level_pattern_definition act2 indent Equal here exp Where ldefs outdent {
         let body = self.build_local_block($8, $6);
         let normalized_lhs = self.normalize_local_function_form_lhs($1);
         let (lowered_lhs, lowered_body) = self.heap.lower_function_form_lambdas(normalized_lhs, body);
         let labeled_body = self.heap.label_ref($5, lowered_body);
         $$ = DefinitionRef::new(&mut self.heap, lowered_lhs, Type::Undefined.into(), labeled_body).into();
       }
-    | v act2 indent Equal here non_where_rhs outdent {
+    | top_level_pattern_definition act2 indent Equal here non_where_rhs outdent {
         let normalized_lhs = self.normalize_local_function_form_lhs($1);
         let (lowered_lhs, lowered_body) = self.heap.lower_function_form_lambdas(normalized_lhs, $6);
         let labeled_body = self.heap.label_ref($5, lowered_body);
@@ -2486,6 +2607,7 @@ v1:
     | v1 Minus v_non_constant_application_or_atom { $$ = self.heap.apply2(Combinator::Minus.into(), $1, $3); }
     | v2 InfixName v1 { $$ = self.heap.apply2($2, $1, $3); }
     | v2 InfixCName v1 { $$ = self.heap.apply2($2, $1, $3); }
+    | v2 top_level_pattern_symbolic_infix_operator v1 { $$ = self.heap.apply2($2, $1, $3); }
     | v2 { $$ = $1; }
 
 v_non_constant_application_or_atom:
