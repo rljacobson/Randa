@@ -12,6 +12,7 @@ pub(super) struct TypecheckBoundaryInputs {
     pub(super) current_file: Option<FileRecord>,
     pub(super) detritus_parameter_bindings: ConsList<Value>,
     pub(super) missing_parameter_bindings: ConsList<Value>,
+    pub(super) top_level_pattern_check_bodies: Vec<Value>,
 }
 
 impl TypecheckBoundaryInputs {
@@ -23,6 +24,7 @@ impl TypecheckBoundaryInputs {
             current_file: vm.files.head(&vm.heap),
             detritus_parameter_bindings: vm.detritus_parameter_bindings,
             missing_parameter_bindings: vm.missing_parameter_bindings,
+            top_level_pattern_check_bodies: vm.top_level_pattern_check_bodies.clone(),
         }
     }
 }
@@ -55,6 +57,31 @@ pub(super) fn run_partial_typecheck(
     let mut value_head_applications_in_formals = 0usize;
     let mut non_identifier_application_heads_in_formals = 0usize;
     let mut checked_definition_count = 0usize;
+
+    for body in &inputs.top_level_pattern_check_bodies {
+        checked_definition_count += 1;
+        collect_formal_pattern_issues(
+            heap,
+            *body,
+            &mut undeclared_constructors_in_formals,
+            &mut constructor_arity_mismatch_in_formals,
+            &mut non_canonical_plus_patterns_in_formals,
+            &mut unary_minus_patterns_in_formals,
+            &mut malformed_plus_applications_in_formals,
+            &mut malformed_minus_applications_in_formals,
+            &mut invalid_successor_patterns_in_formals,
+            &mut value_head_applications_in_formals,
+            &mut non_identifier_application_heads_in_formals,
+        );
+        let mut bound_identifiers = Vec::new();
+        collect_unresolved_identifier_references(
+            heap,
+            *body,
+            &mut bound_identifiers,
+            &mut undefined_names,
+            &mut type_names_used_as_identifiers,
+        );
+    }
 
     if let Some(current_file) = inputs.current_file {
         let mut definienda = current_file.get_definienda(heap);

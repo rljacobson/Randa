@@ -1,8 +1,9 @@
 use super::*;
 use crate::big_num::IntegerRef;
 use crate::compiler::{
-    HereInfo, ParserExportDirectivePayload, ParserIncludeDirectivePayload, ParserSupportError,
-    ParserTopLevelDirectivePayload, Token,
+    HereInfo, ParserExportDirectivePayload, ParserIncludeDirectivePayload,
+    ParserPatternDefinitionPayload, ParserSupportError, ParserTopLevelDirectivePayload,
+    ParserTopLevelScriptPayload, Token,
 };
 use crate::data::api::{
     ApNodeRef, ConstructorRef, DataPair, DefinitionRef, FreeFormalBindingRef, HeapObjectProxy,
@@ -2516,6 +2517,124 @@ fn parse_source_text_commits_multi_name_free_spec() {
 }
 
 #[test]
+fn commit_parsed_top_level_script_materializes_tuple_pattern_bindings() {
+    let mut vm = VM::new();
+    let source_path = "top_level_tuple_pattern_bindings.m";
+    let x = vm.heap.make_empty_identifier("x");
+    let y = vm.heap.make_empty_identifier("y");
+    let lhs = vm.heap.pair_ref(x.into(), y.into());
+    let rhs = IntegerRef::from_i64(&mut vm.heap, 7);
+    let anchor = test_anchor(&mut vm, source_path, 1);
+
+    let files = vm.commit_parsed_top_level_script(
+        source_path,
+        UNIX_EPOCH,
+        &ParserTopLevelScriptPayload {
+            pattern_definitions: vec![ParserPatternDefinitionPayload {
+                lhs,
+                body: rhs.get_ref(),
+                anchor,
+            }],
+            ..Default::default()
+        },
+    );
+
+    let current_file = files.head(&vm.heap).expect("expected current file");
+    assert_eq!(current_file.get_definienda(&vm.heap).len(&vm.heap), 2);
+    assert!(x.get_value(&vm.heap).is_some());
+    assert!(y.get_value(&vm.heap).is_some());
+}
+
+#[test]
+fn commit_parsed_top_level_script_materializes_list_pattern_bindings() {
+    let mut vm = VM::new();
+    let source_path = "top_level_list_pattern_bindings.m";
+    let x = vm.heap.make_empty_identifier("x");
+    let y = vm.heap.make_empty_identifier("y");
+    let tail = vm.heap.cons_ref(y.into(), Combinator::Nil.into());
+    let lhs = vm.heap.cons_ref(x.into(), tail);
+    let rhs = IntegerRef::from_i64(&mut vm.heap, 7);
+    let anchor = test_anchor(&mut vm, source_path, 1);
+
+    let files = vm.commit_parsed_top_level_script(
+        source_path,
+        UNIX_EPOCH,
+        &ParserTopLevelScriptPayload {
+            pattern_definitions: vec![ParserPatternDefinitionPayload {
+                lhs,
+                body: rhs.get_ref(),
+                anchor,
+            }],
+            ..Default::default()
+        },
+    );
+
+    let current_file = files.head(&vm.heap).expect("expected current file");
+    assert_eq!(current_file.get_definienda(&vm.heap).len(&vm.heap), 2);
+    assert!(x.get_value(&vm.heap).is_some());
+    assert!(y.get_value(&vm.heap).is_some());
+}
+
+#[test]
+fn commit_parsed_top_level_script_repeated_name_pattern_does_not_create_duplicate_binding() {
+    let mut vm = VM::new();
+    let source_path = "top_level_repeated_name_pattern_bindings.m";
+    let x = vm.heap.make_empty_identifier("x");
+    let repeated = vm.heap.cons_ref(Token::Constant.into(), x.into());
+    let tail = vm.heap.cons_ref(repeated, Combinator::Nil.into());
+    let lhs = vm.heap.cons_ref(x.into(), tail);
+    let rhs = IntegerRef::from_i64(&mut vm.heap, 7);
+    let anchor = test_anchor(&mut vm, source_path, 1);
+
+    let files = vm.commit_parsed_top_level_script(
+        source_path,
+        UNIX_EPOCH,
+        &ParserTopLevelScriptPayload {
+            pattern_definitions: vec![ParserPatternDefinitionPayload {
+                lhs,
+                body: rhs.get_ref(),
+                anchor,
+            }],
+            ..Default::default()
+        },
+    );
+
+    let current_file = files.head(&vm.heap).expect("expected current file");
+    assert_eq!(current_file.get_definienda(&vm.heap).len(&vm.heap), 1);
+    assert!(x.get_value(&vm.heap).is_some());
+}
+
+#[test]
+fn commit_parsed_top_level_script_wrapped_constant_pattern_only_commits_variable_binding() {
+    let mut vm = VM::new();
+    let source_path = "top_level_wrapped_constant_pattern_bindings.m";
+    let x = vm.heap.make_empty_identifier("x");
+    let one = IntegerRef::from_i64(&mut vm.heap, 1);
+    let wrapped_constant = vm.heap.cons_ref(Token::Constant.into(), one.get_ref().into());
+    let tail = vm.heap.cons_ref(x.into(), Combinator::Nil.into());
+    let lhs = vm.heap.cons_ref(wrapped_constant, tail);
+    let rhs = IntegerRef::from_i64(&mut vm.heap, 7);
+    let anchor = test_anchor(&mut vm, source_path, 1);
+
+    let files = vm.commit_parsed_top_level_script(
+        source_path,
+        UNIX_EPOCH,
+        &ParserTopLevelScriptPayload {
+            pattern_definitions: vec![ParserPatternDefinitionPayload {
+                lhs,
+                body: rhs.get_ref(),
+                anchor,
+            }],
+            ..Default::default()
+        },
+    );
+
+    let current_file = files.head(&vm.heap).expect("expected current file");
+    assert_eq!(current_file.get_definienda(&vm.heap).len(&vm.heap), 1);
+    assert!(x.get_value(&vm.heap).is_some());
+}
+
+#[test]
 fn parse_source_text_commits_mixed_free_type_and_value_specs() {
     let mut vm = VM::new();
 
@@ -4183,6 +4302,63 @@ fn load_file_rejects_top_level_where_with_local_unparenthesized_binary_minus_pat
 }
 
 #[test]
+fn load_file_rejects_undeclared_constructor_in_top_level_pattern_definition() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("top_level_pattern_undeclared_constructor.m");
+    std::fs::write(&source_path, "Nope x = x\n")
+        .expect("failed to write source test file");
+
+    let result = vm.load_file(&source_path.to_string_lossy());
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::UndeclaredConstructorsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
+fn load_file_rejects_invalid_successor_pattern_in_top_level_pattern_definition() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("top_level_pattern_invalid_successor.m");
+    std::fs::write(&source_path, "(((x:xs)+1)) = missing\n")
+        .expect("failed to write source test file");
+
+    let result = vm.load_file(&source_path.to_string_lossy());
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::InvalidSuccessorPatternsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
+fn load_file_top_level_pattern_non_canonical_plus_still_precedes_undefined_name() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("top_level_pattern_non_canonical_plus.m");
+    std::fs::write(&source_path, "(x+y) = missing\n")
+        .expect("failed to write source test file");
+
+    let result = vm.load_file(&source_path.to_string_lossy());
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::NonCanonicalPlusPatternsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
 fn load_file_top_level_where_unparenthesized_application_headed_plus_still_binds_interior_names() {
     let mut vm = VM::new();
     vm.initializing = false;
@@ -4397,6 +4573,48 @@ fn load_file_lowers_identity_definition_body_during_codegen() {
             .get_ref(),
         RawValue::from(Combinator::I)
     );
+}
+
+#[test]
+fn load_file_materializes_bare_list_pattern_definition_bindings() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("bare_list_pattern_load.m");
+    std::fs::write(&source_path, "[x, y] = [1, 2]\n")
+        .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+    let x = vm.heap.get_identifier("x").expect("expected x identifier");
+    let y = vm.heap.get_identifier("y").expect("expected y identifier");
+    assert!(x.get_value(&vm.heap).is_some());
+    assert!(y.get_value(&vm.heap).is_some());
+    assert!(subtree_contains_combinator(
+        &vm.heap,
+        Value::from(x.get_value(&vm.heap).expect("expected lowered x body").get_ref()),
+        Combinator::U_,
+    ));
+}
+
+#[test]
+fn load_file_materializes_bare_constructor_pattern_definition_bindings() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("bare_constructor_pattern_load.m");
+    std::fs::write(&source_path, "maybe ::= Nothing | Just *\nJust x = Just 1\n")
+        .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(result.is_ok(), "result={result:?} diagnostics={:?}", vm.parser_diagnostics);
+    let x = vm.heap.get_identifier("x").expect("expected x identifier");
+    assert!(x.get_value(&vm.heap).is_some());
+    assert!(!vm.files.is_empty());
 }
 
 #[test]

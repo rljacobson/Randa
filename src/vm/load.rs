@@ -3,6 +3,7 @@ use super::*;
 use crate::compiler::{
     parser::Parser, HereInfo, Lexer, ParserActivation, ParserConstructorPayload,
     ParserDeferredState, ParserDefinitionPayload, ParserEntryMode, ParserFreeBindingPayload,
+    ParserPatternDefinitionPayload,
     ParserIncludeBindingPayload, ParserIncludeDirectivePayload, ParserIncludeModifierPayload,
     ParserRunDiagnostics, ParserRunResult, ParserSessionState, ParserSpecificationPayload,
     ParserSupportError, ParserTopLevelDirectivePayload, ParserTopLevelScriptPayload,
@@ -352,6 +353,7 @@ impl VM {
         self.export_paths = NIL;
         self.exported_identifiers = NIL;
         self.empty_production_nonterminals = NIL;
+        self.top_level_pattern_check_bodies.clear();
     }
 
     pub(super) fn empty_environment_for_source(
@@ -643,6 +645,7 @@ impl VM {
                     current_file,
                     detritus_parameter_bindings: include_detritus_parameter_bindings,
                     missing_parameter_bindings: include_missing_parameter_bindings,
+                    top_level_pattern_check_bodies: self.top_level_pattern_check_bodies.clone(),
                 },
             );
             if let Some(failure) = typecheck_result.failure {
@@ -2208,7 +2211,7 @@ impl VM {
         self.parse_source_text(source_path, &source_text, modified_time, _is_main_script)
     }
 
-    fn commit_parsed_top_level_script(
+    pub(super) fn commit_parsed_top_level_script(
         &mut self,
         source_path: &str,
         modified_time: SystemTime,
@@ -2219,6 +2222,9 @@ impl VM {
         if let Some(current_file) = files.head(&self.heap) {
             for definition in &payload.definitions {
                 self.commit_top_level_definition_payload(current_file, definition);
+            }
+            for pattern_definition in &payload.pattern_definitions {
+                self.commit_top_level_pattern_definition_payload(current_file, pattern_definition);
             }
             for specification in &payload.specifications {
                 self.commit_top_level_specification_payload(current_file, specification);
@@ -2282,6 +2288,41 @@ impl VM {
         );
 
         current_file.push_definiendum_once(&mut self.heap, definition.identifier);
+    }
+
+    fn commit_top_level_pattern_definition_payload(
+        &mut self,
+        current_file: FileRecord,
+        pattern_definition: &ParserPatternDefinitionPayload,
+    ) {
+        let definition_metadata = self.definition_metadata_from_anchor(pattern_definition.anchor);
+        self.top_level_pattern_check_bodies.push(
+            self.heap.lambda_ref(pattern_definition.lhs, pattern_definition.body.into()),
+        );
+        let mut bound_identifiers = Vec::new();
+        super::typecheck::collect_pattern_bound_identifiers(
+            &self.heap,
+            pattern_definition.lhs,
+            &mut bound_identifiers,
+        );
+
+        for identifier in bound_identifiers {
+            let lowered_function = super::codegen::abstract_template_from_expression(
+                &mut self.heap,
+                pattern_definition.lhs,
+                identifier.into(),
+            );
+            let body = self
+                .heap
+                .apply_ref(lowered_function, pattern_definition.body.into());
+            identifier.set_definition(&mut self.heap, definition_metadata);
+            identifier.set_datatype(&mut self.heap, Type::Undefined.into());
+            identifier.set_value_from_data(
+                &mut self.heap,
+                IdentifierValueData::Arbitrary(body.into()),
+            );
+            current_file.push_definiendum_once(&mut self.heap, identifier);
+        }
     }
 
     fn commit_top_level_specification_payload(

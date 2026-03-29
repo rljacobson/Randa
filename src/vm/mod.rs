@@ -103,6 +103,9 @@ pub struct VM {
     error_line: usize,
     error_locations: Vec<RawValue>,
     parser_diagnostics: Vec<ParserDiagnostic>,
+    /// Synthetic lambda bodies staged so typecheck can validate bare top-level pattern definitions
+    /// through the existing formal-pattern owner before generic undefined-name reporting.
+    top_level_pattern_check_bodies: Vec<Value>,
 
     /// A reference to the last expression evaluated.
     last_expression: Value,
@@ -296,6 +299,7 @@ impl VM {
             error_line: 0,
             error_locations: vec![],
             parser_diagnostics: vec![],
+            top_level_pattern_check_bodies: vec![],
             last_expression: Value::None, // A reference to the last expression evaluated.
             private_symbol_base_index: 0,
             include_depth: 0,

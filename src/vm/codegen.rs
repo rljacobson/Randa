@@ -489,7 +489,7 @@ fn constructor_template_value(heap: &Heap, template: Value) -> Option<Value> {
 /// instead of scattering template cases through the `Tag::Lambda` branch. The invariant is that
 /// simple binders use bracket abstraction, constant/structural patterns use `MATCH` / `MATCHINT` /
 /// `U` / `U_`, constructor applications use `Ug`, and canonical `n+k` uses `ATLEAST`.
-fn abstract_template_from_expression(heap: &mut Heap, template: Value, expression: Value) -> Value {
+pub(super) fn abstract_template_from_expression(heap: &mut Heap, template: Value, expression: Value) -> Value {
     if let Some(constructor_value) = constructor_template_value(heap, template) {
         return heap.apply2(Combinator::Ug.into(), constructor_value, expression);
     }
