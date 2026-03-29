@@ -8,13 +8,21 @@ source alternatives have replaced it. I am not aware of anyone using Miranda tod
 texts by Simon Peyton Jones use Miranda. It would be interesting to see those texts get another chance at life.
 
 Randa is a [RIIR](https://deprogrammaticaipsum.com/the-great-rewriting-in-rust/) of Miranda. The goal is functional 
-equivalence, aiming for binary compatibility. As I learn more about how Miranda works, I expect to deviate from 
+equivalence.  As I learn more about how Miranda works, I expect to deviate from 
 binary compatibility, so while I _aim_ for binary compatibility, I expect to miss. 
 
 Randa is a name starting with the letter R. Rust also starts with the letter R. Randa has obvious similarities to the 
 name Miranda, its ancestor software. Finally, Randa is the name of a high school friend of mine who 
 tragically and unexpectedly passed away far too young, and it makes me happy to think of her whenever I work on 
 Randa the software.
+
+# Related Projects
+
+Tim Olsen is the author of [Admiran](https://github.com/taolson/Admiran): Admiran is a pure, lazy, functional language
+and self-hosting compiler, based upon the original Miranda language designed by David Turner, with additional features
+from Haskell and other functional languages.
+
+Martin Guy maintains the original [Miranda compiler](https://codeberg.org/DATurner/miranda).
 
 # Authorship
 
@@ -23,5 +31,5 @@ original Miranda code. Miranda was written by David Turner.
 
 # License
 
-Randa is distributed under the terms of the 'Simplified" BSD License, which is the same license that Miranda is 
+Randa is distributed under the terms of the "Simplified" BSD License, which is the same license that Miranda is 
 distributed under. See LICENSE.md for details.
