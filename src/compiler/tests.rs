@@ -53,6 +53,20 @@ fn here_info_from_source_location_counts_lines_and_handles_missing_location() {
 }
 
 #[test]
+fn parser_parses_top_level_value_definition() {
+    let (heap, result) = run_parser("value_definition_substrate.m", "id = value\n");
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success");
+    };
+    assert_eq!(payload.definitions.len(), 1);
+    let definition = &payload.definitions[0];
+    assert_eq!(definition.identifier.get_name(&heap), "id");
+    let body_identifier = IdentifierRecordRef::from_ref(definition.body);
+    assert_eq!(body_identifier.get_name(&heap), "value");
+}
+
+#[test]
 fn parser_parses_top_level_function_form_and_lowers_to_lambdas() {
     let (heap, result) = run_parser("function_form_substrate.m", "id x y = x\n");
 
@@ -68,6 +82,36 @@ fn parser_parses_top_level_function_form_and_lowers_to_lambdas() {
     assert_eq!(heap[inner_lambda_raw].tag, Tag::Lambda);
     let body_identifier = IdentifierRecordRef::from_ref(heap[inner_lambda_raw].tail);
     assert_eq!(body_identifier.get_name(&heap), "x");
+}
+
+#[test]
+fn parser_parses_multi_name_top_level_specification() {
+    let (heap, result) = run_parser("multi_name_specification.m", "foo, bar :: num\n");
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success");
+    };
+    assert_eq!(payload.specifications.len(), 2);
+    assert_eq!(payload.specifications[0].identifier.get_name(&heap), "foo");
+    assert_eq!(payload.specifications[1].identifier.get_name(&heap), "bar");
+}
+
+#[test]
+fn parser_parses_neighboring_name_led_definitions_and_specs_in_source_order() {
+    let (heap, result) = run_parser(
+        "neighboring_name_led_items.m",
+        "value = body\nfoo, bar :: num\nidentity x = x\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success");
+    };
+    assert_eq!(payload.definitions.len(), 2);
+    assert_eq!(payload.specifications.len(), 2);
+    assert_eq!(payload.definitions[0].identifier.get_name(&heap), "value");
+    assert_eq!(payload.specifications[0].identifier.get_name(&heap), "foo");
+    assert_eq!(payload.specifications[1].identifier.get_name(&heap), "bar");
+    assert_eq!(payload.definitions[1].identifier.get_name(&heap), "identity");
 }
 
 #[test]
@@ -205,6 +249,64 @@ fn parser_groups_local_equations_when_nested_local_where_is_present() {
     let outer_definitions_raw = heap[outer_letrec_raw].head;
     assert_eq!(heap[outer_definitions_raw].tag, Tag::Cons);
     assert_eq!(heap[outer_definitions_raw].tail, RawValue::from(Combinator::Nil));
+}
+
+#[test]
+fn parser_groups_identifier_headed_and_pattern_local_equations_through_shared_where_owner() {
+    let (heap, result) = run_parser(
+        "top_level_where_shared_local_owner.m",
+        "f xs = g xs where\n  g (a:as) z = a\n  g y z = y\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success, got {result:?}");
+    };
+    let outer_lambda_raw = payload.definitions[0].body;
+    let letrec_raw = heap[outer_lambda_raw].tail;
+    assert_eq!(heap[letrec_raw].tag, Tag::LetRec);
+    let definitions_raw = heap[letrec_raw].head;
+    assert_eq!(heap[definitions_raw].tag, Tag::Cons);
+    assert_eq!(heap[definitions_raw].tail, RawValue::from(Combinator::Nil));
+
+    let local_definition = DefinitionRef::from_ref(heap[definitions_raw].head);
+    let local_lhs_raw = RawValue::from(local_definition.lhs_value(&heap));
+    assert_eq!(heap[local_lhs_raw].tag, Tag::Id);
+    assert_eq!(IdentifierRecordRef::from_ref(local_lhs_raw).get_name(&heap), "g");
+
+    let local_body_raw = RawValue::from(local_definition.body_value(&heap));
+    assert_eq!(heap[local_body_raw].tag, Tag::Tries);
+    let alternatives_raw = heap[local_body_raw].tail;
+    assert_eq!(heap[alternatives_raw].tag, Tag::Cons);
+    assert_ne!(heap[alternatives_raw].tail, RawValue::from(Combinator::Nil));
+}
+
+#[test]
+fn parser_groups_identifier_then_pattern_local_equations_through_shared_where_owner() {
+    let (heap, result) = run_parser(
+        "top_level_where_shared_local_owner_reverse_order.m",
+        "f xs = g xs where\n  g y z = y, if p\n  g (a:as) z = a\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success, got {result:?}");
+    };
+    let outer_lambda_raw = payload.definitions[0].body;
+    let letrec_raw = heap[outer_lambda_raw].tail;
+    assert_eq!(heap[letrec_raw].tag, Tag::LetRec);
+    let definitions_raw = heap[letrec_raw].head;
+    assert_eq!(heap[definitions_raw].tag, Tag::Cons);
+    assert_eq!(heap[definitions_raw].tail, RawValue::from(Combinator::Nil));
+
+    let local_definition = DefinitionRef::from_ref(heap[definitions_raw].head);
+    let local_lhs_raw = RawValue::from(local_definition.lhs_value(&heap));
+    assert_eq!(heap[local_lhs_raw].tag, Tag::Id);
+    assert_eq!(IdentifierRecordRef::from_ref(local_lhs_raw).get_name(&heap), "g");
+
+    let local_body_raw = RawValue::from(local_definition.body_value(&heap));
+    assert_eq!(heap[local_body_raw].tag, Tag::Tries);
+    let alternatives_raw = heap[local_body_raw].tail;
+    assert_eq!(heap[alternatives_raw].tag, Tag::Cons);
+    assert_ne!(heap[alternatives_raw].tail, RawValue::from(Combinator::Nil));
 }
 
 #[test]
@@ -517,6 +619,24 @@ fn parser_parses_top_level_tuple_pattern_form() {
 }
 
 #[test]
+fn parser_parses_top_level_three_tuple_pattern_form() {
+    let (heap, result) = run_parser("three_tuple_pattern_form_substrate.m", "third (x,y,z) = z\n");
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success");
+    };
+    assert_eq!(payload.definitions.len(), 1);
+    let lambda_raw = payload.definitions[0].body;
+    assert_eq!(heap[lambda_raw].tag, Tag::Lambda);
+    let pattern_raw = heap[lambda_raw].head;
+    assert_eq!(heap[pattern_raw].tag, Tag::Cons);
+    let tuple_tail_raw = heap[pattern_raw].tail;
+    assert_eq!(heap[tuple_tail_raw].tag, Tag::Pair);
+    let body_identifier = IdentifierRecordRef::from_ref(heap[lambda_raw].tail);
+    assert_eq!(body_identifier.get_name(&heap), "z");
+}
+
+#[test]
 fn parser_parses_top_level_constant_pattern_form() {
     let (heap, result) = run_parser("constant_pattern_form_substrate.m", "zero 0 = True\n");
 
@@ -581,6 +701,39 @@ fn parser_parses_top_level_list_pattern_form() {
     assert_eq!(heap[tail_raw].tag, Tag::Cons);
     let body_identifier = IdentifierRecordRef::from_ref(heap[lambda_raw].tail);
     assert_eq!(body_identifier.get_name(&heap), "y");
+}
+
+#[test]
+fn parser_parses_top_level_where_with_local_list_pattern() {
+    let (heap, result) = run_parser(
+        "top_level_where_local_list_pattern.m",
+        "f x = g x where second [x,y] = y\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success, got {result:?}");
+    };
+    assert_eq!(payload.definitions.len(), 1);
+
+    let outer_lambda_raw = payload.definitions[0].body;
+    assert_eq!(heap[outer_lambda_raw].tag, Tag::Lambda);
+    let letrec_raw = heap[outer_lambda_raw].tail;
+    assert_eq!(heap[letrec_raw].tag, Tag::LetRec);
+
+    let definitions_raw = heap[letrec_raw].head;
+    let definition = DefinitionRef::from_ref(heap[definitions_raw].head);
+    let definition_name = IdentifierRecordRef::from_ref(definition.lhs_value(&heap).into()).get_name(&heap);
+    assert_eq!(definition_name, "second");
+
+    let body_raw = RawValue::from(definition.body_value(&heap));
+    assert_eq!(heap[body_raw].tag, Tag::Tries);
+    let alternatives_raw = heap[body_raw].tail;
+    let labeled_body_raw = heap[alternatives_raw].head;
+    let lambda_raw = heap[labeled_body_raw].tail;
+    let pattern_raw = RawValue::from(heap[lambda_raw].head);
+    assert_eq!(heap[pattern_raw].tag, Tag::Cons);
+    let tail_raw = heap[pattern_raw].tail;
+    assert_eq!(heap[tail_raw].tag, Tag::Cons);
 }
 
 #[test]
@@ -988,6 +1141,40 @@ fn parser_strips_repeated_name_wrapper_from_application_head() {
 }
 
 #[test]
+fn parser_strips_repeated_name_wrapper_from_local_application_head_under_top_level_where() {
+    let (heap, result) = run_parser(
+        "top_level_where_repeated_name_application_head_pattern_form_substrate.m",
+        "f x = g x where g (y, (y z)) = z\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success, got {result:?}");
+    };
+    assert_eq!(payload.definitions.len(), 1);
+
+    let outer_lambda_raw = payload.definitions[0].body;
+    assert_eq!(heap[outer_lambda_raw].tag, Tag::Lambda);
+    let letrec_raw = heap[outer_lambda_raw].tail;
+    assert_eq!(heap[letrec_raw].tag, Tag::LetRec);
+    let definitions_raw = heap[letrec_raw].head;
+    let local_definition = DefinitionRef::from_ref(heap[definitions_raw].head);
+    let local_body_raw = RawValue::from(local_definition.body_value(&heap));
+    assert_eq!(heap[local_body_raw].tag, Tag::Tries);
+    let alternatives_raw = heap[local_body_raw].tail;
+    let labeled_body_raw = heap[alternatives_raw].head;
+    let local_lambda_raw = heap[labeled_body_raw].tail;
+    let tuple_raw = heap[local_lambda_raw].head;
+    assert_eq!(heap[tuple_raw].tag, Tag::Pair);
+
+    let repeated_head_application_raw = heap[tuple_raw].tail;
+    assert_eq!(heap[repeated_head_application_raw].tag, Tag::Ap);
+    let head_raw = heap[repeated_head_application_raw].head;
+    assert_eq!(heap[head_raw].tag, Tag::Id);
+    let head_identifier = IdentifierRecordRef::from_ref(head_raw);
+    assert_eq!(head_identifier.get_name(&heap), "y");
+}
+
+#[test]
 fn parser_parses_unparenthesized_constructor_application_formal_chain() {
     let (heap, result) = run_parser(
         "unparenthesized_constructor_application_formal_chain.m",
@@ -1235,6 +1422,23 @@ fn parser_preserves_mixed_include_binding_source_order() {
 }
 
 #[test]
+fn parser_parses_top_level_name_led_definitions_next_to_type_declarations() {
+    let (heap, result) = run_parser(
+        "neighboring_name_led_types.m",
+        "value = body\nthing == num\nwidget ::= Widget\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success");
+    };
+    assert_eq!(payload.definitions.len(), 1);
+    assert_eq!(payload.type_declarations.len(), 2);
+    assert_eq!(payload.definitions[0].identifier.get_name(&heap), "value");
+    assert_eq!(payload.type_declarations[0].type_identifier.get_name(&heap), "thing");
+    assert_eq!(payload.type_declarations[1].type_identifier.get_name(&heap), "widget");
+}
+
+#[test]
 fn parser_parses_top_level_infix_synonym_type_lhs() {
     let (heap, result) = run_parser("infix_synonym_lhs.m", "* $pair ** == (*, [num])\n");
 
@@ -1262,6 +1466,30 @@ fn parser_parses_top_level_infix_algebraic_type_lhs() {
     assert_eq!(declaration.kind, crate::data::api::IdentifierValueTypeKind::Algebraic);
     assert_eq!(payload.constructor_declarations.len(), 1);
     assert_eq!(payload.constructor_declarations[0].constructor.get_name(&heap), "Pair");
+}
+
+#[test]
+fn parser_rejects_uppercase_name_led_type_lhs_in_synonym() {
+    let (_heap, result) = run_parser("uppercase_name_led_type_lhs.m", "Thing == num\n");
+
+    let ParserRunResult::SyntaxError(diagnostics) = result else {
+        panic!("expected syntax error result");
+    };
+    assert!(diagnostics.diagnostics.iter().any(|diagnostic| diagnostic
+        .message
+        .contains("upper case identifier out of context")));
+}
+
+#[test]
+fn parser_rejects_repeated_name_led_type_variable_on_type_lhs() {
+    let (_heap, result) = run_parser("repeated_name_led_typevar.m", "thing * * == num\n");
+
+    let ParserRunResult::SyntaxError(diagnostics) = result else {
+        panic!("expected syntax error result");
+    };
+    assert!(diagnostics.diagnostics.iter().any(|diagnostic| diagnostic
+        .message
+        .contains("repeated type variable on lhs of type def")));
 }
 
 #[test]
@@ -1417,6 +1645,23 @@ fn parser_records_bare_tuple_pattern_definition_payload() {
 }
 
 #[test]
+fn parser_records_bare_three_tuple_pattern_definition_payload() {
+    let (heap, result) = run_parser("bare_three_tuple_pattern_definition.m", "(x,y,z) = triple\n");
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success");
+    };
+    assert!(payload.definitions.is_empty());
+    assert_eq!(payload.pattern_definitions.len(), 1);
+
+    let pattern_definition = &payload.pattern_definitions[0];
+    let lhs_raw: RawValue = pattern_definition.lhs.into();
+    assert_eq!(heap[lhs_raw].tag, Tag::Cons);
+    let tuple_tail_raw = heap[lhs_raw].tail;
+    assert_eq!(heap[tuple_tail_raw].tag, Tag::Pair);
+}
+
+#[test]
 fn parser_records_bare_list_pattern_definition_payload() {
     let (heap, result) = run_parser("bare_list_pattern_definition.m", "[x,y] = pair\n");
 
@@ -1432,6 +1677,20 @@ fn parser_records_bare_list_pattern_definition_payload() {
 }
 
 #[test]
+fn parser_records_bare_empty_list_pattern_definition_payload() {
+    let (heap, result) = run_parser("bare_empty_list_pattern_definition.m", "[] = nil\n");
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success");
+    };
+    assert!(payload.definitions.is_empty());
+    assert_eq!(payload.pattern_definitions.len(), 1);
+
+    let pattern_definition = &payload.pattern_definitions[0];
+    assert_eq!(pattern_definition.lhs, heap.nill);
+}
+
+#[test]
 fn parser_records_bare_constructor_pattern_definition_payload() {
     let (heap, result) = run_parser("bare_constructor_pattern_definition.m", "Just x = x\n");
 
@@ -1444,6 +1703,49 @@ fn parser_records_bare_constructor_pattern_definition_payload() {
     let pattern_definition = &payload.pattern_definitions[0];
     let lhs_raw: RawValue = pattern_definition.lhs.into();
     assert_eq!(heap[lhs_raw].tag, Tag::Ap);
+}
+
+#[test]
+fn parser_records_bare_constant_pattern_definition_payload() {
+    let (heap, result) = run_parser("bare_constant_pattern_definition.m", "0 = 7\n");
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success, got {result:?}");
+    };
+    assert!(payload.definitions.is_empty());
+    assert_eq!(payload.pattern_definitions.len(), 1);
+
+    let pattern_definition = &payload.pattern_definitions[0];
+    let lhs_raw: RawValue = pattern_definition.lhs.into();
+    assert_eq!(heap[lhs_raw].tag, Tag::Cons);
+    assert_eq!(heap[lhs_raw].head, RawValue::from(Value::Token(Token::Constant)));
+    let constant_raw = heap[lhs_raw].tail;
+    assert_eq!(heap[constant_raw].tag, Tag::Int);
+}
+
+#[test]
+fn parser_strips_repeated_name_wrapper_from_bare_pattern_definition_application_head() {
+    let (heap, result) = run_parser(
+        "bare_repeated_name_application_head_pattern_definition.m",
+        "(x, (x y)) = y\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success, got {result:?}");
+    };
+    assert!(payload.definitions.is_empty());
+    assert_eq!(payload.pattern_definitions.len(), 1);
+
+    let pattern_definition = &payload.pattern_definitions[0];
+    let tuple_raw: RawValue = pattern_definition.lhs.into();
+    assert_eq!(heap[tuple_raw].tag, Tag::Pair);
+
+    let repeated_head_application_raw = heap[tuple_raw].tail;
+    assert_eq!(heap[repeated_head_application_raw].tag, Tag::Ap);
+    let head_raw = heap[repeated_head_application_raw].head;
+    assert_eq!(heap[head_raw].tag, Tag::Id);
+    let head_identifier = IdentifierRecordRef::from_ref(head_raw);
+    assert_eq!(head_identifier.get_name(&heap), "x");
 }
 
 #[test]
@@ -1504,6 +1806,53 @@ fn parser_records_bare_malformed_plus_application_pattern_definition_payload() {
     assert_eq!(
         Value::from(heap[operator_application_raw].head),
         Combinator::Plus.into()
+    );
+}
+
+#[test]
+fn parser_records_bare_binary_minus_pattern_definition_payload() {
+    let (heap, result) = run_parser("bare_binary_minus_pattern_definition.m", "(x-y) = y\n");
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success, got {result:?}");
+    };
+    assert!(payload.definitions.is_empty());
+    assert_eq!(payload.pattern_definitions.len(), 1);
+
+    let pattern_definition = &payload.pattern_definitions[0];
+    let lhs_raw: RawValue = pattern_definition.lhs.into();
+    assert_eq!(heap[lhs_raw].tag, Tag::Ap);
+    let operator_application_raw = heap[lhs_raw].head;
+    assert_eq!(heap[operator_application_raw].tag, Tag::Ap);
+    assert_eq!(
+        Value::from(heap[operator_application_raw].head),
+        Combinator::Minus.into()
+    );
+}
+
+#[test]
+fn parser_records_bare_malformed_minus_application_pattern_definition_payload() {
+    let (heap, result) = run_parser(
+        "bare_malformed_minus_application_pattern_definition.m",
+        "(((x-y)) z) = z\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success, got {result:?}");
+    };
+    assert!(payload.definitions.is_empty());
+    assert_eq!(payload.pattern_definitions.len(), 1);
+
+    let pattern_definition = &payload.pattern_definitions[0];
+    let lhs_raw: RawValue = pattern_definition.lhs.into();
+    assert_eq!(heap[lhs_raw].tag, Tag::Ap);
+    let arithmetic_head_application_raw = heap[lhs_raw].head;
+    assert_eq!(heap[arithmetic_head_application_raw].tag, Tag::Ap);
+    let operator_application_raw = heap[arithmetic_head_application_raw].head;
+    assert_eq!(heap[operator_application_raw].tag, Tag::Ap);
+    assert_eq!(
+        Value::from(heap[operator_application_raw].head),
+        Combinator::Minus.into()
     );
 }
 
@@ -1938,17 +2287,18 @@ fn parser_parses_unparenthesized_application_headed_plus_pattern_in_top_level_fo
 fn parser_parses_symbolic_infix_pattern_forms_in_top_level_formals() {
     let (heap, result) = run_parser(
         "symbolic_infix_pattern_form_substrate.m",
-        "timesMatch (x*y) = x\nequalMatch (a=b) = a\nappendMatch (u++v) = u\n",
+        "timesMatch (x*y) = x\nequalMatch (a=b) = a\ndoubleEqualMatch (a==b) = a\nappendMatch (u++v) = u\n",
     );
 
     let ParserRunResult::ParsedTopLevelScript(payload) = result else {
         panic!("expected top-level parse success, got {result:?}");
     };
-    assert_eq!(payload.definitions.len(), 3);
+    assert_eq!(payload.definitions.len(), 4);
 
     let expected_heads = [
         ("timesMatch", Combinator::Times.into()),
         ("equalMatch", Combinator::Nil.into()),
+        ("doubleEqualMatch", Combinator::Nil.into()),
         ("appendMatch", Combinator::Append.into()),
     ];
     for (definition, (expected_name, expected_head)) in payload.definitions.iter().zip(expected_heads) {
@@ -1964,10 +2314,70 @@ fn parser_parses_symbolic_infix_pattern_forms_in_top_level_formals() {
 }
 
 #[test]
+fn parser_parses_unparenthesized_symbolic_infix_pattern_forms_in_top_level_formals() {
+    let (heap, result) = run_parser(
+        "unparenthesized_symbolic_infix_pattern_form_substrate.m",
+        "timesMatch x*y = x\nappendMatch u++v = u\npowerMatch p^q = p\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success, got {result:?}");
+    };
+    assert_eq!(payload.definitions.len(), 3);
+
+    let expected_heads = [
+        ("timesMatch", Combinator::Times.into()),
+        ("appendMatch", Combinator::Append.into()),
+        ("powerMatch", Combinator::Power.into()),
+    ];
+    for (definition, (expected_name, expected_head)) in payload.definitions.iter().zip(expected_heads) {
+        assert_eq!(definition.identifier.get_name(&heap), expected_name);
+        let lambda_raw = definition.body;
+        assert_eq!(heap[lambda_raw].tag, Tag::Lambda);
+        let pattern_raw = heap[lambda_raw].head;
+        assert_eq!(heap[pattern_raw].tag, Tag::Ap);
+        let operator_application_raw = heap[pattern_raw].head;
+        assert_eq!(heap[operator_application_raw].tag, Tag::Ap);
+        assert_eq!(Value::from(heap[operator_application_raw].head), expected_head);
+    }
+}
+
+#[test]
+fn parser_parses_unparenthesized_symbolic_infix_left_operand_application_slice_in_top_level_formals() {
+    let (heap, result) = run_parser(
+        "unparenthesized_symbolic_infix_left_operand_application_slice.m",
+        "bad g x*y = x\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success, got {result:?}");
+    };
+    assert_eq!(payload.definitions.len(), 1);
+
+    let outer_lambda_raw = payload.definitions[0].body;
+    assert_eq!(heap[outer_lambda_raw].tag, Tag::Lambda);
+    let infix_pattern_raw = heap[outer_lambda_raw].head;
+    assert_eq!(heap[infix_pattern_raw].tag, Tag::Ap);
+    let infix_operator_application_raw = heap[infix_pattern_raw].head;
+    assert_eq!(heap[infix_operator_application_raw].tag, Tag::Ap);
+    assert_eq!(
+        Value::from(heap[infix_operator_application_raw].head),
+        Combinator::Times.into()
+    );
+
+    let left_operand_raw = heap[infix_operator_application_raw].tail;
+    assert_eq!(heap[left_operand_raw].tag, Tag::Ap);
+    let left_head = IdentifierRecordRef::from_ref(heap[left_operand_raw].head);
+    assert_eq!(left_head.get_name(&heap), "g");
+    let left_argument = IdentifierRecordRef::from_ref(heap[left_operand_raw].tail);
+    assert_eq!(left_argument.get_name(&heap), "x");
+}
+
+#[test]
 fn parser_parses_top_level_where_with_local_symbolic_infix_patterns() {
     let (heap, result) = run_parser(
         "top_level_where_local_symbolic_infix_patterns.m",
-        "f x = g x where times (x*y) = x; eq (a=b) = a; append (u++v) = u\n",
+        "f x = g x where times (x*y) = x; eq (a=b) = a; doubleEq (a==b) = a; append (u++v) = u\n",
     );
 
     let ParserRunResult::ParsedTopLevelScript(payload) = result else {
@@ -1983,6 +2393,7 @@ fn parser_parses_top_level_where_with_local_symbolic_infix_patterns() {
     let mut definitions_raw = heap[letrec_raw].head;
     let mut saw_times = false;
     let mut saw_equality = false;
+    let mut saw_double_equality = false;
     let mut saw_append = false;
     while definitions_raw != RawValue::from(Combinator::Nil) {
         let definition = DefinitionRef::from_ref(heap[definitions_raw].head);
@@ -2012,6 +2423,13 @@ fn parser_parses_top_level_where_with_local_symbolic_infix_patterns() {
                     Combinator::Nil.into()
                 );
             }
+            "doubleEq" => {
+                saw_double_equality = true;
+                assert_eq!(
+                    Value::from(heap[operator_application_raw].head),
+                    Combinator::Nil.into()
+                );
+            }
             "append" => {
                 saw_append = true;
                 assert_eq!(
@@ -2027,7 +2445,75 @@ fn parser_parses_top_level_where_with_local_symbolic_infix_patterns() {
 
     assert!(saw_times);
     assert!(saw_equality);
+    assert!(saw_double_equality);
     assert!(saw_append);
+}
+
+#[test]
+fn parser_parses_top_level_where_with_local_unparenthesized_symbolic_infix_patterns() {
+    let (heap, result) = run_parser(
+        "top_level_where_local_unparenthesized_symbolic_infix_patterns.m",
+        "f x = g x where times x*y = x; append u++v = u; power p^q = p\n",
+    );
+
+    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+        panic!("expected top-level parse success, got {result:?}");
+    };
+    assert_eq!(payload.definitions.len(), 1);
+
+    let outer_lambda_raw = payload.definitions[0].body;
+    assert_eq!(heap[outer_lambda_raw].tag, Tag::Lambda);
+    let letrec_raw = heap[outer_lambda_raw].tail;
+    assert_eq!(heap[letrec_raw].tag, Tag::LetRec);
+
+    let mut definitions_raw = heap[letrec_raw].head;
+    let mut saw_times = false;
+    let mut saw_append = false;
+    let mut saw_power = false;
+    while definitions_raw != RawValue::from(Combinator::Nil) {
+        let definition = DefinitionRef::from_ref(heap[definitions_raw].head);
+        let definition_name = IdentifierRecordRef::from_ref(definition.lhs_value(&heap).into()).get_name(&heap);
+        let body_raw = RawValue::from(definition.body_value(&heap));
+        assert_eq!(heap[body_raw].tag, Tag::Tries);
+        let alternatives_raw = heap[body_raw].tail;
+        let labeled_body_raw = heap[alternatives_raw].head;
+        let lambda_raw = heap[labeled_body_raw].tail;
+        let pattern_raw = RawValue::from(heap[lambda_raw].head);
+        assert_eq!(heap[pattern_raw].tag, Tag::Ap);
+        let operator_application_raw = heap[pattern_raw].head;
+        assert_eq!(heap[operator_application_raw].tag, Tag::Ap);
+
+        match definition_name.as_str() {
+            "times" => {
+                saw_times = true;
+                assert_eq!(
+                    Value::from(heap[operator_application_raw].head),
+                    Combinator::Times.into()
+                );
+            }
+            "append" => {
+                saw_append = true;
+                assert_eq!(
+                    Value::from(heap[operator_application_raw].head),
+                    Combinator::Append.into()
+                );
+            }
+            "power" => {
+                saw_power = true;
+                assert_eq!(
+                    Value::from(heap[operator_application_raw].head),
+                    Combinator::Power.into()
+                );
+            }
+            other => panic!("unexpected local definition {other}"),
+        }
+
+        definitions_raw = heap[definitions_raw].tail;
+    }
+
+    assert!(saw_times);
+    assert!(saw_append);
+    assert!(saw_power);
 }
 
 #[test]
@@ -2041,6 +2527,11 @@ fn parser_records_bare_symbolic_infix_pattern_definition_payloads() {
         (
             "bare_symbolic_infix_equal_pattern_definition.m",
             "(a=b) = a\n",
+            Combinator::Nil.into(),
+        ),
+        (
+            "bare_symbolic_infix_double_equal_pattern_definition.m",
+            "(a==b) = a\n",
             Combinator::Nil.into(),
         ),
         (
@@ -2065,6 +2556,56 @@ fn parser_records_bare_symbolic_infix_pattern_definition_payloads() {
         assert_eq!(Value::from(heap[operator_application_raw].head), expected_head);
     }
 }
+
+#[test]
+fn parser_records_bare_unparenthesized_symbolic_infix_pattern_definition_payloads() {
+    for (source_path, source_text, expected_head) in [
+        (
+            "bare_unparenthesized_symbolic_infix_times_pattern_definition.m",
+            "x*y = x\n",
+            Combinator::Times.into(),
+        ),
+        (
+            "bare_unparenthesized_symbolic_infix_append_pattern_definition.m",
+            "u++v = u\n",
+            Combinator::Append.into(),
+        ),
+        (
+            "bare_unparenthesized_symbolic_infix_power_pattern_definition.m",
+            "p^q = p\n",
+            Combinator::Power.into(),
+        ),
+    ] {
+        let (heap, result) = run_parser(source_path, source_text);
+
+        let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+            panic!("expected top-level parse success, got {result:?}");
+        };
+        assert!(payload.definitions.is_empty());
+        assert_eq!(payload.pattern_definitions.len(), 1);
+
+        let pattern_definition = &payload.pattern_definitions[0];
+        let lhs_raw: RawValue = pattern_definition.lhs.into();
+        assert_eq!(heap[lhs_raw].tag, Tag::Ap);
+        let operator_application_raw = heap[lhs_raw].head;
+        assert_eq!(heap[operator_application_raw].tag, Tag::Ap);
+        assert_eq!(Value::from(heap[operator_application_raw].head), expected_head);
+    }
+}
+
+#[test]
+fn parser_rejects_root_unparenthesized_equality_pattern_definition_separator_ambiguity() {
+    let (_heap, result) = run_parser(
+        "root_unparenthesized_equality_pattern_definition_ambiguity.m",
+        "a=b = a\n",
+    );
+
+    let ParserRunResult::SyntaxError(diagnostics) = result else {
+        panic!("expected parse diagnostics, got {result:?}");
+    };
+    assert!(!diagnostics.is_empty());
+}
+
 
 #[test]
 fn parser_parses_nested_n_plus_k_pattern_inside_cons_form() {

@@ -278,9 +278,9 @@ exp:
    top-level value definitions, and a narrow top-level function/pattern slice.
    The currently active parameter subset includes simple name parameters plus a
    small parser-owned pattern subset used only at top level, including the
-   currently owned infix-name/infix-constructor pattern forms. Other top-level
-   forms are still classified before parser entry and follow the deferred
-   integration path. */
+   currently owned infix-name/infix-constructor forms and the delimiter-safe
+   built-in symbolic infix family. Other top-level forms are still classified
+   before parser entry and follow the deferred integration path. */
 top_level_script:
     top_level_item { $$ = NIL; }
     | top_level_script top_level_item { $$ = NIL; }
@@ -288,14 +288,13 @@ top_level_script:
 
 top_level_item:
     include_export_item { $$ = NIL; }
+    | top_level_name_led_item { $$ = NIL; }
     | top_level_definition_item { $$ = NIL; }
-    | top_level_specification_item { $$ = NIL; }
     | top_level_synonym_type_item { $$ = NIL; }
     | top_level_algebraic_type_item { $$ = NIL; }
     | top_level_abstype_item { $$ = NIL; }
     | top_level_free_item { $$ = NIL; }
     ;
-
 top_level_definition_anchor:
     /* empty */ {
         let here_info = HereInfo::from_source_location(
@@ -492,7 +491,7 @@ include_export_item:
     | include_directive directive_terminators { $$ = NIL; }
     ;
 
-top_level_pattern_definition_start:
+top_level_definition_start:
     /* empty */ {
         self.type_variable_scope = false;
         self.used_identifiers = ConsList::EMPTY;
@@ -507,69 +506,195 @@ constructor_led_top_level_pattern:
         $$ = $1;
       }
     | constructor_led_top_level_pattern v3 {
-        $$ = self.heap.apply_ref(self.top_level_application_head($1), $2);
+        $$ = self.apply_pattern_application_step($1, $2);
       }
     ;
 
-top_level_definition_item:
-    top_level_definition_lhs act2 top_level_definition_anchor Equal top_level_rhs directive_terminators {
-        let anchor = FileInfoRef::from_ref($3.into());
-        let (lowered_lhs, lowered_body) = self.heap.lower_function_form_lambdas($1, $5);
+top_level_symbolic_root_pattern:
+    Name top_level_pattern_symbolic_infix_operator v1 {
+        self.type_variable_scope = false;
+        self.used_identifiers = ConsList::EMPTY;
+        let identifier = $1;
+        self.used_identifiers.push(self.heap, identifier);
+        $$ = self.lower_binary_pattern_operator($2, identifier, $3);
+      }
+    ;
+
+top_level_name_led_item:
+    ConstructorName top_level_type_lhs_typevars top_level_definition_anchor EqualEqual top_level_type_expr directive_terminators {
+        self.syntax("upper case identifier out of context\n");
+        $$ = NIL;
+      }
+    | ConstructorName top_level_type_lhs_typevars top_level_definition_anchor Colon2Equal top_level_constructor_list directive_terminators {
+        self.syntax("upper case identifier out of context\n");
+        $$ = NIL;
+      }
+    | Name top_level_definition_parameters_opt act2 top_level_definition_anchor Equal top_level_rhs directive_terminators {
+        let lowered_lhs = self.fold_function_form_lhs($1, $2.into());
+        let anchor = FileInfoRef::from_ref($4.into());
+        let (lowered_lhs, lowered_body) = self.heap.lower_function_form_lambdas(lowered_lhs, $6);
         let lowered_identifier_ref: RawValue = lowered_lhs.into();
         if lowered_identifier_ref < ATOM_LIMIT || self.heap[lowered_identifier_ref].tag != Tag::Id {
           self.syntax("illegal top-level definition lhs\n");
           $$ = NIL;
         } else {
           let identifier = IdentifierRecordRef::from_ref(lowered_identifier_ref);
-          self.definition_payloads.push(ParserDefinitionPayload {
-            identifier,
-            body: lowered_body.into(),
-            anchor,
-          });
-          self.last_identifier = identifier.get_ref();
+          let lowered_body_raw: RawValue = lowered_body.into();
+          let equality_ambiguity = if lowered_body_raw >= ATOM_LIMIT && self.heap[lowered_body_raw].tag == Tag::Ap {
+            let right_operand_raw = self.heap[lowered_body_raw].tail;
+            let left_application_raw = self.heap[lowered_body_raw].head;
+            left_application_raw >= ATOM_LIMIT
+              && self.heap[left_application_raw].tag == Tag::Ap
+              && self.heap[left_application_raw].head == RawValue::from(Combinator::Eq)
+              && right_operand_raw == lowered_identifier_ref
+              && self.heap[left_application_raw].tail >= ATOM_LIMIT
+              && self.heap[self.heap[left_application_raw].tail].tag == Tag::Id
+          } else {
+            false
+          };
+          if equality_ambiguity {
+            self.syntax("unexpected token Equal\n");
+          } else {
+            self.definition_payloads.push(ParserDefinitionPayload {
+              identifier,
+              body: lowered_body.into(),
+              anchor,
+            });
+            self.last_identifier = identifier.get_ref();
+          }
           $$ = NIL;
         }
       }
-    | constructor_led_top_level_pattern act2 top_level_definition_anchor Equal top_level_rhs directive_terminators {
+    | Name top_level_name_led_spec_names top_level_definition_anchor ColonColon top_level_type_expr directive_terminators {
         let anchor = FileInfoRef::from_ref($3.into());
-        let (lowered_lhs, lowered_body) = self.heap.lower_function_form_lambdas($1, $5);
-        let lowered_identifier_ref: RawValue = lowered_lhs.into();
-        if lowered_identifier_ref >= ATOM_LIMIT && self.heap[lowered_identifier_ref].tag == Tag::Id {
-          let identifier = IdentifierRecordRef::from_ref(lowered_identifier_ref);
-          self.definition_payloads.push(ParserDefinitionPayload {
-            identifier,
-            body: lowered_body.into(),
+        let type_expr = TypeExprRef::new($5);
+        let mut names: RawValue = self.heap.cons_ref($1, $2).into();
+        while names != NIL_RAW {
+          self.specification_payloads.push(ParserSpecificationPayload {
+            identifier: IdentifierRecordRef::from_ref(self.heap[names].head),
+            type_expr,
             anchor,
           });
-          self.last_identifier = identifier.get_ref();
-        } else {
-          self.pattern_definition_payloads.push(ParserPatternDefinitionPayload {
-            lhs: lowered_lhs,
-            body: lowered_body.into(),
-            anchor,
-          });
+          names = self.heap[names].tail;
         }
         $$ = NIL;
       }
-    | top_level_pattern_definition_start top_level_pattern_definition act2 top_level_definition_anchor Equal top_level_rhs directive_terminators {
-        let anchor = FileInfoRef::from_ref($4.into());
-        let (lowered_lhs, lowered_body) = self.heap.lower_function_form_lambdas($2, $6);
-        let lowered_identifier_ref: RawValue = lowered_lhs.into();
-        if lowered_identifier_ref >= ATOM_LIMIT && self.heap[lowered_identifier_ref].tag == Tag::Id {
-          let identifier = IdentifierRecordRef::from_ref(lowered_identifier_ref);
-          self.definition_payloads.push(ParserDefinitionPayload {
-            identifier,
-            body: lowered_body.into(),
-            anchor,
-          });
-          self.last_identifier = identifier.get_ref();
-        } else {
-          self.pattern_definition_payloads.push(ParserPatternDefinitionPayload {
-            lhs: lowered_lhs,
-            body: lowered_body.into(),
-            anchor,
-          });
+    | Name top_level_type_lhs_typevars top_level_definition_anchor EqualEqual top_level_type_expr directive_terminators {
+        let mut typeform = $1;
+        let mut typevars = ConsList::<Value>::from_ref($2.into());
+        while let Some(typevar) = typevars.pop_value(&self.heap) {
+          typeform = self.heap.apply_ref(typeform, typevar);
         }
+        let typeform = TypeExprRef::new(typeform);
+        let Some((type_identifier, arguments)) = typeform.identifier_head_application_spine(&self.heap) else {
+          unreachable!("top-level synonym lhs should stay identifier-headed")
+        };
+        let anchor = FileInfoRef::from_ref($3.into());
+        let info = $5;
+        self.type_declaration_payloads.push(ParserTypeDeclarationPayload {
+          type_identifier,
+          arity: arguments.len() as isize,
+          kind: IdentifierValueTypeKind::Synonym,
+          info,
+          anchor,
+        });
+        $$ = NIL;
+      }
+    | Name top_level_type_lhs_typevars top_level_definition_anchor Colon2Equal top_level_constructor_list directive_terminators {
+        let mut typeform = $1;
+        let mut typevars = ConsList::<Value>::from_ref($2.into());
+        while let Some(typevar) = typevars.pop_value(&self.heap) {
+          typeform = self.heap.apply_ref(typeform, typevar);
+        }
+        let typeform = TypeExprRef::new(typeform);
+        let Some((type_identifier, arguments)) = typeform.identifier_head_application_spine(&self.heap) else {
+          unreachable!("top-level algebraic lhs should stay identifier-headed")
+        };
+        let arity = arguments.len() as isize;
+        let anchor = FileInfoRef::from_ref($3.into());
+        let mut constructor_list: RawValue = $5.into();
+        let mut source_order_constructors = NIL_RAW;
+        while constructor_list != NIL_RAW {
+          source_order_constructors = self.heap.cons_ref(self.heap[constructor_list].head.into(), source_order_constructors.into()).into();
+          constructor_list = self.heap[constructor_list].tail;
+        }
+        let mut constructor_identifiers = Vec::new();
+        let mut constructors: RawValue = source_order_constructors;
+        while constructors != NIL_RAW {
+          let declaration = self.heap[constructors].head;
+          if declaration >= ATOM_LIMIT {
+            let mut declaration_ref = declaration;
+            let mut fields = Vec::new();
+            while declaration_ref >= ATOM_LIMIT && self.heap[declaration_ref].tag == Tag::Ap {
+              let application = ApNodeRef::from_ref(declaration_ref);
+              fields.push(application.argument_raw(&self.heap).into());
+              declaration_ref = application.function_raw(&self.heap);
+            }
+
+            if declaration_ref >= ATOM_LIMIT && self.heap[declaration_ref].tag == Tag::Id {
+              fields.reverse();
+              let field_payloads = fields.into_iter().map(|field| {
+                ParserConstructorFieldPayload::from_field_type(
+                  field,
+                  TypeExprRef::new(field).strict_field_inner_type(&self.heap).map(|type_expr| type_expr.value()),
+                )
+              }).collect::<Vec<_>>();
+              let payload = ParserConstructorPayload {
+                constructor: IdentifierRecordRef::from_ref(declaration_ref),
+                parent_type: type_identifier,
+                parent_type_arity: arity,
+                arity: field_payloads.len() as isize,
+                fields: field_payloads,
+                anchor,
+              };
+              constructor_identifiers.push(payload.constructor);
+              self.constructor_payloads.push(payload);
+            }
+          }
+          constructors = self.heap[constructors].tail;
+        }
+        let source_order_constructor_list = constructor_identifiers.iter().rev().fold(NIL, |list, constructor| {
+          self.heap.cons_ref((*constructor).into(), list)
+        });
+        self.type_declaration_payloads.push(ParserTypeDeclarationPayload {
+          type_identifier,
+          arity,
+          kind: IdentifierValueTypeKind::Algebraic,
+          info: source_order_constructor_list,
+          anchor,
+        });
+        $$ = NIL;
+      }
+    ;
+
+top_level_name_led_spec_names:
+    /* empty */ { $$ = NIL; }
+    | Comma namelist { $$ = $2; }
+    ;
+
+top_level_definition_item:
+    top_level_symbolic_root_pattern Equal top_level_definition_anchor top_level_rhs directive_terminators {
+        let anchor = FileInfoRef::from_ref($3.into());
+        let (lowered_lhs, lowered_body) = self.heap.lower_function_form_lambdas($1, $4);
+        self.pattern_definition_payloads.push(ParserPatternDefinitionPayload {
+          lhs: lowered_lhs,
+          body: lowered_body.into(),
+          anchor,
+        });
+        $$ = NIL;
+      }
+    | constructor_led_top_level_pattern Equal top_level_definition_anchor top_level_rhs directive_terminators {
+        let anchor = FileInfoRef::from_ref($3.into());
+        let (lowered_lhs, lowered_body) = self.heap.lower_function_form_lambdas($1, $4);
+        self.commit_top_level_lowered_definition_lhs(lowered_lhs, lowered_body, anchor, false);
+        $$ = NIL;
+      }
+    | top_level_definition_start shared_ordinary_definition_lhs Equal top_level_definition_anchor top_level_rhs directive_terminators {
+        let anchor = FileInfoRef::from_ref($4.into());
+        let (lowered_lhs, lowered_body) = self.heap.lower_function_form_lambdas($2, $5);
+        self.commit_top_level_lowered_definition_lhs(lowered_lhs, lowered_body, anchor, true);
+        self.type_variable_scope = false;
+        self.used_identifiers = ConsList::EMPTY;
         $$ = NIL;
       }
     ;
@@ -660,14 +785,8 @@ top_level_local_definitions:
     ;
 
 top_level_local_definition:
-    where_local_function_form_lhs act2 top_level_definition_anchor Equal rhs {
+    shared_ordinary_definition_lhs act2 top_level_definition_anchor Equal rhs {
         let (lowered_lhs, lowered_body) = self.heap.lower_function_form_lambdas($1, $5);
-        let labeled_body = self.heap.label_ref($3, lowered_body);
-        $$ = DefinitionRef::new(&mut self.heap, lowered_lhs, Type::Undefined.into(), labeled_body).into();
-      }
-    | top_level_pattern_definition act2 top_level_definition_anchor Equal rhs {
-        let normalized_lhs = self.normalize_local_function_form_lhs($1);
-        let (lowered_lhs, lowered_body) = self.heap.lower_function_form_lambdas(normalized_lhs, $5);
         let labeled_body = self.heap.label_ref($3, lowered_body);
         $$ = DefinitionRef::new(&mut self.heap, lowered_lhs, Type::Undefined.into(), labeled_body).into();
       }
@@ -685,6 +804,11 @@ top_level_local_definition:
       }
     ;
 
+shared_ordinary_definition_lhs:
+    top_level_definition_lhs { $$ = $1; }
+    | top_level_pattern_definition { $$ = $1; }
+    ;
+
 top_level_definition_lhs:
     Name top_level_definition_parameters_opt {
         $$ = self.fold_function_form_lhs($1, $2.into());
@@ -693,26 +817,11 @@ top_level_definition_lhs:
 
 top_level_definition_parameters_opt:
     /* empty */ { $$ = NIL; }
-    | top_level_definition_parameters_start top_level_definition_parameter {
+    | top_level_definition_parameters_start formal_v {
         $$ = self.heap.cons_ref($2, NIL);
       }
-    | top_level_definition_parameters_opt top_level_definition_parameter {
+    | top_level_definition_parameters_opt formal_v {
         $$ = self.heap.cons_ref($2, $1);
-      }
-    ;
-
-where_local_function_form_parameters:
-    top_level_definition_parameters_start top_level_definition_parameter {
-        $$ = self.heap.cons_ref($2, NIL);
-      }
-    | where_local_function_form_parameters top_level_definition_parameter {
-        $$ = self.heap.cons_ref($2, $1);
-      }
-    ;
-
-where_local_function_form_lhs:
-    Name where_local_function_form_parameters {
-        $$ = self.fold_function_form_lhs($1, $2.into());
       }
     ;
 
@@ -723,93 +832,58 @@ top_level_definition_parameters_start:
       }
     ;
 
-top_level_definition_parameter:
+formal_v:
     top_level_pattern_atom Plus Constant {
-        let inner = $1;
-        let constant = $3;
-        let constant_raw: RawValue = constant.into();
-        if constant_raw < ATOM_LIMIT
-          || self.heap[constant_raw].tag != Tag::Int
-          || (self.heap[constant_raw].head & SIGN_BIT_MASK) != 0
-        {
-          self.syntax("inappropriate use of \"+\" in pattern\n");
-        }
-        $$ = self.heap.apply2(Combinator::Plus.into(), constant, inner);
+        $$ = self.lower_successor_pattern($1, $3);
       }
     | top_level_pattern_atom Plus top_level_pattern_non_constant_application_or_atom {
-        $$ = self.heap.apply2(Combinator::Plus.into(), $1, $3);
+        $$ = self.lower_binary_pattern_operator(Combinator::Plus.into(), $1, $3);
       }
     | Minus Constant {
-        let constant = $2;
-        let constant_raw: RawValue = constant.into();
-        if constant_raw >= ATOM_LIMIT && self.heap[constant_raw].tag == Tag::Int {
-          let negated = IntegerRef::from_ref(constant_raw).negate(self.heap);
-          $$ = self.heap.cons_ref(
-            Token::Constant.into(),
-            negated.into(),
-          );
-        } else {
-          self.syntax("inappropriate use of \"-\" in pattern\n");
-          $$ = self.heap.cons_ref(Token::Constant.into(), constant);
-        }
+        $$ = self.lower_negative_pattern_constant($2);
       }
     | Minus top_level_pattern_non_constant_application_or_atom {
-        $$ = self.heap.apply_ref(Combinator::Minus.into(), $2);
+        $$ = self.lower_unary_pattern_operator(Combinator::Minus.into(), $2);
       }
     | top_level_pattern_atom Minus top_level_pattern_non_constant_application_or_atom {
-        $$ = self.heap.apply2(Combinator::Minus.into(), $1, $3);
+        $$ = self.lower_binary_pattern_operator(Combinator::Minus.into(), $1, $3);
       }
     | top_level_pattern_atom InfixName top_level_pattern_arithmetic {
-        $$ = self.heap.apply2($2, $1, $3);
+        $$ = self.lower_binary_pattern_operator($2, $1, $3);
       }
     | top_level_pattern_atom InfixCName top_level_pattern_arithmetic {
-        $$ = self.heap.apply2($2, $1, $3);
+        $$ = self.lower_binary_pattern_operator($2, $1, $3);
       }
-    | top_level_pattern_atom top_level_pattern_symbolic_infix_operator top_level_pattern_arithmetic {
-        $$ = self.heap.apply2($2, $1, $3);
+    | top_level_pattern_application_or_atom top_level_pattern_symbolic_infix_operator top_level_pattern_arithmetic {
+        $$ = self.lower_binary_pattern_operator($2, $1, $3);
       }
     | Name {
-        let identifier = $1;
-        if self.used_identifiers.contains(self.heap, identifier) {
-          $$ = self.heap.cons_ref(Token::Constant.into(), identifier);
-        } else {
-          self.used_identifiers.push(self.heap, identifier);
-          $$ = identifier;
-        }
+        $$ = self.lower_repeated_name_pattern_leaf($1);
       }
     | ConstructorName { $$ = $1; }
     | Constant {
-        let constant = $1;
-        if self.heap[constant].tag == Tag::Double {
-          self.syntax("use of floating point literal in pattern\n");
-        }
-        $$ = self.heap.cons_ref(Token::Constant.into(), constant);
+        $$ = self.lower_pattern_constant_leaf($1);
       }
     | OpenBracket CloseBracket { $$ = self.heap.nill; }
     | OpenBracket top_level_pattern_list CloseBracket {
-        let mut x: RawValue = $2.into();
-        let mut y = self.heap.nill;
-        while x != NIL_RAW {
-          y = self.heap.cons_ref(self.heap[x].head.into(), y);
-          x = self.heap[x].tail;
-        }
-        $$ = y;
+        $$ = self.build_reversed_pattern_list($2);
       }
     | OpenParenthesis CloseParenthesis { $$ = self.vm.void_tuple(); }
     | OpenParenthesis top_level_pattern_application_or_atom Equal top_level_pattern CloseParenthesis {
-        $$ = self.heap.apply2(NIL, $2, $4);
+        $$ = self.lower_parenthesized_equality_pattern($2, $4);
       }
     | OpenParenthesis top_level_pattern_application_or_atom EqualEqual top_level_pattern CloseParenthesis {
-        $$ = self.heap.apply2(NIL, $2, $4);
+        $$ = self.lower_parenthesized_equality_pattern($2, $4);
       }
     | OpenParenthesis top_level_pattern Comma top_level_pattern CloseParenthesis {
-        $$ = self.heap.pair_ref($2, $4);
+        $$ = self.build_pattern_pair($2, $4);
       }
     | OpenParenthesis top_level_pattern Comma top_level_pattern_tuple_tail CloseParenthesis {
-        $$ = self.heap.cons_ref($2, $4);
+        $$ = self.build_pattern_tuple_from_head_and_tail($2, $4);
       }
     | OpenParenthesis top_level_pattern CloseParenthesis { $$ = $2; }
     ;
+
 
 top_level_pattern:
     top_level_pattern_arithmetic Colon top_level_pattern { $$ = self.heap.cons_ref($1, $3); }
@@ -817,105 +891,37 @@ top_level_pattern:
     ;
 
 top_level_pattern_definition:
-    top_level_pattern_definition_arithmetic Colon top_level_pattern { $$ = self.heap.cons_ref($1, $3); }
-    | top_level_pattern_definition_arithmetic { $$ = $1; }
+    top_level_pattern { $$ = $1; }
     ;
 
 top_level_pattern_arithmetic:
     top_level_pattern_arithmetic Plus Constant {
-        let inner = $1;
-        let constant = $3;
-        let constant_raw: RawValue = constant.into();
-        if constant_raw < ATOM_LIMIT
-          || self.heap[constant_raw].tag != Tag::Int
-          || (self.heap[constant_raw].head & SIGN_BIT_MASK) != 0
-        {
-          self.syntax("inappropriate use of \"+\" in pattern\n");
-        }
-        $$ = self.heap.apply2(Combinator::Plus.into(), constant, inner);
+        $$ = self.lower_successor_pattern($1, $3);
       }
     | top_level_pattern_arithmetic Plus top_level_pattern_non_constant_application_or_atom {
-        $$ = self.heap.apply2(Combinator::Plus.into(), $1, $3);
+        $$ = self.lower_binary_pattern_operator(Combinator::Plus.into(), $1, $3);
       }
     | Minus Constant {
-        let constant = $2;
-        let constant_raw: RawValue = constant.into();
-        if constant_raw >= ATOM_LIMIT && self.heap[constant_raw].tag == Tag::Int {
-          let negated = IntegerRef::from_ref(constant_raw).negate(self.heap);
-          $$ = self.heap.cons_ref(
-            Token::Constant.into(),
-            negated.into(),
-          );
-        } else {
-          self.syntax("inappropriate use of \"-\" in pattern\n");
-          $$ = self.heap.cons_ref(Token::Constant.into(), constant);
-        }
+        $$ = self.lower_negative_pattern_constant($2);
       }
     | Minus top_level_pattern_non_constant_application_or_atom {
-        $$ = self.heap.apply_ref(Combinator::Minus.into(), $2);
+        $$ = self.lower_unary_pattern_operator(Combinator::Minus.into(), $2);
       }
     | top_level_pattern_arithmetic Minus top_level_pattern_non_constant_application_or_atom {
-        $$ = self.heap.apply2(Combinator::Minus.into(), $1, $3);
+        $$ = self.lower_binary_pattern_operator(Combinator::Minus.into(), $1, $3);
       }
     | top_level_pattern_application_or_atom InfixName top_level_pattern_arithmetic {
-        $$ = self.heap.apply2($2, $1, $3);
+        $$ = self.lower_binary_pattern_operator($2, $1, $3);
       }
     | top_level_pattern_application_or_atom InfixCName top_level_pattern_arithmetic {
-        $$ = self.heap.apply2($2, $1, $3);
+        $$ = self.lower_binary_pattern_operator($2, $1, $3);
       }
     | top_level_pattern_application_or_atom top_level_pattern_symbolic_infix_operator top_level_pattern_arithmetic {
-        $$ = self.heap.apply2($2, $1, $3);
+        $$ = self.lower_binary_pattern_operator($2, $1, $3);
       }
     | top_level_pattern_application_or_atom { $$ = $1; }
     ;
 
-top_level_pattern_definition_arithmetic:
-    top_level_pattern_definition_arithmetic Plus Constant {
-        let inner = $1;
-        let constant = $3;
-        let constant_raw: RawValue = constant.into();
-        if constant_raw < ATOM_LIMIT
-          || self.heap[constant_raw].tag != Tag::Int
-          || (self.heap[constant_raw].head & SIGN_BIT_MASK) != 0
-        {
-          self.syntax("inappropriate use of \"+\" in pattern\n");
-        }
-        $$ = self.heap.apply2(Combinator::Plus.into(), constant, inner);
-      }
-    | top_level_pattern_definition_arithmetic Plus top_level_pattern_non_constant_application_or_atom {
-        $$ = self.heap.apply2(Combinator::Plus.into(), $1, $3);
-      }
-    | Minus Constant {
-        let constant = $2;
-        let constant_raw: RawValue = constant.into();
-        if constant_raw >= ATOM_LIMIT && self.heap[constant_raw].tag == Tag::Int {
-          let negated = IntegerRef::from_ref(constant_raw).negate(self.heap);
-          $$ = self.heap.cons_ref(
-            Token::Constant.into(),
-            negated.into(),
-          );
-        } else {
-          self.syntax("inappropriate use of \"-\" in pattern\n");
-          $$ = self.heap.cons_ref(Token::Constant.into(), constant);
-        }
-      }
-    | Minus top_level_pattern_non_constant_application_or_atom {
-        $$ = self.heap.apply_ref(Combinator::Minus.into(), $2);
-      }
-    | top_level_pattern_definition_arithmetic Minus top_level_pattern_non_constant_application_or_atom {
-        $$ = self.heap.apply2(Combinator::Minus.into(), $1, $3);
-      }
-    | top_level_pattern_application_or_atom InfixName top_level_pattern_definition_arithmetic {
-        $$ = self.heap.apply2($2, $1, $3);
-      }
-    | top_level_pattern_application_or_atom InfixCName top_level_pattern_definition_arithmetic {
-        $$ = self.heap.apply2($2, $1, $3);
-      }
-    | top_level_pattern_application_or_atom top_level_pattern_definition_symbolic_infix_operator top_level_pattern_definition_arithmetic {
-        $$ = self.heap.apply2($2, $1, $3);
-      }
-    | top_level_pattern_application_or_atom { $$ = $1; }
-    ;
 
 top_level_pattern_application_or_atom:
     top_level_pattern_application { $$ = $1; }
@@ -929,122 +935,78 @@ top_level_pattern_non_constant_application_or_atom:
 
 top_level_pattern_tuple_tail:
     top_level_pattern Comma top_level_pattern {
-        $$ = self.heap.pair_ref($1, $3);
+        $$ = self.build_pattern_pair($1, $3);
       }
     | top_level_pattern Comma top_level_pattern_tuple_tail {
-        $$ = self.heap.cons_ref($1, $3);
+        $$ = self.build_pattern_tuple_from_head_and_tail($1, $3);
       }
     ;
 
 top_level_pattern_list:
-    top_level_pattern { $$ = self.heap.cons_ref($1, NIL); }
+    top_level_pattern {
+        $$ = self.prepend_pattern_to_reversed_list_substrate($1, NIL);
+      }
     | top_level_pattern_list Comma top_level_pattern {
-        $$ = self.heap.cons_ref($3, $1);
+        $$ = self.prepend_pattern_to_reversed_list_substrate($3, $1);
       }
     ;
 
 top_level_pattern_application:
     top_level_pattern_atom top_level_pattern_atom {
-        let head = self.top_level_application_head($1);
-        $$ = self.heap.apply_ref(head, $2);
+        $$ = self.apply_pattern_application_step($1, $2);
       }
     | top_level_pattern_application top_level_pattern_atom {
-        let head = self.top_level_application_head($1);
-        $$ = self.heap.apply_ref(head, $2);
+        $$ = self.apply_pattern_application_step($1, $2);
       }
     ;
 
 top_level_pattern_atom:
     Name {
-        let identifier = $1;
-        if self.used_identifiers.contains(self.heap, identifier) {
-          $$ = self.heap.cons_ref(Token::Constant.into(), identifier);
-        } else {
-          self.used_identifiers.push(self.heap, identifier);
-          $$ = identifier;
-        }
+        $$ = self.lower_repeated_name_pattern_leaf($1);
       }
     | ConstructorName { $$ = $1; }
     | Constant {
-        let constant = $1;
-        if self.heap[constant].tag == Tag::Double {
-          self.syntax("use of floating point literal in pattern\n");
-        }
-        $$ = self.heap.cons_ref(Token::Constant.into(), constant);
+        $$ = self.lower_pattern_constant_leaf($1);
       }
     | OpenBracket CloseBracket { $$ = self.heap.nill; }
     | OpenBracket top_level_pattern_list CloseBracket {
-        let mut x: RawValue = $2.into();
-        let mut y = self.heap.nill;
-        while x != NIL_RAW {
-          y = self.heap.cons_ref(self.heap[x].head.into(), y);
-          x = self.heap[x].tail;
-        }
-        $$ = y;
+        $$ = self.build_reversed_pattern_list($2);
       }
     | OpenParenthesis CloseParenthesis { $$ = self.vm.void_tuple(); }
     | OpenParenthesis top_level_pattern_application_or_atom Equal top_level_pattern CloseParenthesis {
-        $$ = self.heap.apply2(NIL, $2, $4);
+        $$ = self.lower_parenthesized_equality_pattern($2, $4);
       }
     | OpenParenthesis top_level_pattern_application_or_atom EqualEqual top_level_pattern CloseParenthesis {
-        $$ = self.heap.apply2(NIL, $2, $4);
+        $$ = self.lower_parenthesized_equality_pattern($2, $4);
       }
     | OpenParenthesis top_level_pattern Comma top_level_pattern CloseParenthesis {
-        $$ = self.heap.pair_ref($2, $4);
+        $$ = self.build_pattern_pair($2, $4);
       }
     | OpenParenthesis top_level_pattern Comma top_level_pattern_tuple_tail CloseParenthesis {
-        $$ = self.heap.cons_ref($2, $4);
+        $$ = self.build_pattern_tuple_from_head_and_tail($2, $4);
       }
     | OpenParenthesis top_level_pattern CloseParenthesis { $$ = $2; }
     ;
 
 top_level_pattern_non_constant_atom:
     Name {
-        let identifier = $1;
-        if self.used_identifiers.contains(self.heap, identifier) {
-          $$ = self.heap.cons_ref(Token::Constant.into(), identifier);
-        } else {
-          self.used_identifiers.push(self.heap, identifier);
-          $$ = identifier;
-        }
+        $$ = self.lower_repeated_name_pattern_leaf($1);
       }
     | ConstructorName { $$ = $1; }
     | OpenBracket CloseBracket { $$ = self.heap.nill; }
     | OpenBracket top_level_pattern_list CloseBracket {
-        let mut x: RawValue = $2.into();
-        let mut y = self.heap.nill;
-        while x != NIL_RAW {
-          y = self.heap.cons_ref(self.heap[x].head.into(), y);
-          x = self.heap[x].tail;
-        }
-        $$ = y;
+        $$ = self.build_reversed_pattern_list($2);
       }
     | OpenParenthesis CloseParenthesis { $$ = self.vm.void_tuple(); }
     | OpenParenthesis top_level_pattern Comma top_level_pattern CloseParenthesis {
-        $$ = self.heap.pair_ref($2, $4);
+        $$ = self.build_pattern_pair($2, $4);
       }
     | OpenParenthesis top_level_pattern Comma top_level_pattern_tuple_tail CloseParenthesis {
-        $$ = self.heap.cons_ref($2, $4);
+        $$ = self.build_pattern_tuple_from_head_and_tail($2, $4);
       }
     | OpenParenthesis top_level_pattern CloseParenthesis { $$ = $2; }
     ;
 
-top_level_specification_item:
-    namelist top_level_definition_anchor ColonColon top_level_type_expr directive_terminators {
-        let mut names: RawValue = $1.into();
-        let anchor = FileInfoRef::from_ref($2.into());
-        let type_expr = TypeExprRef::new($4);
-        while names != NIL_RAW {
-          self.specification_payloads.push(ParserSpecificationPayload {
-            identifier: IdentifierRecordRef::from_ref(self.heap[names].head),
-            type_expr,
-            anchor,
-          });
-          names = self.heap[names].tail;
-        }
-        $$ = NIL;
-      }
-    ;
 
 top_level_type_lhs_typevars:
     /* empty */ { $$ = NIL; }
@@ -1105,13 +1067,20 @@ top_level_typeform:
     ;
 
 top_level_synonym_type_item:
-    top_level_typeform top_level_definition_anchor EqualEqual top_level_type_expr directive_terminators {
-        let typeform = TypeExprRef::new($1);
+    top_level_typevar InfixName top_level_typevar top_level_definition_anchor EqualEqual top_level_type_expr directive_terminators {
+        let mut typevars = self.used_identifiers;
+        let right = typevars.pop_value(&self.heap).unwrap_or($3);
+        let left = typevars.pop_value(&self.heap).unwrap_or($1);
+        self.used_identifiers = ConsList::EMPTY;
+        if self.same_type_variable(left, right) {
+          self.syntax("repeated type variable in typeform\n");
+        }
+        let typeform = TypeExprRef::new(self.heap.apply2($2, left, right));
         let Some((type_identifier, arguments)) = typeform.identifier_head_application_spine(&self.heap) else {
           unreachable!("top-level synonym lhs should stay identifier-headed")
         };
-        let anchor = FileInfoRef::from_ref($2.into());
-        let info = $4;
+        let anchor = FileInfoRef::from_ref($4.into());
+        let info = $6;
         self.type_declaration_payloads.push(ParserTypeDeclarationPayload {
           type_identifier,
           arity: arguments.len() as isize,
@@ -1121,17 +1090,29 @@ top_level_synonym_type_item:
         });
         $$ = NIL;
       }
+    | top_level_typevar InfixCName top_level_typevar top_level_definition_anchor EqualEqual top_level_type_expr directive_terminators {
+        self.used_identifiers = ConsList::EMPTY;
+        self.syntax("upper case identifier cannot be used as typename\n");
+        $$ = NIL;
+      }
     ;
 
 top_level_algebraic_type_item:
-    top_level_typeform top_level_definition_anchor Colon2Equal top_level_constructor_list directive_terminators {
-        let typeform = TypeExprRef::new($1);
+    top_level_typevar InfixName top_level_typevar top_level_definition_anchor Colon2Equal top_level_constructor_list directive_terminators {
+        let mut typevars = self.used_identifiers;
+        let right = typevars.pop_value(&self.heap).unwrap_or($3);
+        let left = typevars.pop_value(&self.heap).unwrap_or($1);
+        self.used_identifiers = ConsList::EMPTY;
+        if self.same_type_variable(left, right) {
+          self.syntax("repeated type variable in typeform\n");
+        }
+        let typeform = TypeExprRef::new(self.heap.apply2($2, left, right));
         let Some((type_identifier, arguments)) = typeform.identifier_head_application_spine(&self.heap) else {
           unreachable!("top-level algebraic lhs should stay identifier-headed")
         };
         let arity = arguments.len() as isize;
-        let anchor = FileInfoRef::from_ref($2.into());
-        let mut constructor_list: RawValue = $4.into();
+        let anchor = FileInfoRef::from_ref($4.into());
+        let mut constructor_list: RawValue = $6.into();
         let mut source_order_constructors = NIL_RAW;
         while constructor_list != NIL_RAW {
           source_order_constructors = self.heap.cons_ref(self.heap[constructor_list].head.into(), source_order_constructors.into()).into();
@@ -1182,6 +1163,11 @@ top_level_algebraic_type_item:
           info: source_order_constructor_list,
           anchor,
         });
+        $$ = NIL;
+      }
+    | top_level_typevar InfixCName top_level_typevar top_level_definition_anchor Colon2Equal top_level_constructor_list directive_terminators {
+        self.used_identifiers = ConsList::EMPTY;
+        self.syntax("upper case identifier cannot be used as typename\n");
         $$ = NIL;
       }
     ;
@@ -1398,23 +1384,6 @@ top_level_pattern_symbolic_infix_operator:
     | Bang { $$ = self.heap.apply_ref(Combinator::C.into(), Combinator::Subscript.into()); }
     ;
 
-top_level_pattern_definition_symbolic_infix_operator:
-    PlusPlus { $$ = Combinator::Append.into(); }
-    | Vel { $$ = Combinator::Or.into(); }
-    | Ampersand { $$ = Combinator::And.into(); }
-    | Greater { $$ = Combinator::Gr.into(); }
-    | GreaterEqual { $$ = Combinator::Gre.into(); }
-    | NotEqual { $$ = Combinator::NEq.into(); }
-    | LessEqual { $$ = self.heap.apply_ref(Combinator::C.into(), Combinator::Gre.into()); }
-    | Less { $$ = self.heap.apply_ref(Combinator::C.into(), Combinator::Gr.into()); }
-    | Times { $$ = Combinator::Times.into(); }
-    | DivideFloat { $$ = Combinator::DivideFloat.into(); }
-    | DivideInteger { $$ = Combinator::DivideInteger.into(); }
-    | Remainder { $$ = Combinator::Remainder.into(); }
-    | Caret { $$ = Combinator::Power.into(); }
-    | Dot { $$ = Combinator::B.into(); }
-    | Bang { $$ = self.heap.apply_ref(Combinator::C.into(), Combinator::Subscript.into()); }
-    ;
 
 diop1:
     Plus { $$ = Combinator::Plus.into(); }
@@ -2527,37 +2496,20 @@ ldef:
         self.syntax("`::=' encountered in local defs\n");
         $$ = self.heap.cons_ref(self.heap.nill, NIL);
       }
-    | where_local_function_form_lhs act2 indent Equal here exp Where ldefs outdent {
-        let body = self.build_local_block($8, $6);
-        let (lowered_lhs, lowered_body) = self.heap.lower_function_form_lambdas($1, body);
-        let labeled_body = self.heap.label_ref($5, lowered_body);
-        $$ = DefinitionRef::new(&mut self.heap, lowered_lhs, Type::Undefined.into(), labeled_body).into();
-      }
-    | where_local_function_form_lhs act2 indent Equal here non_where_rhs outdent {
+    | shared_ordinary_definition_lhs act2 indent Equal here rhs outdent {
         let (lowered_lhs, lowered_body) = self.heap.lower_function_form_lambdas($1, $6);
-        let labeled_body = self.heap.label_ref($5, lowered_body);
-        $$ = DefinitionRef::new(&mut self.heap, lowered_lhs, Type::Undefined.into(), labeled_body).into();
-      }
-    | top_level_pattern_definition act2 indent Equal here exp Where ldefs outdent {
-        let body = self.build_local_block($8, $6);
-        let normalized_lhs = self.normalize_local_function_form_lhs($1);
-        let (lowered_lhs, lowered_body) = self.heap.lower_function_form_lambdas(normalized_lhs, body);
-        let labeled_body = self.heap.label_ref($5, lowered_body);
-        $$ = DefinitionRef::new(&mut self.heap, lowered_lhs, Type::Undefined.into(), labeled_body).into();
-      }
-    | top_level_pattern_definition act2 indent Equal here non_where_rhs outdent {
-        let normalized_lhs = self.normalize_local_function_form_lhs($1);
-        let (lowered_lhs, lowered_body) = self.heap.lower_function_form_lambdas(normalized_lhs, $6);
         let labeled_body = self.heap.label_ref($5, lowered_body);
         $$ = DefinitionRef::new(&mut self.heap, lowered_lhs, Type::Undefined.into(), labeled_body).into();
       }
     ;
 
 vlist:
-    v { $$ = self.heap.cons_ref($1, NIL); }
+    v {
+        $$ = self.prepend_pattern_to_reversed_list_substrate($1, NIL);
+      }
     | vlist Comma v /* left recursive so as not to eat YACC stack */ {
         /* reverse order, NB */
-        $$ = self.heap.cons_ref($3, $1);
+        $$ = self.prepend_pattern_to_reversed_list_substrate($3, $1);
       }
     ;
 
@@ -2568,46 +2520,21 @@ v:
 
 v1:
     v1 Plus Constant  /* n+k pattern */ {
-        let inner = $1;
-        let constant = $3;
-        let constant_raw: RawValue = constant.into();
-        if constant_raw < ATOM_LIMIT
-          || self.heap[constant_raw].tag != Tag::Int
-          || (self.heap[constant_raw].head & SIGN_BIT_MASK) != 0
-        {
-          self.syntax("inappropriate use of \"+\" in pattern\n");
-        }
-        $$ = self.heap.apply2(Combinator::Plus.into(), constant, inner);
+        $$ = self.lower_successor_pattern($1, $3);
       }
-    | v1 Plus v_non_constant_application_or_atom { $$ = self.heap.apply2(Combinator::Plus.into(), $1, $3); }
+    | v1 Plus v_non_constant_application_or_atom { $$ = self.lower_binary_pattern_operator(Combinator::Plus.into(), $1, $3); }
     | Minus Constant {
-        let constant = $2;
-        let constant_raw: RawValue = constant.into();
-        if constant_raw >= ATOM_LIMIT && self.heap[constant_raw].tag == Tag::Int {
-          let negated = IntegerRef::from_ref(constant_raw).negate(self.heap);
-          $$ = self.heap.cons_ref(Token::Constant.into(), negated.into());
-        } else {
-          self.syntax("inappropriate use of \"-\" in pattern\n");
-          $$ = self.heap.cons_ref(Token::Constant.into(), constant);
-        }
+        $$ = self.lower_negative_pattern_constant($2);
       }
     | v2 Minus Constant {
-        let constant = $3;
-        let constant_raw: RawValue = constant.into();
-        let negative_pattern = if constant_raw >= ATOM_LIMIT && self.heap[constant_raw].tag == Tag::Int {
-          let negated = IntegerRef::from_ref(constant_raw).negate(self.heap);
-          self.heap.cons_ref(Token::Constant.into(), negated.into())
-        } else {
-          self.syntax("inappropriate use of \"-\" in pattern\n");
-          self.heap.cons_ref(Token::Constant.into(), constant)
-        };
-        $$ = self.heap.apply_ref(self.top_level_application_head($1), negative_pattern);
+        let negative_pattern = self.lower_negative_pattern_constant($3);
+        $$ = self.apply_pattern_application_step($1, negative_pattern);
       }
-    | Minus v_non_constant_application_or_atom { $$ = self.heap.apply_ref(Combinator::Minus.into(), $2); }
-    | v1 Minus v_non_constant_application_or_atom { $$ = self.heap.apply2(Combinator::Minus.into(), $1, $3); }
-    | v2 InfixName v1 { $$ = self.heap.apply2($2, $1, $3); }
-    | v2 InfixCName v1 { $$ = self.heap.apply2($2, $1, $3); }
-    | v2 top_level_pattern_symbolic_infix_operator v1 { $$ = self.heap.apply2($2, $1, $3); }
+    | Minus v_non_constant_application_or_atom { $$ = self.lower_unary_pattern_operator(Combinator::Minus.into(), $2); }
+    | v1 Minus v_non_constant_application_or_atom { $$ = self.lower_binary_pattern_operator(Combinator::Minus.into(), $1, $3); }
+    | v2 InfixName v1 { $$ = self.lower_binary_pattern_operator($2, $1, $3); }
+    | v2 InfixCName v1 { $$ = self.lower_binary_pattern_operator($2, $1, $3); }
+    | v2 top_level_pattern_symbolic_infix_operator v1 { $$ = self.lower_binary_pattern_operator($2, $1, $3); }
     | v2 { $$ = $1; }
 
 v_non_constant_application_or_atom:
@@ -2618,24 +2545,7 @@ v_non_constant_application_or_atom:
 v2:
     v3 { $$ = $1; }
     | v2 v3 {
-        let function = $1;
-        let argument = $2;
-        let head_raw: RawValue = function.into();
-        let head =
-          if head_raw >= ATOM_LIMIT
-            && self.heap[head_raw].tag == Tag::Cons
-            && self.heap[head_raw].head == RawValue::from(Value::Token(Token::Constant))
-          {
-            let inner = self.heap[head_raw].tail;
-            if inner >= ATOM_LIMIT && self.heap[inner].tag == Tag::Id {
-              Value::from(inner)
-            } else {
-              function
-            }
-          } else {
-            function
-          };
-        $$ = self.heap.apply_ref(head, argument);
+        $$ = self.apply_pattern_application_step($1, $2);
         /* repeated name apparatus may have wrapped Constant around leading id
            - not wanted */
       }
@@ -2648,52 +2558,30 @@ v3:
           // `%bnf` grammar-variable legality remains deferred with `%bnf` itself.
           self.syntax("illegal use of $num symbol\n");
         }
-        if self.used_identifiers.contains(self.heap, identifier) {
-          $$ = self.heap.cons_ref(Token::Constant.into(), identifier);
-        } /* picks up repeated names in a template */
-        else {
-          self.used_identifiers.push(self.heap, identifier);
-          $$ = identifier;
-        }
+        $$ = self.lower_repeated_name_pattern_leaf(identifier);
       }
     | ConstructorName { $$ = $1; }
     | Constant {
-        let constant = $1;
-        let constant_raw: RawValue = constant.into();
-        if constant_raw >= ATOM_LIMIT && self.heap[constant_raw].tag == Tag::Double {
-          self.syntax("use of floating point literal in pattern\n");
-        }
-        $$ = self.heap.cons_ref(Token::Constant.into(), constant);
+        $$ = self.lower_pattern_constant_leaf($1);
       }
     | OpenBracket CloseBracket { $$ = self.heap.nill; }
     | OpenBracket vlist CloseBracket {
-        let mut x: RawValue = $2.into();
-        let mut y = self.heap.nill;
-        while x != NIL_RAW {
-          y = self.heap.cons_ref(self.heap[x].head.into(), y);
-          x = self.heap[x].tail;
-        }
-        $$ = y;
+        $$ = self.build_reversed_pattern_list($2);
       }
     | OpenParenthesis CloseParenthesis { $$ = self.vm.void_tuple(); }
-    | OpenParenthesis v CloseParenthesis { $$ = $2; }
+    | OpenParenthesis v_parenthesized CloseParenthesis { $$ = $2; }
     | OpenParenthesis v Comma vlist CloseParenthesis {
-        /* representation of the tuple (a1, ..., an) is
-             self.heap.cons_ref(a1, self.heap.cons_ref(a2, ...pair(a(n-1), an))) */
-        let tuple_tail_raw: RawValue = $4.into();
-        if self.heap[tuple_tail_raw].tail == NIL_RAW {
-          $$ = self.heap.pair_ref($2, self.heap[tuple_tail_raw].head.into());
-        } else {
-          let second_pair = self.heap[tuple_tail_raw].tail;
-          $$ = self.heap.pair_ref(self.heap[second_pair].head.into(), self.heap[tuple_tail_raw].head.into());
-          let mut rest = self.heap[second_pair].tail;
-          while rest != NIL_RAW {
-            $$ = self.heap.cons_ref(self.heap[rest].head.into(), $$);
-            rest = self.heap[rest].tail;
-          }
-          $$ = self.heap.cons_ref($2, $$);
-        }
+        $$ = self.build_pattern_tuple($2, $4);
+      }
+    ;
 
+v_parenthesized:
+    v { $$ = $1; }
+    | top_level_pattern_application_or_atom Equal top_level_pattern {
+        $$ = self.lower_parenthesized_equality_pattern($1, $3);
+      }
+    | top_level_pattern_application_or_atom EqualEqual top_level_pattern {
+        $$ = self.lower_parenthesized_equality_pattern($1, $3);
       }
     ;
 
@@ -2704,43 +2592,17 @@ v_non_constant_atom:
           // `%bnf` grammar-variable legality remains deferred with `%bnf` itself.
           self.syntax("illegal use of $num symbol\n");
         }
-        if self.used_identifiers.contains(self.heap, identifier) {
-          $$ = self.heap.cons_ref(Token::Constant.into(), identifier);
-        } else {
-          self.used_identifiers.push(self.heap, identifier);
-          $$ = identifier;
-        }
+        $$ = self.lower_repeated_name_pattern_leaf(identifier);
       }
     | ConstructorName { $$ = $1; }
     | OpenBracket CloseBracket { $$ = self.heap.nill; }
     | OpenBracket vlist CloseBracket {
-        let mut x: RawValue = $2.into();
-        let mut y = self.heap.nill;
-        while x != NIL_RAW {
-          y = self.heap.cons_ref(self.heap[x].head.into(), y);
-          x = self.heap[x].tail;
-        }
-        $$ = y;
+        $$ = self.build_reversed_pattern_list($2);
       }
     | OpenParenthesis CloseParenthesis { $$ = self.vm.void_tuple(); }
     | OpenParenthesis v CloseParenthesis { $$ = $2; }
     | OpenParenthesis v Comma vlist CloseParenthesis {
-        /* representation of the tuple (a1, ..., an) is
-             self.heap.cons_ref(a1, self.heap.cons_ref(a2, ...pair(a(n-1), an))) */
-        let tuple_tail_raw: RawValue = $4.into();
-        if self.heap[tuple_tail_raw].tail == NIL_RAW {
-          $$ = self.heap.pair_ref($2, self.heap[tuple_tail_raw].head.into());
-        } else {
-          let second_pair = self.heap[tuple_tail_raw].tail;
-          $$ = self.heap.pair_ref(self.heap[second_pair].head.into(), self.heap[tuple_tail_raw].head.into());
-          let mut rest = self.heap[second_pair].tail;
-          while rest != NIL_RAW {
-            $$ = self.heap.cons_ref(self.heap[rest].head.into(), $$);
-            rest = self.heap[rest].tail;
-          }
-          $$ = self.heap.cons_ref($2, $$);
-        }
-
+        $$ = self.build_pattern_tuple($2, $4);
       }
     ;
 
@@ -3490,16 +3352,16 @@ impl<'ctx /* 'fix quotes */> Parser<'ctx /* 'fix quotes */> {
 
               let mut combined_left = source_order_parameters[0];
               for argument in source_order_parameters[1..source_order_parameters.len() - 1].iter().copied() {
-                combined_left = self.heap.apply_ref(self.top_level_application_head(combined_left), argument);
+                combined_left = self.apply_pattern_application_step(combined_left, argument);
               }
-              combined_left = self.heap.apply_ref(self.top_level_application_head(combined_left), left);
+              combined_left = self.apply_pattern_application_step(combined_left, left);
               let combined_pattern = self.heap.apply2(operator, combined_left, right);
               source_order_parameters.truncate(0);
               source_order_parameters.push(combined_pattern);
             } else if Value::from(outer_application.function_raw(&self.heap)) == Combinator::Minus.into() {
               let mut combined_left = source_order_parameters[0];
               for argument in source_order_parameters[1..source_order_parameters.len() - 1].iter().copied() {
-                combined_left = self.heap.apply_ref(self.top_level_application_head(combined_left), argument);
+                combined_left = self.apply_pattern_application_step(combined_left, argument);
               }
               let combined_pattern = self.heap.apply2(
                 Combinator::Minus.into(),
@@ -3551,7 +3413,7 @@ impl<'ctx /* 'fix quotes */> Parser<'ctx /* 'fix quotes */> {
 
         if should_absorb {
           let head = grouped_parameters.pop().unwrap();
-          grouped_parameters.push(self.heap.apply_ref(self.top_level_application_head(head), parameter));
+          grouped_parameters.push(self.apply_pattern_application_step(head, parameter));
         } else {
           grouped_parameters.push(parameter);
         }
@@ -3561,6 +3423,29 @@ impl<'ctx /* 'fix quotes */> Parser<'ctx /* 'fix quotes */> {
         lhs = self.heap.apply_ref(lhs, parameter);
       }
       lhs
+    }
+
+    /// Lowers one pattern-leaf identifier occurrence into either a binder or a wrapped repeated-name constant.
+    /// This exists so active pattern atom owners share one repeated-name leaf invariant instead of open-coding the same first-occurrence vs repeated-occurrence rule.
+    /// The invariant is that first occurrences remain identifier binders and repeated occurrences become `Token::Constant` wrapping that identifier.
+    fn lower_repeated_name_pattern_leaf(&mut self, identifier: Value) -> Value {
+      if self.used_identifiers.contains(self.heap, identifier) {
+        self.heap.cons_ref(Token::Constant.into(), identifier)
+      } else {
+        self.used_identifiers.push(self.heap, identifier);
+        identifier
+      }
+    }
+
+    /// Lowers one pattern constant literal into the wrapped committed constant shape.
+    /// This exists so active pattern atom owners share one constant-wrapping and floating-point-diagnostic invariant instead of open-coding the same rule in each owner.
+    /// The invariant is that floating-point literals still emit the existing parser diagnostic before the literal is wrapped as `Token::Constant`.
+    fn lower_pattern_constant_leaf(&mut self, constant: Value) -> Value {
+      let constant_raw: RawValue = constant.into();
+      if constant_raw >= ATOM_LIMIT && self.heap[constant_raw].tag == Tag::Double {
+        self.syntax("use of floating point literal in pattern\n");
+      }
+      self.heap.cons_ref(Token::Constant.into(), constant)
     }
 
     /// Returns the application head for one active pattern application step. This exists so parser-visible
@@ -3584,128 +3469,169 @@ impl<'ctx /* 'fix quotes */> Parser<'ctx /* 'fix quotes */> {
         .unwrap_or(head)
     }
 
+    /// Commits one active pattern application step after repeated-name head normalization.
+    /// This exists so `v2`, top-level pattern application, and nearby regrouping paths share one application-step invariant instead of open-coding the same Miranda rule.
+    /// The invariant is that only a leading wrapped repeated-name identifier is unwrapped before the application node is committed.
+    fn apply_pattern_application_step(&mut self, function: Value, argument: Value) -> Value {
+      self.heap.apply_ref(self.top_level_application_head(function), argument)
+    }
+
+    /// Builds one committed list pattern from the reversed parser list substrate.
+    /// This exists so active structured pattern-atom owners share one list-construction invariant instead of open-coding reversed-list rebuilding in each atom owner.
+    /// The invariant is that the reversed parser list substrate is rebuilt into the same forward-order Miranda list pattern shape.
+    fn build_reversed_pattern_list(&mut self, reversed_patterns: Value) -> Value {
+      let mut x: RawValue = reversed_patterns.into();
+      let mut y = self.heap.nill;
+      while x != NIL_RAW {
+        y = self.heap.cons_ref(self.heap[x].head.into(), y);
+        x = self.heap[x].tail;
+      }
+      y
+    }
+
+    /// Prepends one parsed pattern item onto the reversed list substrate used by list-pattern owners.
+    /// This exists so the top-level and `v`-side list owners share one accumulation invariant instead of open-coding the same reversed-substrate `cons_ref(item, tail)` action twice.
+    /// The invariant is that a singleton seed uses `NIL` as the tail and each later parsed item is prepended onto the existing reversed substrate without changing the final committed list shape.
+    fn prepend_pattern_to_reversed_list_substrate(&mut self, item: Value, reversed_tail: Value) -> Value {
+      self.heap.cons_ref(item, reversed_tail)
+    }
+
+    /// Builds one committed parenthesized 2-tuple pattern as the canonical pair shape.
+    /// This exists so the active parenthesized pair-pattern owners share one committed pair-construction invariant instead of open-coding the same `pair_ref` action in each owner.
+    /// The invariant is that every admitted two-element parenthesized tuple pattern still commits as the same `Pair` shape for downstream binder extraction.
+    fn build_pattern_pair(&mut self, left: Value, right: Value) -> Value {
+      self.heap.pair_ref(left, right)
+    }
+
+    /// Builds one committed tuple pattern from the head element and tuple-tail substrate.
+    /// This exists so active structured pattern-atom owners share one tuple-construction invariant instead of open-coding head-plus-tail tuple assembly in each atom owner.
+    /// The invariant is that the head element is prepended onto the existing tuple-tail substrate without changing the committed tuple pattern shape.
+    fn build_pattern_tuple_from_head_and_tail(&mut self, head: Value, tail: Value) -> Value {
+      self.heap.cons_ref(head, tail)
+    }
+
+    /// Builds one committed tuple pattern from the first element and reversed tuple-tail substrate.
+    /// This exists so the `v`-side structured atom owners share one Miranda tuple-construction invariant instead of open-coding pair/cons reconstruction in each owner.
+    /// The invariant is that the first element and reversed tail substrate rebuild into the same committed tuple pattern shape used by existing downstream binder extraction.
+    fn build_pattern_tuple(&mut self, head: Value, reversed_tail: Value) -> Value {
+      let tuple_tail_raw: RawValue = reversed_tail.into();
+      if self.heap[tuple_tail_raw].tail == NIL_RAW {
+        self.heap.pair_ref(head, self.heap[tuple_tail_raw].head.into())
+      } else {
+        let second_pair = self.heap[tuple_tail_raw].tail;
+        let mut tuple = self.heap.pair_ref(
+          self.heap[second_pair].head.into(),
+          self.heap[tuple_tail_raw].head.into(),
+        );
+        let mut rest = self.heap[second_pair].tail;
+        while rest != NIL_RAW {
+          tuple = self.heap.cons_ref(self.heap[rest].head.into(), tuple);
+          rest = self.heap[rest].tail;
+        }
+        self.heap.cons_ref(head, tuple)
+      }
+    }
+
+    /// Lowers one active `n+k`-style pattern step while preserving the current parser-owned legality diagnostic.
+    /// This exists so the active arithmetic pattern owners share one normalization path without changing grammar entry states.
+    /// The invariant is that only non-negative integer constants are canonical successor offsets; other shapes still emit the existing parser diagnostic before lowering.
+    fn lower_successor_pattern(&mut self, inner: Value, constant: Value) -> Value {
+      let constant_raw: RawValue = constant.into();
+      if constant_raw < ATOM_LIMIT
+        || self.heap[constant_raw].tag != Tag::Int
+        || (self.heap[constant_raw].head & SIGN_BIT_MASK) != 0
+      {
+        self.syntax("inappropriate use of \"+\" in pattern\n");
+      }
+      self.heap.apply2(Combinator::Plus.into(), constant, inner)
+    }
+
+    /// Lowers one active unary negative literal pattern while preserving the current parser-owned legality diagnostic.
+    /// This exists so the active arithmetic pattern owners share one normalization path without changing grammar entry states.
+    /// The invariant is that only integer constants are negated into wrapped constant patterns; other literals still emit the existing parser diagnostic and stay wrapped as constants.
+    fn lower_negative_pattern_constant(&mut self, constant: Value) -> Value {
+      let constant_raw: RawValue = constant.into();
+      if constant_raw >= ATOM_LIMIT && self.heap[constant_raw].tag == Tag::Int {
+        let negated = IntegerRef::from_ref(constant_raw).negate(self.heap);
+        self.heap.cons_ref(Token::Constant.into(), negated.into())
+      } else {
+        self.syntax("inappropriate use of \"-\" in pattern\n");
+        self.heap.cons_ref(Token::Constant.into(), constant)
+      }
+    }
+
+    /// Lowers one active unary arithmetic/infix pattern operator step into the committed raw application shape.
+    /// This exists so the active arithmetic/infix pattern owners share one operator-lowering invariant without changing grammar entry states.
+    /// The invariant is that prefix operator-headed pattern forms commit as ordinary unary applications for downstream legality checks.
+    fn lower_unary_pattern_operator(&mut self, operator: Value, operand: Value) -> Value {
+      self.heap.apply_ref(operator, operand)
+    }
+
+    /// Lowers one parenthesized `=` or `==` pattern into the committed raw application shape.
+    /// This exists so `formal_v` and `top_level_pattern_atom` share one parenthesized-equality invariant instead of open-coding the same committed payload construction.
+    /// The invariant is that both parenthesized `=` and `==` pattern forms commit as `apply2(NIL, lhs, rhs)` without widening owner admission.
+    fn lower_parenthesized_equality_pattern(&mut self, left: Value, right: Value) -> Value {
+      self.heap.apply2(NIL, left, right)
+    }
+
+    /// Lowers one active binary arithmetic/infix pattern operator step into the committed raw application shape.
+    /// This exists so the active arithmetic/infix pattern owners share one operator-lowering invariant without changing grammar entry states.
+    /// The invariant is that infix-pattern forms commit as ordinary binary applications regardless of whether they were parsed in top-level formals, local `where` lhs patterns, or bare top-level pattern definitions.
+    fn lower_binary_pattern_operator(&mut self, operator: Value, left: Value, right: Value) -> Value {
+      self.heap.apply2(operator, left, right)
+    }
+
+    /// Commits one lowered top-level lhs/body pair into either the ordinary-definition or bare-pattern payload family.
+    /// This exists so the active top-level roots share one post-lowering classification invariant instead of duplicating payload-routing logic in several grammar branches.
+    /// The invariant is that identifier-headed lowered lhs values become ordinary definition payloads, non-identifier lhs values become bare pattern-definition payloads, and the shared ordinary-definition path alone still enforces the existing root `=` ambiguity check.
+    fn commit_top_level_lowered_definition_lhs(
+      &mut self,
+      lowered_lhs: Value,
+      lowered_body: Value,
+      anchor: FileInfoRef,
+      check_root_equality_ambiguity: bool,
+    ) {
+      let lowered_identifier_ref: RawValue = lowered_lhs.into();
+      if lowered_identifier_ref >= ATOM_LIMIT && self.heap[lowered_identifier_ref].tag == Tag::Id {
+        let lowered_body_raw: RawValue = lowered_body.into();
+        let equality_ambiguity = check_root_equality_ambiguity
+          && lowered_body_raw >= ATOM_LIMIT
+          && self.heap[lowered_body_raw].tag == Tag::Ap
+          && {
+            let right_operand_raw = self.heap[lowered_body_raw].tail;
+            let left_application_raw = self.heap[lowered_body_raw].head;
+            left_application_raw >= ATOM_LIMIT
+              && self.heap[left_application_raw].tag == Tag::Ap
+              && self.heap[left_application_raw].head == RawValue::from(Combinator::Eq)
+              && right_operand_raw == lowered_identifier_ref
+              && self.heap[left_application_raw].tail >= ATOM_LIMIT
+              && self.heap[self.heap[left_application_raw].tail].tag == Tag::Id
+          };
+        if equality_ambiguity {
+          self.syntax("unexpected token Equal\n");
+        } else {
+          let identifier = IdentifierRecordRef::from_ref(lowered_identifier_ref);
+          self.definition_payloads.push(ParserDefinitionPayload {
+            identifier,
+            body: lowered_body.into(),
+            anchor,
+          });
+          self.last_identifier = identifier.get_ref();
+        }
+      } else {
+        self.pattern_definition_payloads.push(ParserPatternDefinitionPayload {
+          lhs: lowered_lhs,
+          body: lowered_body.into(),
+          anchor,
+        });
+      }
+    }
+
     /// Wraps one active local-definition block around an already parsed body expression.
     /// This exists so parser-owned `where` lowering reuses one committed block owner instead of open-coding local-node construction at each call site.
     /// The invariant is that the active subset lowers local-definition groups into one committed `LetRec` body.
     fn build_local_block(&mut self, definitions: Value, body: Value) -> Value {
       self.heap.letrec_ref(definitions, body)
-    }
-
-    /// Returns the lowercase identifier-owned application spine eligible for local function-form regrouping.
-    /// This exists so local unparenthesized arithmetic reassociation can reuse one owner check instead of open-coding lowercase-id spine walks in each arithmetic branch.
-    /// The invariant is that only lowercase identifier heads produce a source-order parameter spine.
-    fn local_function_form_spine(&self, value: Value) -> Option<(Value, Vec<Value>)> {
-      let mut current = value;
-      let mut parameters = Vec::new();
-      loop {
-        let current_raw = RawValue::from(current);
-        if current_raw < ATOM_LIMIT || self.heap[current_raw].tag != Tag::Ap {
-          break;
-        }
-
-        let application = ApNodeRef::from_ref(current_raw);
-        parameters.push(Value::from(application.argument_raw(&self.heap)));
-        current = Value::from(application.function_raw(&self.heap));
-      }
-      parameters.reverse();
-
-      let current_raw = RawValue::from(current);
-      if current_raw < ATOM_LIMIT || self.heap[current_raw].tag != Tag::Id {
-        return None;
-      }
-
-      let owner = IdentifierRecordRef::from_ref(current_raw);
-      (!is_capitalized(owner.get_name(&self.heap).as_str())).then_some((owner.into(), parameters))
-    }
-
-    /// Reassociates one parsed local lhs onto the committed lowercase-id function-form owner when the unparenthesized
-    /// local arithmetic slice reached the older generic `v` grouping first.
-    /// This exists so local `where` helpers can admit the active unparenthesized arithmetic family without replacing the
-    /// broader local-pattern owner.
-    /// The invariant is that parenthesized forms stay unchanged while the newly admitted unparenthesized arithmetic
-    /// family is regrouped onto the same committed lhs shapes already consumed by `lower_function_form_lambdas` and typecheck.
-    fn normalize_local_function_form_lhs(&mut self, lhs: Value) -> Value {
-      let lhs_raw = RawValue::from(lhs);
-      if lhs_raw < ATOM_LIMIT || self.heap[lhs_raw].tag != Tag::Ap {
-        return lhs;
-      }
-
-      let outer_application = ApNodeRef::from_ref(lhs_raw);
-      let Some(operator_application) = outer_application.function_application(&self.heap) else {
-        return lhs;
-      };
-      let operator = Value::from(operator_application.function_raw(&self.heap));
-      let left = Value::from(operator_application.argument_raw(&self.heap));
-      let right = Value::from(outer_application.argument_raw(&self.heap));
-
-      if operator == Combinator::Plus.into() {
-        let left_raw = RawValue::from(left);
-        if left_raw >= ATOM_LIMIT
-          && self.heap[left_raw].tag == Tag::Int
-          && (self.heap[left_raw].head & SIGN_BIT_MASK) == 0
-        {
-          let Some((owner, mut parameters)) = self.local_function_form_spine(right) else {
-            return lhs;
-          };
-          let Some(inner) = parameters.pop() else {
-            return lhs;
-          };
-
-          let mut combined_left = inner;
-          if let Some(first_parameter) = parameters.first().copied() {
-            combined_left = first_parameter;
-            for parameter in parameters[1..].iter().copied() {
-              combined_left = self.heap.apply_ref(self.top_level_application_head(combined_left), parameter);
-            }
-            combined_left = self.heap.apply_ref(self.top_level_application_head(combined_left), inner);
-          }
-
-          let parameter = self.heap.apply2(Combinator::Plus.into(), left, combined_left);
-          return self.heap.apply_ref(owner, parameter);
-        }
-
-        let Some((owner, mut parameters)) = self.local_function_form_spine(left) else {
-          return lhs;
-        };
-        let Some(last_parameter) = parameters.pop() else {
-          return lhs;
-        };
-
-        let mut combined_left = last_parameter;
-        if let Some(first_parameter) = parameters.first().copied() {
-          combined_left = first_parameter;
-          for parameter in parameters[1..].iter().copied() {
-            combined_left = self.heap.apply_ref(self.top_level_application_head(combined_left), parameter);
-          }
-          combined_left = self.heap.apply_ref(self.top_level_application_head(combined_left), last_parameter);
-        }
-
-        let parameter = self.heap.apply2(Combinator::Plus.into(), combined_left, right);
-        return self.heap.apply_ref(owner, parameter);
-      }
-
-      if operator == Combinator::Minus.into() {
-        let Some((owner, mut parameters)) = self.local_function_form_spine(left) else {
-          return lhs;
-        };
-
-        let parameter = if let Some(last_parameter) = parameters.pop() {
-          let mut combined_left = last_parameter;
-          if let Some(first_parameter) = parameters.first().copied() {
-            combined_left = first_parameter;
-            for parameter in parameters[1..].iter().copied() {
-              combined_left = self.heap.apply_ref(self.top_level_application_head(combined_left), parameter);
-            }
-            combined_left = self.heap.apply_ref(self.top_level_application_head(combined_left), last_parameter);
-          }
-            self.heap.apply2(Combinator::Minus.into(), combined_left, right)
-        } else {
-          self.heap.apply_ref(Combinator::Minus.into(), right)
-        };
-        return self.heap.apply_ref(owner, parameter);
-      }
-
-      lhs
     }
 
     /// Composes one active guarded-expression case list into the committed local-control body shape.

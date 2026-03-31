@@ -1210,6 +1210,46 @@ fn load_file_repeated_name_application_head_still_reaches_value_head_bucket() {
 }
 
 #[test]
+fn load_file_top_level_pattern_repeated_name_application_head_still_reaches_value_head_bucket() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("top_level_pattern_repeated_name_application_head.m");
+    std::fs::write(&source_path, "(x, (x y)) = missing\n")
+        .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::ValueHeadApplicationsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
+fn load_file_local_repeated_name_application_head_still_reaches_value_head_bucket_before_undefined_name() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("top_level_where_local_repeated_name_application_head.m");
+    std::fs::write(&source_path, "f x = g x where g (y, (y z)) = missing\n")
+        .expect("failed to write source test file");
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let result = vm.load_file(&source_path_str);
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::ValueHeadApplicationsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
 fn load_file_accepts_unparenthesized_declared_constructor_application_in_formal() {
     let mut vm = VM::new();
     vm.initializing = false;
@@ -2638,6 +2678,38 @@ fn commit_parsed_top_level_script_materializes_tuple_pattern_bindings() {
 }
 
 #[test]
+fn commit_parsed_top_level_script_materializes_three_tuple_pattern_bindings() {
+    let mut vm = VM::new();
+    let source_path = "top_level_three_tuple_pattern_bindings.m";
+    let x = vm.heap.make_empty_identifier("x");
+    let y = vm.heap.make_empty_identifier("y");
+    let z = vm.heap.make_empty_identifier("z");
+    let tail = vm.heap.pair_ref(y.into(), z.into());
+    let lhs = vm.heap.cons_ref(x.into(), tail);
+    let rhs = IntegerRef::from_i64(&mut vm.heap, 7);
+    let anchor = test_anchor(&mut vm, source_path, 1);
+
+    let files = vm.commit_parsed_top_level_script(
+        source_path,
+        UNIX_EPOCH,
+        &ParserTopLevelScriptPayload {
+            pattern_definitions: vec![ParserPatternDefinitionPayload {
+                lhs,
+                body: rhs.get_ref(),
+                anchor,
+            }],
+            ..Default::default()
+        },
+    );
+
+    let current_file = files.head(&vm.heap).expect("expected current file");
+    assert_eq!(current_file.get_definienda(&vm.heap).len(&vm.heap), 3);
+    assert!(x.get_value(&vm.heap).is_some());
+    assert!(y.get_value(&vm.heap).is_some());
+    assert!(z.get_value(&vm.heap).is_some());
+}
+
+#[test]
 fn commit_parsed_top_level_script_materializes_list_pattern_bindings() {
     let mut vm = VM::new();
     let source_path = "top_level_list_pattern_bindings.m";
@@ -2665,6 +2737,31 @@ fn commit_parsed_top_level_script_materializes_list_pattern_bindings() {
     assert_eq!(current_file.get_definienda(&vm.heap).len(&vm.heap), 2);
     assert!(x.get_value(&vm.heap).is_some());
     assert!(y.get_value(&vm.heap).is_some());
+}
+
+#[test]
+fn commit_parsed_top_level_script_empty_list_pattern_commits_no_bindings() {
+    let mut vm = VM::new();
+    let source_path = "top_level_empty_list_pattern_bindings.m";
+    let lhs = vm.heap.nill;
+    let rhs = IntegerRef::from_i64(&mut vm.heap, 7);
+    let anchor = test_anchor(&mut vm, source_path, 1);
+
+    let files = vm.commit_parsed_top_level_script(
+        source_path,
+        UNIX_EPOCH,
+        &ParserTopLevelScriptPayload {
+            pattern_definitions: vec![ParserPatternDefinitionPayload {
+                lhs,
+                body: rhs.get_ref(),
+                anchor,
+            }],
+            ..Default::default()
+        },
+    );
+
+    let current_file = files.head(&vm.heap).expect("expected current file");
+    assert_eq!(current_file.get_definienda(&vm.heap).len(&vm.heap), 0);
 }
 
 #[test]
@@ -2724,6 +2821,32 @@ fn commit_parsed_top_level_script_wrapped_constant_pattern_only_commits_variable
     let current_file = files.head(&vm.heap).expect("expected current file");
     assert_eq!(current_file.get_definienda(&vm.heap).len(&vm.heap), 1);
     assert!(x.get_value(&vm.heap).is_some());
+}
+
+#[test]
+fn commit_parsed_top_level_script_constant_pattern_commits_no_bindings() {
+    let mut vm = VM::new();
+    let source_path = "top_level_constant_pattern_bindings.m";
+    let one = IntegerRef::from_i64(&mut vm.heap, 1);
+    let lhs = vm.heap.cons_ref(Token::Constant.into(), one.get_ref().into());
+    let rhs = IntegerRef::from_i64(&mut vm.heap, 7);
+    let anchor = test_anchor(&mut vm, source_path, 1);
+
+    let files = vm.commit_parsed_top_level_script(
+        source_path,
+        UNIX_EPOCH,
+        &ParserTopLevelScriptPayload {
+            pattern_definitions: vec![ParserPatternDefinitionPayload {
+                lhs,
+                body: rhs.get_ref(),
+                anchor,
+            }],
+            ..Default::default()
+        },
+    );
+
+    let current_file = files.head(&vm.heap).expect("expected current file");
+    assert_eq!(current_file.get_definienda(&vm.heap).len(&vm.heap), 0);
 }
 
 #[test]
@@ -4511,21 +4634,29 @@ fn load_file_rejects_invalid_successor_pattern_in_top_level_pattern_definition()
 
 #[test]
 fn load_file_top_level_pattern_symbolic_infix_still_precedes_undefined_name() {
-    let mut vm = VM::new();
-    vm.initializing = false;
+    for (file_name, source_text) in [
+        ("top_level_pattern_symbolic_infix_precedes_undefined_name.m", "(a=b) = b\n"),
+        (
+            "top_level_pattern_symbolic_double_equal_precedes_undefined_name.m",
+            "(a==b) = b\n",
+        ),
+    ] {
+        let mut vm = VM::new();
+        vm.initializing = false;
 
-    let source_path = unique_test_path("top_level_pattern_symbolic_infix_precedes_undefined_name.m");
-    std::fs::write(&source_path, "(a=b) = b\n").expect("failed to write source test file");
-    let source_path_str = source_path.to_string_lossy().to_string();
+        let source_path = unique_test_path(file_name);
+        std::fs::write(&source_path, source_text).expect("failed to write source test file");
+        let source_path_str = source_path.to_string_lossy().to_string();
 
-    let result = vm.load_file(&source_path_str);
+        let result = vm.load_file(&source_path_str);
 
-    assert!(matches!(
-        result,
-        Err(LoadFileError::Typecheck(
-            TypecheckError::NonIdentifierApplicationHeadsInFormals { count: 1 }
-        ))
-    ));
+        assert!(matches!(
+            result,
+            Err(LoadFileError::Typecheck(
+                TypecheckError::NonIdentifierApplicationHeadsInFormals { count: 1 }
+            ))
+        ));
+    }
 }
 
 #[test]
@@ -4643,12 +4774,50 @@ fn load_file_top_level_pattern_malformed_plus_application_still_precedes_undefin
 }
 
 #[test]
+fn load_file_top_level_pattern_malformed_minus_application_still_precedes_undefined_name() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("top_level_pattern_malformed_minus_precedes_undefined_name.m");
+    std::fs::write(&source_path, "(((x-y)) z) = missing\n")
+        .expect("failed to write source test file");
+
+    let result = vm.load_file(&source_path.to_string_lossy());
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::MalformedMinusApplicationsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
 fn load_file_reports_nested_constructor_inside_top_level_pattern_malformed_plus_before_generic_formal_error() {
     let mut vm = VM::new();
     vm.initializing = false;
 
     let source_path = unique_test_path("top_level_pattern_malformed_plus_nested_constructor_precedence.m");
     std::fs::write(&source_path, "(((Nope x)+y) z) = z\n")
+        .expect("failed to write source test file");
+
+    let result = vm.load_file(&source_path.to_string_lossy());
+
+    assert!(matches!(
+        result,
+        Err(LoadFileError::Typecheck(
+            TypecheckError::UndeclaredConstructorsInFormals { count: 1 }
+        ))
+    ));
+}
+
+#[test]
+fn load_file_reports_nested_constructor_inside_top_level_pattern_malformed_minus_before_generic_formal_error() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("top_level_pattern_malformed_minus_nested_constructor_precedence.m");
+    std::fs::write(&source_path, "(((Nope x)-y) z) = z\n")
         .expect("failed to write source test file");
 
     let result = vm.load_file(&source_path.to_string_lossy());
@@ -7007,9 +7176,14 @@ fn typecheck_phase_rejects_symbolic_infix_pattern_in_local_definition_and_preser
     let f = vm.heap.make_empty_identifier("f");
     let x = vm.heap.make_empty_identifier("x");
     let y = vm.heap.make_empty_identifier("y");
-    let local_pattern = vm.heap.apply2(Combinator::Append.into(), x.into(), y.into());
-    let local_definition = DefinitionRef::new(&mut vm.heap, local_pattern, Type::Undefined.into(), y.into());
-    let definitions = vm.heap.cons_ref(local_definition.into(), NIL);
+    let a = vm.heap.make_empty_identifier("a");
+    let b = vm.heap.make_empty_identifier("b");
+    let append_pattern = vm.heap.apply2(Combinator::Append.into(), x.into(), y.into());
+    let equality_pattern = vm.heap.apply2(Combinator::Nil.into(), a.into(), b.into());
+    let append_definition = DefinitionRef::new(&mut vm.heap, append_pattern, Type::Undefined.into(), y.into());
+    let equality_definition = DefinitionRef::new(&mut vm.heap, equality_pattern, Type::Undefined.into(), b.into());
+    let trailing_definitions = vm.heap.cons_ref(equality_definition.into(), NIL);
+    let definitions = vm.heap.cons_ref(append_definition.into(), trailing_definitions);
     let letrec_body = vm.heap.letrec_ref(definitions, y.into());
     f.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(letrec_body));
     current_file.push_item_onto_definienda(&mut vm.heap, f);
@@ -7019,7 +7193,7 @@ fn typecheck_phase_rejects_symbolic_infix_pattern_in_local_definition_and_preser
 
     assert!(matches!(
         &result.failure,
-        Some(TypecheckError::NonIdentifierApplicationHeadsInFormals { count: 1 })
+        Some(TypecheckError::NonIdentifierApplicationHeadsInFormals { count: 2 })
     ));
     assert!(result.undefined_names.is_empty());
 }
