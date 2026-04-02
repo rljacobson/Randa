@@ -20,6 +20,8 @@ pub(super) struct CodegenBoundaryInputs {
     pub(super) internal_number_show_function: IdentifierRecordRef,
     pub(super) pair_show_function: IdentifierRecordRef,
     pub(super) paren_show_function: IdentifierRecordRef,
+    pub(super) showabstract: IdentifierRecordRef,
+    pub(super) showwhat: IdentifierRecordRef,
     pub(super) string_show_function: IdentifierRecordRef,
     pub(super) void_show_function: IdentifierRecordRef,
     pub(super) undefined_names: ConsList<IdentifierRecordRef>,
@@ -42,6 +44,8 @@ impl CodegenBoundaryInputs {
             internal_number_show_function: vm.internal_number_show_function,
             pair_show_function: vm.pair_show_function,
             paren_show_function: vm.paren_show_function,
+            showabstract: vm.showabstract,
+            showwhat: vm.showwhat,
             string_show_function: vm.string_show_function,
             void_show_function: vm.void_show_function,
             undefined_names: vm.undefined_names,
@@ -228,10 +232,11 @@ fn lower_tuple_show_tail(
 }
 
 /// Builds the active `mkshow` subset for one committed type expression. This exists so `Tag::Show`
-/// lowering keeps builtin and attached-show-function selection inside the codegen owner instead of
-/// reading VM state ad hoc elsewhere. The invariant is that the active builtin family, string
-/// special case, tuple-chain lowering, and attached type show-function applications follow one
-/// coherent subset, while unsupported types return `None` unchanged.
+/// lowering keeps builtin, fallback, and attached-show-function selection inside the codegen owner
+/// instead of reading VM state ad hoc elsewhere. The invariant is that the active builtin family,
+/// string special case, direct abstract/polymorphic fallback, tuple-chain lowering, and attached
+/// type show-function applications follow one coherent subset, while still-deferred cases return
+/// `None` unchanged.
 fn lower_show_function(
     heap: &mut Heap,
     inputs: &CodegenBoundaryInputs,
@@ -259,6 +264,9 @@ fn lower_show_function(
     }
     if heap.is_arrow_type(type_expr.value()) {
         return Some(inputs.function_show_function.into());
+    }
+    if type_expr.type_variable_ordinal(heap).is_some() {
+        return Some(inputs.showwhat.into());
     }
     if heap.is_list_type(type_expr.value()) {
         let list_application = ApNodeRef::from_ref(type_expr.value().into());
@@ -311,7 +319,12 @@ fn lower_show_function(
         return None;
     };
     if show_function == Value::None {
-        return None;
+        return (value_type.get_identifier_value_type_kind(heap) == IdentifierValueTypeKind::Abstract)
+            .then_some(inputs.showabstract.into());
+    }
+
+    if show_function == inputs.showwhat.into() {
+        return Some(show_function);
     }
 
     let mut lowered_show = show_function;

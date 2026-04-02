@@ -1171,6 +1171,88 @@ fn load_file_rejects_symbolic_infix_pattern_in_formal() {
 }
 
 #[test]
+fn load_file_rejects_unparenthesized_symbolic_infix_pattern_in_formal() {
+    for (file_name, source_text) in [
+        ("unparenthesized_symbolic_infix_times_formal.m", "bad x*y = y\n"),
+        ("unparenthesized_symbolic_infix_append_formal.m", "bad u++v = v\n"),
+        ("unparenthesized_symbolic_infix_power_formal.m", "bad p^q = q\n"),
+        ("unparenthesized_symbolic_infix_divide_float_formal.m", "bad a/b = b\n"),
+        ("unparenthesized_symbolic_infix_divide_int_formal.m", "bad c div d = d\n"),
+        ("unparenthesized_symbolic_infix_remainder_formal.m", "bad e mod f = f\n"),
+        ("unparenthesized_symbolic_infix_and_formal.m", "bad g&h = h\n"),
+        ("unparenthesized_symbolic_infix_or_formal.m", "bad i\\/j = j\n"),
+        ("unparenthesized_symbolic_infix_not_equal_formal.m", "bad k~=l = l\n"),
+        ("unparenthesized_symbolic_infix_greater_formal.m", "bad m>n = n\n"),
+        ("unparenthesized_symbolic_infix_greater_equal_formal.m", "bad o>=p = p\n"),
+        ("unparenthesized_symbolic_infix_less_formal.m", "bad q<r = r\n"),
+        ("unparenthesized_symbolic_infix_less_equal_formal.m", "bad s<=t = t\n"),
+        ("unparenthesized_symbolic_infix_compose_formal.m", "bad u.v = v\n"),
+        ("unparenthesized_symbolic_infix_subscript_formal.m", "bad w!x = x\n"),
+    ] {
+        let mut vm = VM::new();
+        vm.initializing = false;
+
+        let source_path = unique_test_path(file_name);
+        std::fs::write(&source_path, source_text).expect("failed to write source test file");
+        let source_path_str = source_path.to_string_lossy().to_string();
+
+        let result = vm.load_file(&source_path_str);
+
+        assert!(matches!(
+            result,
+            Err(LoadFileError::Typecheck(
+                TypecheckError::NonIdentifierApplicationHeadsInFormals { count: 1 }
+            ))
+        ));
+    }
+}
+
+#[test]
+fn load_file_rejects_unparenthesized_symbolic_infix_left_operand_application_in_formal() {
+    for (file_name, source_text) in [
+        (
+            "unparenthesized_symbolic_infix_left_operand_times_formal.m",
+            "bad g x*y = x\n",
+        ),
+        (
+            "unparenthesized_symbolic_infix_left_operand_divide_formal.m",
+            "bad h x/y = x\n",
+        ),
+        (
+            "unparenthesized_symbolic_infix_left_operand_and_formal.m",
+            "bad k p&q = p\n",
+        ),
+        (
+            "unparenthesized_symbolic_infix_left_operand_compose_formal.m",
+            "bad m a.b = a\n",
+        ),
+        (
+            "unparenthesized_symbolic_infix_left_operand_subscript_formal.m",
+            "bad n i!j = i\n",
+        ),
+    ] {
+        let mut vm = VM::new();
+        vm.initializing = false;
+
+        let source_path = unique_test_path(file_name);
+        std::fs::write(&source_path, source_text).expect("failed to write source test file");
+
+        let result = vm.load_file(&source_path.to_string_lossy());
+
+        assert!(
+            matches!(
+                result,
+                Err(LoadFileError::Typecheck(
+                    TypecheckError::ValueHeadApplicationsInFormals { count: 1 }
+                ))
+            ),
+            "result={result:?} diagnostics={:?}",
+            vm.parser_diagnostics
+        );
+    }
+}
+
+#[test]
 fn load_file_reports_nested_constructor_inside_symbolic_infix_before_generic_formal_error() {
     let mut vm = VM::new();
     vm.initializing = false;
@@ -1537,6 +1619,33 @@ fn parse_source_text_top_level_where_reaches_symbolic_infix_pattern_typecheck_er
         .parse_source_text(
             &source_path_str,
             "f x = g x where g (x*y) = y\n",
+            UNIX_EPOCH,
+            false,
+        )
+        .expect("source parse should succeed");
+
+    assert!(outcome.parsed_without_error);
+    vm.files = outcome.files;
+
+    let result = vm.run_checktypes_phase();
+
+    assert!(matches!(
+        result,
+        Err(TypecheckError::NonIdentifierApplicationHeadsInFormals { count: 1 })
+    ));
+}
+
+#[test]
+fn parse_source_text_top_level_where_reaches_unparenthesized_symbolic_infix_pattern_typecheck_error() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("source_top_level_where_unparenthesized_symbolic_infix_pattern.m");
+    let source_path_str = source_path.to_string_lossy().to_string();
+    let outcome = vm
+        .parse_source_text(
+            &source_path_str,
+            "f x = g x where g x*y = y\n",
             UNIX_EPOCH,
             false,
         )
@@ -4660,6 +4769,42 @@ fn load_file_top_level_pattern_symbolic_infix_still_precedes_undefined_name() {
 }
 
 #[test]
+fn load_file_top_level_pattern_unparenthesized_symbolic_infix_still_precedes_undefined_name() {
+    for (file_name, source_text) in [
+        ("top_level_pattern_unparenthesized_symbolic_times.m", "x*y = missing\n"),
+        ("top_level_pattern_unparenthesized_symbolic_append.m", "u++v = missing\n"),
+        ("top_level_pattern_unparenthesized_symbolic_power.m", "p^q = missing\n"),
+        ("top_level_pattern_unparenthesized_symbolic_divide_float.m", "a/b = missing\n"),
+        ("top_level_pattern_unparenthesized_symbolic_divide_int.m", "c div d = missing\n"),
+        ("top_level_pattern_unparenthesized_symbolic_remainder.m", "e mod f = missing\n"),
+        ("top_level_pattern_unparenthesized_symbolic_and.m", "g&h = missing\n"),
+        ("top_level_pattern_unparenthesized_symbolic_or.m", "i\\/j = missing\n"),
+        ("top_level_pattern_unparenthesized_symbolic_not_equal.m", "k~=l = missing\n"),
+        ("top_level_pattern_unparenthesized_symbolic_greater.m", "m>n = missing\n"),
+        ("top_level_pattern_unparenthesized_symbolic_greater_equal.m", "o>=p = missing\n"),
+        ("top_level_pattern_unparenthesized_symbolic_less.m", "q<r = missing\n"),
+        ("top_level_pattern_unparenthesized_symbolic_less_equal.m", "s<=t = missing\n"),
+        ("top_level_pattern_unparenthesized_symbolic_compose.m", "u.v = missing\n"),
+        ("top_level_pattern_unparenthesized_symbolic_subscript.m", "w!x = missing\n"),
+    ] {
+        let mut vm = VM::new();
+        vm.initializing = false;
+
+        let source_path = unique_test_path(file_name);
+        std::fs::write(&source_path, source_text).expect("failed to write source test file");
+
+        let result = vm.load_file(&source_path.to_string_lossy());
+
+        assert!(matches!(
+            result,
+            Err(LoadFileError::Typecheck(
+                TypecheckError::NonIdentifierApplicationHeadsInFormals { count: 1 }
+            ))
+        ));
+    }
+}
+
+#[test]
 fn load_file_top_level_pattern_non_canonical_plus_still_precedes_undefined_name() {
     let mut vm = VM::new();
     vm.initializing = false;
@@ -4676,6 +4821,87 @@ fn load_file_top_level_pattern_non_canonical_plus_still_precedes_undefined_name(
             TypecheckError::NonCanonicalPlusPatternsInFormals { count: 1 }
         ))
     ));
+}
+
+#[test]
+fn load_file_reports_local_unparenthesized_symbolic_infix_before_undefined_name_under_top_level_where() {
+    for (file_name, source_text) in [
+        (
+            "top_level_where_local_unparenthesized_symbolic_times_precedes_undefined_name.m",
+            "f x = g x where g x*y = missing\n",
+        ),
+        (
+            "top_level_where_local_unparenthesized_symbolic_append_precedes_undefined_name.m",
+            "f x = g x where g u++v = missing\n",
+        ),
+        (
+            "top_level_where_local_unparenthesized_symbolic_power_precedes_undefined_name.m",
+            "f x = g x where g p^q = missing\n",
+        ),
+        (
+            "top_level_where_local_unparenthesized_symbolic_divide_float_precedes_undefined_name.m",
+            "f x = g x where g a/b = missing\n",
+        ),
+        (
+            "top_level_where_local_unparenthesized_symbolic_divide_int_precedes_undefined_name.m",
+            "f x = g x where g c div d = missing\n",
+        ),
+        (
+            "top_level_where_local_unparenthesized_symbolic_remainder_precedes_undefined_name.m",
+            "f x = g x where g e mod f = missing\n",
+        ),
+        (
+            "top_level_where_local_unparenthesized_symbolic_and_precedes_undefined_name.m",
+            "f x = g x where g h&i = missing\n",
+        ),
+        (
+            "top_level_where_local_unparenthesized_symbolic_or_precedes_undefined_name.m",
+            "f x = g x where g j\\/k = missing\n",
+        ),
+        (
+            "top_level_where_local_unparenthesized_symbolic_not_equal_precedes_undefined_name.m",
+            "f x = g x where g l~=m = missing\n",
+        ),
+        (
+            "top_level_where_local_unparenthesized_symbolic_greater_precedes_undefined_name.m",
+            "f x = g x where g n>o = missing\n",
+        ),
+        (
+            "top_level_where_local_unparenthesized_symbolic_greater_equal_precedes_undefined_name.m",
+            "f x = g x where g p>=q = missing\n",
+        ),
+        (
+            "top_level_where_local_unparenthesized_symbolic_less_precedes_undefined_name.m",
+            "f x = g x where g r<s = missing\n",
+        ),
+        (
+            "top_level_where_local_unparenthesized_symbolic_less_equal_precedes_undefined_name.m",
+            "f x = g x where g t<=u = missing\n",
+        ),
+        (
+            "top_level_where_local_unparenthesized_symbolic_compose_precedes_undefined_name.m",
+            "f x = g x where g v.w = missing\n",
+        ),
+        (
+            "top_level_where_local_unparenthesized_symbolic_subscript_precedes_undefined_name.m",
+            "f x = g x where g y!z = missing\n",
+        ),
+    ] {
+        let mut vm = VM::new();
+        vm.initializing = false;
+
+        let source_path = unique_test_path(file_name);
+        std::fs::write(&source_path, source_text).expect("failed to write source test file");
+
+        let result = vm.load_file(&source_path.to_string_lossy());
+
+        assert!(matches!(
+            result,
+            Err(LoadFileError::Typecheck(
+                TypecheckError::NonIdentifierApplicationHeadsInFormals { count: 1 }
+            ))
+        ));
+    }
 }
 
 #[test]
@@ -4790,6 +5016,29 @@ fn load_file_top_level_pattern_malformed_minus_application_still_precedes_undefi
             TypecheckError::MalformedMinusApplicationsInFormals { count: 1 }
         ))
     ));
+}
+
+#[test]
+fn load_file_reports_nested_constructor_inside_top_level_pattern_unparenthesized_symbolic_infix_before_generic_formal_error() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let source_path = unique_test_path("top_level_pattern_unparenthesized_symbolic_nested_constructor_precedence.m");
+    std::fs::write(&source_path, "x*Nope y = y\n")
+        .expect("failed to write source test file");
+
+    let result = vm.load_file(&source_path.to_string_lossy());
+
+    assert!(
+        matches!(
+            result,
+            Err(LoadFileError::Typecheck(
+                TypecheckError::UndeclaredConstructorsInFormals { count: 1 }
+            ))
+        ),
+        "result={result:?} diagnostics={:?}",
+        vm.parser_diagnostics
+    );
 }
 
 #[test]
@@ -6120,20 +6369,92 @@ fn typecheck_phase_symbolic_infix_pattern_still_binds_interior_names() {
     );
     vm.files = ConsList::new(&mut vm.heap, current_file);
 
-    let f = vm.heap.make_empty_identifier("f");
+    let less = vm.heap.apply_ref(Combinator::C.into(), Combinator::Gr.into());
+    let less_equal = vm.heap.apply_ref(Combinator::C.into(), Combinator::Gre.into());
+    let subscript = vm.heap.apply_ref(Combinator::C.into(), Combinator::Subscript.into());
+
     let x = vm.heap.make_empty_identifier("x");
     let y = vm.heap.make_empty_identifier("y");
-    let malformed_pattern = vm.heap.apply2(Combinator::Times.into(), x.into(), y.into());
-    let lambda_body = vm.heap.lambda_ref(malformed_pattern, y.into());
-    f.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(lambda_body));
-    current_file.push_item_onto_definienda(&mut vm.heap, f);
+    let times_pattern = vm.heap.apply2(Combinator::Times.into(), x.into(), y.into());
+
+    let a = vm.heap.make_empty_identifier("a");
+    let b = vm.heap.make_empty_identifier("b");
+    let divide_float_pattern = vm.heap.apply2(Combinator::DivideFloat.into(), a.into(), b.into());
+
+    let c = vm.heap.make_empty_identifier("c");
+    let d = vm.heap.make_empty_identifier("d");
+    let divide_int_pattern = vm.heap.apply2(Combinator::DivideInteger.into(), c.into(), d.into());
+
+    let e = vm.heap.make_empty_identifier("e");
+    let f_name = vm.heap.make_empty_identifier("f_name");
+    let remainder_pattern = vm.heap.apply2(Combinator::Remainder.into(), e.into(), f_name.into());
+
+    let g = vm.heap.make_empty_identifier("g");
+    let h = vm.heap.make_empty_identifier("h");
+    let and_pattern = vm.heap.apply2(Combinator::And.into(), g.into(), h.into());
+
+    let i = vm.heap.make_empty_identifier("i");
+    let j = vm.heap.make_empty_identifier("j");
+    let or_pattern = vm.heap.apply2(Combinator::Or.into(), i.into(), j.into());
+
+    let k = vm.heap.make_empty_identifier("k");
+    let l = vm.heap.make_empty_identifier("l");
+    let not_equal_pattern = vm.heap.apply2(Combinator::NEq.into(), k.into(), l.into());
+
+    let m = vm.heap.make_empty_identifier("m");
+    let n = vm.heap.make_empty_identifier("n");
+    let greater_pattern = vm.heap.apply2(Combinator::Gr.into(), m.into(), n.into());
+
+    let o = vm.heap.make_empty_identifier("o");
+    let p = vm.heap.make_empty_identifier("p");
+    let greater_equal_pattern = vm.heap.apply2(Combinator::Gre.into(), o.into(), p.into());
+
+    let q = vm.heap.make_empty_identifier("q");
+    let r = vm.heap.make_empty_identifier("r");
+    let less_pattern = vm.heap.apply2(less, q.into(), r.into());
+
+    let s = vm.heap.make_empty_identifier("s");
+    let t = vm.heap.make_empty_identifier("t");
+    let less_equal_pattern = vm.heap.apply2(less_equal, s.into(), t.into());
+
+    let u = vm.heap.make_empty_identifier("u");
+    let v = vm.heap.make_empty_identifier("v");
+    let compose_pattern = vm.heap.apply2(Combinator::B.into(), u.into(), v.into());
+
+    let w = vm.heap.make_empty_identifier("w");
+    let x1 = vm.heap.make_empty_identifier("x1");
+    let subscript_pattern = vm.heap.apply2(subscript, w.into(), x1.into());
+
+    for (index, pattern) in [
+        times_pattern,
+        divide_float_pattern,
+        divide_int_pattern,
+        remainder_pattern,
+        and_pattern,
+        or_pattern,
+        not_equal_pattern,
+        greater_pattern,
+        greater_equal_pattern,
+        less_pattern,
+        less_equal_pattern,
+        compose_pattern,
+        subscript_pattern,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let function = vm.heap.make_empty_identifier(&format!("f{index}"));
+        let lambda_body = vm.heap.lambda_ref(pattern, Value::Data(index as isize));
+        function.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(lambda_body));
+        current_file.push_item_onto_definienda(&mut vm.heap, function);
+    }
 
     let inputs = typecheck::TypecheckBoundaryInputs::from_vm(&vm);
     let result = typecheck::run_partial_typecheck(&mut vm.heap, inputs);
 
     assert!(matches!(
         &result.failure,
-        Some(TypecheckError::NonIdentifierApplicationHeadsInFormals { count: 1 })
+        Some(TypecheckError::NonIdentifierApplicationHeadsInFormals { count: 13 })
     ));
     assert!(result.undefined_names.is_empty());
 }
@@ -7178,12 +7499,27 @@ fn typecheck_phase_rejects_symbolic_infix_pattern_in_local_definition_and_preser
     let y = vm.heap.make_empty_identifier("y");
     let a = vm.heap.make_empty_identifier("a");
     let b = vm.heap.make_empty_identifier("b");
+    let c = vm.heap.make_empty_identifier("c");
+    let d = vm.heap.make_empty_identifier("d");
+    let e = vm.heap.make_empty_identifier("e");
+    let g = vm.heap.make_empty_identifier("g");
+    let h = vm.heap.make_empty_identifier("h");
     let append_pattern = vm.heap.apply2(Combinator::Append.into(), x.into(), y.into());
-    let equality_pattern = vm.heap.apply2(Combinator::Nil.into(), a.into(), b.into());
+    let divide_pattern = vm.heap.apply2(Combinator::DivideInteger.into(), a.into(), b.into());
+    let and_pattern = vm.heap.apply2(Combinator::And.into(), c.into(), d.into());
+    let compose_pattern = vm.heap.apply2(Combinator::B.into(), e.into(), g.into());
+    let subscript_operator = vm.heap.apply_ref(Combinator::C.into(), Combinator::Subscript.into());
+    let subscript_pattern = vm.heap.apply2(subscript_operator, h.into(), x.into());
     let append_definition = DefinitionRef::new(&mut vm.heap, append_pattern, Type::Undefined.into(), y.into());
-    let equality_definition = DefinitionRef::new(&mut vm.heap, equality_pattern, Type::Undefined.into(), b.into());
-    let trailing_definitions = vm.heap.cons_ref(equality_definition.into(), NIL);
-    let definitions = vm.heap.cons_ref(append_definition.into(), trailing_definitions);
+    let divide_definition = DefinitionRef::new(&mut vm.heap, divide_pattern, Type::Undefined.into(), b.into());
+    let and_definition = DefinitionRef::new(&mut vm.heap, and_pattern, Type::Undefined.into(), d.into());
+    let compose_definition = DefinitionRef::new(&mut vm.heap, compose_pattern, Type::Undefined.into(), g.into());
+    let subscript_definition = DefinitionRef::new(&mut vm.heap, subscript_pattern, Type::Undefined.into(), x.into());
+    let definition_tail = vm.heap.cons_ref(subscript_definition.into(), NIL);
+    let definition_tail = vm.heap.cons_ref(compose_definition.into(), definition_tail);
+    let definition_tail = vm.heap.cons_ref(and_definition.into(), definition_tail);
+    let definition_tail = vm.heap.cons_ref(divide_definition.into(), definition_tail);
+    let definitions = vm.heap.cons_ref(append_definition.into(), definition_tail);
     let letrec_body = vm.heap.letrec_ref(definitions, y.into());
     f.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(letrec_body));
     current_file.push_item_onto_definienda(&mut vm.heap, f);
@@ -7193,7 +7529,7 @@ fn typecheck_phase_rejects_symbolic_infix_pattern_in_local_definition_and_preser
 
     assert!(matches!(
         &result.failure,
-        Some(TypecheckError::NonIdentifierApplicationHeadsInFormals { count: 2 })
+        Some(TypecheckError::NonIdentifierApplicationHeadsInFormals { count: 5 })
     ));
     assert!(result.undefined_names.is_empty());
 }
@@ -8764,6 +9100,229 @@ fn codegen_phase_lowers_list_string_and_tuple_show_nodes() {
 }
 
 #[test]
+fn codegen_phase_lowers_direct_abstract_show_nodes_to_showabstract() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let thing_type = IdentifierValueTypeRef::new(
+        &mut vm.heap,
+        IdentifierValueTypeData::Abstract { basis: NIL },
+    );
+    let thing_type_value = IdentifierValueRef::new(
+        &mut vm.heap,
+        IdentifierValueData::Typed {
+            arity: 0,
+            show_function: Value::None,
+            value_type: thing_type,
+        },
+    );
+    let thing = IdentifierRecordRef::new(
+        &mut vm.heap,
+        "Thing".to_string(),
+        IdentifierDefinitionRef::undefined(),
+        Type::Type.into(),
+        Some(thing_type_value),
+    );
+
+    let holder = vm.heap.make_empty_identifier("show_abstract_holder");
+    let show_body = vm.heap.show_ref(NIL, thing.into());
+    holder.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(show_body));
+
+    let definienda = ConsList::new(&mut vm.heap, holder);
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("codegen_abstract_show_node.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        definienda,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+    vm.undefined_names = ConsList::EMPTY;
+
+    let result = vm.run_codegen_phase();
+
+    assert!(result.is_ok());
+    assert_eq!(
+        holder
+            .get_value(&vm.heap)
+            .expect("expected lowered abstract show body")
+            .get_ref(),
+        vm.showabstract.get_ref()
+    );
+}
+
+#[test]
+fn codegen_phase_lowers_direct_type_variable_show_nodes_to_showwhat() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let holder = vm.heap.make_empty_identifier("show_type_variable_holder");
+    let type_variable = vm.heap.type_var_ref(Value::None, Value::Data(1));
+    let show_body = vm.heap.show_ref(NIL, type_variable);
+    holder.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(show_body));
+
+    let definienda = ConsList::new(&mut vm.heap, holder);
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("codegen_type_variable_show_node.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        definienda,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+    vm.undefined_names = ConsList::EMPTY;
+
+    let result = vm.run_codegen_phase();
+
+    assert!(result.is_ok());
+    assert_eq!(
+        holder
+            .get_value(&vm.heap)
+            .expect("expected lowered type-variable show body")
+            .get_ref(),
+        vm.showwhat.get_ref()
+    );
+}
+
+#[test]
+fn codegen_phase_lowers_recursive_show_nodes_with_polymorphic_and_abstract_fallbacks() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let abstract_type = IdentifierValueTypeRef::new(
+        &mut vm.heap,
+        IdentifierValueTypeData::Abstract { basis: NIL },
+    );
+    let abstract_type_value = IdentifierValueRef::new(
+        &mut vm.heap,
+        IdentifierValueData::Typed {
+            arity: 0,
+            show_function: Value::None,
+            value_type: abstract_type,
+        },
+    );
+    let thing = IdentifierRecordRef::new(
+        &mut vm.heap,
+        "Thing".to_string(),
+        IdentifierDefinitionRef::undefined(),
+        Type::Type.into(),
+        Some(abstract_type_value),
+    );
+
+    let list_holder = vm.heap.make_empty_identifier("show_list_type_variable_holder");
+    let tuple_holder = vm.heap.make_empty_identifier("show_tuple_fallback_holder");
+
+    let type_variable = vm.heap.type_var_ref(Value::None, Value::Data(1));
+    let list_type = vm.heap.list_type_ref(type_variable);
+    let list_show_body = vm.heap.show_ref(NIL, list_type);
+    let tuple_type = vm.heap.pair_type_ref(type_variable, thing.into());
+    let tuple_show_body = vm.heap.show_ref(NIL, tuple_type);
+
+    list_holder.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(list_show_body));
+    tuple_holder.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(tuple_show_body));
+
+    let mut definienda = ConsList::EMPTY;
+    for definiendum in [tuple_holder, list_holder] {
+        definienda.push(&mut vm.heap, definiendum);
+    }
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("codegen_recursive_show_fallbacks.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        definienda,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+    vm.undefined_names = ConsList::EMPTY;
+
+    let result = vm.run_codegen_phase();
+
+    assert!(result.is_ok());
+
+    let lowered_list = list_holder
+        .get_value(&vm.heap)
+        .expect("expected lowered list type-variable show body")
+        .get_ref()
+        .into();
+    let (list_head, list_args) = application_spine(&vm.heap, lowered_list);
+    assert_eq!(list_head, vm.list_show_function.into());
+    assert_eq!(list_args, vec![vm.showwhat.into()]);
+
+    let lowered_tuple = tuple_holder
+        .get_value(&vm.heap)
+        .expect("expected lowered tuple fallback show body")
+        .get_ref()
+        .into();
+    let (tuple_head, tuple_args) = application_spine(&vm.heap, lowered_tuple);
+    assert_eq!(tuple_head, vm.paren_show_function.into());
+    assert_eq!(tuple_args.len(), 1);
+    let (pair_head, pair_args) = application_spine(&vm.heap, tuple_args[0]);
+    assert_eq!(pair_head, vm.pair_show_function.into());
+    assert_eq!(pair_args, vec![vm.showwhat.into(), vm.showabstract.into()]);
+}
+
+#[test]
+fn codegen_phase_keeps_showwhat_identifier_heads_unapplied() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let polymorphic_type = IdentifierValueTypeRef::new(
+        &mut vm.heap,
+        IdentifierValueTypeData::Abstract { basis: NIL },
+    );
+    let polymorphic_type_value = IdentifierValueRef::new(
+        &mut vm.heap,
+        IdentifierValueData::Typed {
+            arity: 1,
+            show_function: vm.showwhat.into(),
+            value_type: polymorphic_type,
+        },
+    );
+    let poly = IdentifierRecordRef::new(
+        &mut vm.heap,
+        "Poly".to_string(),
+        IdentifierDefinitionRef::undefined(),
+        Type::Type.into(),
+        Some(polymorphic_type_value),
+    );
+
+    let holder = vm.heap.make_empty_identifier("showwhat_identifier_head_holder");
+    let applied_type = vm.heap.apply_ref(poly.into(), Type::Number.into());
+    let show_body = vm.heap.show_ref(NIL, applied_type);
+    holder.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(show_body));
+
+    let definienda = ConsList::new(&mut vm.heap, holder);
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("codegen_showwhat_identifier_head.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        definienda,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+    vm.undefined_names = ConsList::EMPTY;
+
+    let result = vm.run_codegen_phase();
+
+    assert!(result.is_ok());
+    assert_eq!(
+        holder
+            .get_value(&vm.heap)
+            .expect("expected lowered showwhat identifier-head body")
+            .get_ref(),
+        vm.showwhat.get_ref()
+    );
+}
+
+#[test]
 fn codegen_phase_lowers_attached_type_show_functions_through_committed_identity() {
     let mut vm = VM::new();
     vm.initializing = false;
@@ -8821,6 +9380,67 @@ fn codegen_phase_lowers_attached_type_show_functions_through_committed_identity(
     let (head, args) = application_spine(&vm.heap, lowered);
     assert_eq!(head, showthing.into());
     assert_eq!(args, vec![vm.internal_number_show_function.into()]);
+}
+
+#[test]
+fn codegen_phase_lowers_attached_type_show_functions_with_polymorphic_arguments() {
+    let mut vm = VM::new();
+    vm.initializing = false;
+
+    let showthing = vm.intern_identifier("showThingPoly");
+    let thing_type = IdentifierValueTypeRef::new(
+        &mut vm.heap,
+        IdentifierValueTypeData::Abstract { basis: NIL },
+    );
+    let thing_type_value = IdentifierValueRef::new(
+        &mut vm.heap,
+        IdentifierValueData::Typed {
+            arity: 1,
+            show_function: showthing.into(),
+            value_type: thing_type,
+        },
+    );
+    let thing = IdentifierRecordRef::new(
+        &mut vm.heap,
+        "ThingPoly".to_string(),
+        IdentifierDefinitionRef::undefined(),
+        Type::Type.into(),
+        Some(thing_type_value),
+    );
+
+    let holder = vm.heap.make_empty_identifier("show_attached_polymorphic_holder");
+    let type_variable = vm.heap.type_var_ref(Value::None, Value::Data(1));
+    let applied_type = vm.heap.apply_ref(thing.into(), type_variable);
+    let attached_show_body = vm.heap.show_ref(NIL, applied_type);
+    holder.set_value_from_data(
+        &mut vm.heap,
+        IdentifierValueData::Arbitrary(attached_show_body),
+    );
+
+    let definienda = ConsList::new(&mut vm.heap, holder);
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("codegen_attached_polymorphic_show_node.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        definienda,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+    vm.undefined_names = ConsList::EMPTY;
+
+    let result = vm.run_codegen_phase();
+
+    assert!(result.is_ok());
+    let lowered = holder
+        .get_value(&vm.heap)
+        .expect("expected lowered attached polymorphic show body")
+        .get_ref()
+        .into();
+    let (head, args) = application_spine(&vm.heap, lowered);
+    assert_eq!(head, showthing.into());
+    assert_eq!(args, vec![vm.showwhat.into()]);
 }
 
 #[test]

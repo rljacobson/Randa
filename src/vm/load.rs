@@ -674,6 +674,8 @@ impl VM {
                     internal_number_show_function: self.internal_number_show_function,
                     pair_show_function: self.pair_show_function,
                     paren_show_function: self.paren_show_function,
+                    showabstract: self.showabstract,
+                    showwhat: self.showwhat,
                     string_show_function: self.string_show_function,
                     void_show_function: self.void_show_function,
                     undefined_names: typecheck_result.undefined_names,

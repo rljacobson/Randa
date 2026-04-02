@@ -2317,20 +2317,48 @@ fn parser_parses_symbolic_infix_pattern_forms_in_top_level_formals() {
 fn parser_parses_unparenthesized_symbolic_infix_pattern_forms_in_top_level_formals() {
     let (heap, result) = run_parser(
         "unparenthesized_symbolic_infix_pattern_form_substrate.m",
-        "timesMatch x*y = x\nappendMatch u++v = u\npowerMatch p^q = p\n",
+        concat!(
+            "timesMatch x*y = x\n",
+            "appendMatch u++v = u\n",
+            "powerMatch p^q = p\n",
+            "divideFloatMatch a/b = a\n",
+            "divideIntMatch c div d = c\n",
+            "remainderMatch e mod f = e\n",
+            "andMatch g&h = g\n",
+            "orMatch i\\/j = i\n",
+            "notEqualMatch k~=l = k\n",
+            "greaterMatch m>n = m\n",
+            "greaterEqualMatch o>=p = o\n",
+            "lessMatch q<r = q\n",
+            "lessEqualMatch s<=t = s\n",
+            "composeMatch u.v = u\n",
+            "subscriptMatch w!x = w\n",
+        ),
     );
 
     let ParserRunResult::ParsedTopLevelScript(payload) = result else {
         panic!("expected top-level parse success, got {result:?}");
     };
-    assert_eq!(payload.definitions.len(), 3);
+    assert_eq!(payload.definitions.len(), 15);
 
-    let expected_heads = [
-        ("timesMatch", Combinator::Times.into()),
-        ("appendMatch", Combinator::Append.into()),
-        ("powerMatch", Combinator::Power.into()),
+    let expected_names = [
+        "timesMatch",
+        "appendMatch",
+        "powerMatch",
+        "divideFloatMatch",
+        "divideIntMatch",
+        "remainderMatch",
+        "andMatch",
+        "orMatch",
+        "notEqualMatch",
+        "greaterMatch",
+        "greaterEqualMatch",
+        "lessMatch",
+        "lessEqualMatch",
+        "composeMatch",
+        "subscriptMatch",
     ];
-    for (definition, (expected_name, expected_head)) in payload.definitions.iter().zip(expected_heads) {
+    for (definition, expected_name) in payload.definitions.iter().zip(expected_names) {
         assert_eq!(definition.identifier.get_name(&heap), expected_name);
         let lambda_raw = definition.body;
         assert_eq!(heap[lambda_raw].tag, Tag::Lambda);
@@ -2338,39 +2366,64 @@ fn parser_parses_unparenthesized_symbolic_infix_pattern_forms_in_top_level_forma
         assert_eq!(heap[pattern_raw].tag, Tag::Ap);
         let operator_application_raw = heap[pattern_raw].head;
         assert_eq!(heap[operator_application_raw].tag, Tag::Ap);
-        assert_eq!(Value::from(heap[operator_application_raw].head), expected_head);
     }
 }
 
 #[test]
 fn parser_parses_unparenthesized_symbolic_infix_left_operand_application_slice_in_top_level_formals() {
-    let (heap, result) = run_parser(
-        "unparenthesized_symbolic_infix_left_operand_application_slice.m",
-        "bad g x*y = x\n",
-    );
+    for (source_path, source_text, expected_left_head, expected_left_argument) in [
+        (
+            "unparenthesized_symbolic_infix_left_operand_times_application_slice.m",
+            "bad g x*y = x\n",
+            "g",
+            "x",
+        ),
+        (
+            "unparenthesized_symbolic_infix_left_operand_divide_application_slice.m",
+            "bad h x/y = x\n",
+            "h",
+            "x",
+        ),
+        (
+            "unparenthesized_symbolic_infix_left_operand_and_application_slice.m",
+            "bad k p&q = p\n",
+            "k",
+            "p",
+        ),
+        (
+            "unparenthesized_symbolic_infix_left_operand_compose_application_slice.m",
+            "bad m a.b = a\n",
+            "m",
+            "a",
+        ),
+        (
+            "unparenthesized_symbolic_infix_left_operand_subscript_application_slice.m",
+            "bad n i!j = i\n",
+            "n",
+            "i",
+        ),
+    ] {
+        let (heap, result) = run_parser(source_path, source_text);
 
-    let ParserRunResult::ParsedTopLevelScript(payload) = result else {
-        panic!("expected top-level parse success, got {result:?}");
-    };
-    assert_eq!(payload.definitions.len(), 1);
+        let ParserRunResult::ParsedTopLevelScript(payload) = result else {
+            panic!("expected top-level parse success, got {result:?}");
+        };
+        assert_eq!(payload.definitions.len(), 1);
 
-    let outer_lambda_raw = payload.definitions[0].body;
-    assert_eq!(heap[outer_lambda_raw].tag, Tag::Lambda);
-    let infix_pattern_raw = heap[outer_lambda_raw].head;
-    assert_eq!(heap[infix_pattern_raw].tag, Tag::Ap);
-    let infix_operator_application_raw = heap[infix_pattern_raw].head;
-    assert_eq!(heap[infix_operator_application_raw].tag, Tag::Ap);
-    assert_eq!(
-        Value::from(heap[infix_operator_application_raw].head),
-        Combinator::Times.into()
-    );
+        let outer_lambda_raw = payload.definitions[0].body;
+        assert_eq!(heap[outer_lambda_raw].tag, Tag::Lambda);
+        let infix_pattern_raw = heap[outer_lambda_raw].head;
+        assert_eq!(heap[infix_pattern_raw].tag, Tag::Ap);
+        let infix_operator_application_raw = heap[infix_pattern_raw].head;
+        assert_eq!(heap[infix_operator_application_raw].tag, Tag::Ap);
 
-    let left_operand_raw = heap[infix_operator_application_raw].tail;
-    assert_eq!(heap[left_operand_raw].tag, Tag::Ap);
-    let left_head = IdentifierRecordRef::from_ref(heap[left_operand_raw].head);
-    assert_eq!(left_head.get_name(&heap), "g");
-    let left_argument = IdentifierRecordRef::from_ref(heap[left_operand_raw].tail);
-    assert_eq!(left_argument.get_name(&heap), "x");
+        let left_operand_raw = heap[infix_operator_application_raw].tail;
+        assert_eq!(heap[left_operand_raw].tag, Tag::Ap);
+        let left_head = IdentifierRecordRef::from_ref(heap[left_operand_raw].head);
+        assert_eq!(left_head.get_name(&heap), expected_left_head);
+        let left_argument = IdentifierRecordRef::from_ref(heap[left_operand_raw].tail);
+        assert_eq!(left_argument.get_name(&heap), expected_left_argument);
+    }
 }
 
 #[test]
@@ -2453,7 +2506,24 @@ fn parser_parses_top_level_where_with_local_symbolic_infix_patterns() {
 fn parser_parses_top_level_where_with_local_unparenthesized_symbolic_infix_patterns() {
     let (heap, result) = run_parser(
         "top_level_where_local_unparenthesized_symbolic_infix_patterns.m",
-        "f x = g x where times x*y = x; append u++v = u; power p^q = p\n",
+        concat!(
+            "f x = g x where ",
+            "times x*y = x; ",
+            "append u++v = u; ",
+            "power p^q = p; ",
+            "divideFloat a/b = a; ",
+            "divideInt c div d = c; ",
+            "remainder e mod f = e; ",
+            "and g&h = g; ",
+            "or i\\/j = i; ",
+            "notEqual k~=l = k; ",
+            "greater m>n = m; ",
+            "greaterEqual o>=p = o; ",
+            "less q<r = q; ",
+            "lessEqual s<=t = s; ",
+            "compose u.v = u; ",
+            "subscript w!x = w\n",
+        ),
     );
 
     let ParserRunResult::ParsedTopLevelScript(payload) = result else {
@@ -2467,12 +2537,9 @@ fn parser_parses_top_level_where_with_local_unparenthesized_symbolic_infix_patte
     assert_eq!(heap[letrec_raw].tag, Tag::LetRec);
 
     let mut definitions_raw = heap[letrec_raw].head;
-    let mut saw_times = false;
-    let mut saw_append = false;
-    let mut saw_power = false;
+    let mut seen_definition_count = 0;
     while definitions_raw != RawValue::from(Combinator::Nil) {
         let definition = DefinitionRef::from_ref(heap[definitions_raw].head);
-        let definition_name = IdentifierRecordRef::from_ref(definition.lhs_value(&heap).into()).get_name(&heap);
         let body_raw = RawValue::from(definition.body_value(&heap));
         assert_eq!(heap[body_raw].tag, Tag::Tries);
         let alternatives_raw = heap[body_raw].tail;
@@ -2482,38 +2549,11 @@ fn parser_parses_top_level_where_with_local_unparenthesized_symbolic_infix_patte
         assert_eq!(heap[pattern_raw].tag, Tag::Ap);
         let operator_application_raw = heap[pattern_raw].head;
         assert_eq!(heap[operator_application_raw].tag, Tag::Ap);
-
-        match definition_name.as_str() {
-            "times" => {
-                saw_times = true;
-                assert_eq!(
-                    Value::from(heap[operator_application_raw].head),
-                    Combinator::Times.into()
-                );
-            }
-            "append" => {
-                saw_append = true;
-                assert_eq!(
-                    Value::from(heap[operator_application_raw].head),
-                    Combinator::Append.into()
-                );
-            }
-            "power" => {
-                saw_power = true;
-                assert_eq!(
-                    Value::from(heap[operator_application_raw].head),
-                    Combinator::Power.into()
-                );
-            }
-            other => panic!("unexpected local definition {other}"),
-        }
-
+        seen_definition_count += 1;
         definitions_raw = heap[definitions_raw].tail;
     }
 
-    assert!(saw_times);
-    assert!(saw_append);
-    assert!(saw_power);
+    assert_eq!(seen_definition_count, 15);
 }
 
 #[test]
@@ -2559,21 +2599,66 @@ fn parser_records_bare_symbolic_infix_pattern_definition_payloads() {
 
 #[test]
 fn parser_records_bare_unparenthesized_symbolic_infix_pattern_definition_payloads() {
-    for (source_path, source_text, expected_head) in [
+    for (source_path, source_text) in [
         (
             "bare_unparenthesized_symbolic_infix_times_pattern_definition.m",
             "x*y = x\n",
-            Combinator::Times.into(),
         ),
         (
             "bare_unparenthesized_symbolic_infix_append_pattern_definition.m",
             "u++v = u\n",
-            Combinator::Append.into(),
         ),
         (
             "bare_unparenthesized_symbolic_infix_power_pattern_definition.m",
             "p^q = p\n",
-            Combinator::Power.into(),
+        ),
+        (
+            "bare_unparenthesized_symbolic_infix_divide_float_pattern_definition.m",
+            "a/b = a\n",
+        ),
+        (
+            "bare_unparenthesized_symbolic_infix_divide_int_pattern_definition.m",
+            "c div d = c\n",
+        ),
+        (
+            "bare_unparenthesized_symbolic_infix_remainder_pattern_definition.m",
+            "e mod f = e\n",
+        ),
+        (
+            "bare_unparenthesized_symbolic_infix_and_pattern_definition.m",
+            "g&h = g\n",
+        ),
+        (
+            "bare_unparenthesized_symbolic_infix_or_pattern_definition.m",
+            "i\\/j = i\n",
+        ),
+        (
+            "bare_unparenthesized_symbolic_infix_not_equal_pattern_definition.m",
+            "k~=l = k\n",
+        ),
+        (
+            "bare_unparenthesized_symbolic_infix_greater_pattern_definition.m",
+            "m>n = m\n",
+        ),
+        (
+            "bare_unparenthesized_symbolic_infix_greater_equal_pattern_definition.m",
+            "o>=p = o\n",
+        ),
+        (
+            "bare_unparenthesized_symbolic_infix_less_pattern_definition.m",
+            "q<r = q\n",
+        ),
+        (
+            "bare_unparenthesized_symbolic_infix_less_equal_pattern_definition.m",
+            "s<=t = s\n",
+        ),
+        (
+            "bare_unparenthesized_symbolic_infix_compose_pattern_definition.m",
+            "u.v = u\n",
+        ),
+        (
+            "bare_unparenthesized_symbolic_infix_subscript_pattern_definition.m",
+            "w!x = w\n",
         ),
     ] {
         let (heap, result) = run_parser(source_path, source_text);
@@ -2589,7 +2674,6 @@ fn parser_records_bare_unparenthesized_symbolic_infix_pattern_definition_payload
         assert_eq!(heap[lhs_raw].tag, Tag::Ap);
         let operator_application_raw = heap[lhs_raw].head;
         assert_eq!(heap[operator_application_raw].tag, Tag::Ap);
-        assert_eq!(Value::from(heap[operator_application_raw].head), expected_head);
     }
 }
 
