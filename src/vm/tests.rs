@@ -5930,6 +5930,18 @@ fn include_expansion_phase_is_noop_when_includees_empty() {
     assert!(vm.include_rollback_files.is_empty());
 }
 
+fn recorded_direct_dependencies(
+    vm: &VM,
+    identifier: IdentifierRecordRef,
+) -> ConsList<IdentifierRecordRef> {
+    vm.current_file_definition_dependencies
+        .iter()
+        .find_map(|(recorded_identifier, dependencies)| {
+            (*recorded_identifier == identifier).then_some(*dependencies)
+        })
+        .unwrap_or(ConsList::EMPTY)
+}
+
 #[test]
 fn typecheck_phase_succeeds_when_no_undefined_names() {
     let mut vm = VM::new();
@@ -5952,6 +5964,139 @@ fn typecheck_phase_fails_when_undefined_names_present() {
         result,
         Err(TypecheckError::UndefinedNames { count: 1 })
     ));
+}
+
+#[test]
+fn typecheck_phase_records_simple_same_load_direct_definition_dependency() {
+    let mut vm = VM::new();
+
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("typecheck_direct_definition_dependency.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        ConsList::EMPTY,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+
+    let helper = vm.heap.make_empty_identifier("helper");
+    let one = IntegerRef::from_i64(&mut vm.heap, 1);
+    helper.set_value_from_data(
+        &mut vm.heap,
+        IdentifierValueData::Arbitrary(one.into()),
+    );
+    let entry = vm.heap.make_empty_identifier("entry");
+    entry.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(helper.into()));
+    current_file.push_item_onto_definienda(&mut vm.heap, entry);
+    current_file.push_item_onto_definienda(&mut vm.heap, helper);
+
+    let result = vm.run_checktypes_phase();
+
+    assert!(result.is_ok());
+    let dependencies = recorded_direct_dependencies(&vm, entry);
+    assert!(dependencies.contains(&vm.heap, helper));
+}
+
+#[test]
+fn typecheck_phase_dependency_output_excludes_lambda_bound_names() {
+    let mut vm = VM::new();
+
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("typecheck_dependency_excludes_lambda_bound_names.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        ConsList::EMPTY,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+
+    let entry = vm.heap.make_empty_identifier("entry");
+    let x = vm.heap.make_empty_identifier("x");
+    let lambda_body = vm.heap.lambda_ref(x.into(), x.into());
+    entry.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(lambda_body));
+    current_file.push_item_onto_definienda(&mut vm.heap, entry);
+
+    let result = vm.run_checktypes_phase();
+
+    assert!(result.is_ok());
+    assert!(recorded_direct_dependencies(&vm, entry).is_empty());
+}
+
+#[test]
+fn typecheck_phase_dependency_output_tracks_letrec_and_tries_without_local_binders() {
+    let mut vm = VM::new();
+
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("typecheck_dependency_tracks_letrec_and_tries.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        ConsList::EMPTY,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+
+    let shared = vm.heap.make_empty_identifier("shared");
+    let one = IntegerRef::from_i64(&mut vm.heap, 1);
+    shared.set_value_from_data(
+        &mut vm.heap,
+        IdentifierValueData::Arbitrary(one.into()),
+    );
+    let local = vm.heap.make_empty_identifier("local");
+    let local_definition = DefinitionRef::new(
+        &mut vm.heap,
+        local.into(),
+        Type::Undefined.into(),
+        shared.into(),
+    );
+    let letrec_definitions = ConsList::new(&mut vm.heap, Value::from(local_definition));
+    let alternatives = ConsList::<Value>::new(&mut vm.heap, local.into());
+    let body = vm.heap.tries_ref(Value::None, alternatives.into());
+    let letrec_body = vm.heap.letrec_ref(letrec_definitions.into(), body);
+    let entry = vm.heap.make_empty_identifier("entry");
+    entry.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(letrec_body));
+    current_file.push_item_onto_definienda(&mut vm.heap, entry);
+    current_file.push_item_onto_definienda(&mut vm.heap, shared);
+
+    let result = vm.run_checktypes_phase();
+
+    assert!(result.is_ok());
+    let dependencies = recorded_direct_dependencies(&vm, entry);
+    assert!(dependencies.contains(&vm.heap, shared));
+    assert!(!dependencies.contains(&vm.heap, local));
+}
+
+#[test]
+fn typecheck_phase_dependency_output_excludes_constructor_heads() {
+    let mut vm = VM::new();
+
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("typecheck_dependency_excludes_constructor_heads.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        ConsList::EMPTY,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+
+    let just = ConstructorRef::new(&mut vm.heap, 1, Value::None);
+    let entry = vm.heap.make_empty_identifier("entry");
+    let one = IntegerRef::from_i64(&mut vm.heap, 1);
+    let body = vm.heap.apply_ref(just.into(), one.into());
+    entry.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(body));
+    current_file.push_item_onto_definienda(&mut vm.heap, entry);
+
+    let result = vm.run_checktypes_phase();
+
+    assert!(result.is_ok());
+    assert!(recorded_direct_dependencies(&vm, entry).is_empty());
 }
 
 #[test]
@@ -7820,6 +7965,59 @@ fn export_closure_phase_adds_constructors_for_exported_algebraic_typename() {
     assert!(exported.contains(&vm.heap, maybe));
     assert!(exported.contains(&vm.heap, nothing));
     assert!(exported.contains(&vm.heap, just));
+}
+
+#[test]
+fn export_closure_phase_uses_typecheck_produced_dependencies_for_local_binding_bodies() {
+    let mut vm = VM::new();
+
+    let current_file = FileRecord::new(
+        &mut vm.heap,
+        unique_test_path("export_closure_uses_typecheck_dependency_output.m")
+            .to_string_lossy()
+            .to_string(),
+        UNIX_EPOCH,
+        false,
+        ConsList::EMPTY,
+    );
+    vm.files = ConsList::new(&mut vm.heap, current_file);
+    vm.undefined_names = ConsList::EMPTY;
+
+    let helper = vm.heap.make_empty_identifier("helper");
+    let one = IntegerRef::from_i64(&mut vm.heap, 1);
+    helper.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(one.into()));
+    let local = vm.heap.make_empty_identifier("local");
+    let local_definition = DefinitionRef::new(
+        &mut vm.heap,
+        local.into(),
+        Type::Undefined.into(),
+        helper.into(),
+    );
+    let entry_body = vm.heap.let_ref(local_definition.into(), local.into());
+    let entry = vm.heap.make_empty_identifier("entry");
+    entry.set_value_from_data(&mut vm.heap, IdentifierValueData::Arbitrary(entry_body));
+    current_file.push_item_onto_definienda(&mut vm.heap, entry);
+    current_file.push_item_onto_definienda(&mut vm.heap, helper);
+
+    let typecheck_result = vm.run_checktypes_phase();
+    assert!(typecheck_result.is_ok());
+
+    let payload = export_payload(
+        &mut vm,
+        "export_closure_uses_typecheck_dependency_output.m",
+        1,
+        &["entry"],
+        &[],
+        false,
+        &[],
+    );
+    let result = vm.run_export_closure_phase_partial(Some(&payload), ConsList::EMPTY);
+
+    let committed = result.expect("expected export closure to use typecheck dependency output");
+    let exported = ConsList::<IdentifierRecordRef>::from_ref(committed.exported_identifiers.into());
+    assert!(exported.contains(&vm.heap, entry));
+    assert!(exported.contains(&vm.heap, helper));
+    assert!(!exported.contains(&vm.heap, local));
 }
 
 #[test]

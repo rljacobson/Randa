@@ -31,6 +31,8 @@ impl TypecheckBoundaryInputs {
 
 pub(super) struct TypecheckBoundaryResult {
     pub(super) undefined_names: ConsList<IdentifierRecordRef>,
+    pub(super) current_file_definition_dependencies:
+        Vec<(IdentifierRecordRef, ConsList<IdentifierRecordRef>)>,
     pub(super) checked_definition_count: usize,
     pub(super) failure: Option<TypecheckError>,
 }
@@ -41,6 +43,7 @@ pub(super) fn run_partial_typecheck(
     inputs: TypecheckBoundaryInputs,
 ) -> TypecheckBoundaryResult {
     let mut undefined_names = ConsList::EMPTY;
+    let mut current_file_definition_dependencies = Vec::new();
     let mut type_names_used_as_identifiers = ConsList::EMPTY;
     let mut undefined_type_names = ConsList::EMPTY;
     let mut non_type_identifiers = ConsList::EMPTY;
@@ -84,6 +87,12 @@ pub(super) fn run_partial_typecheck(
     }
 
     if let Some(current_file) = inputs.current_file {
+        let mut current_file_definienda = current_file.get_definienda(heap);
+        let mut current_file_definition_targets = ConsList::EMPTY;
+        while let Some(identifier) = current_file_definienda.pop(heap) {
+            current_file_definition_targets.insert_ordered(heap, identifier);
+        }
+
         let mut definienda = current_file.get_definienda(heap);
         while let Some(identifier) = definienda.pop(heap) {
             let identifier_type_raw = RawValue::from(identifier.get_type(heap));
@@ -131,6 +140,15 @@ pub(super) fn run_partial_typecheck(
                         &mut undefined_names,
                         &mut type_names_used_as_identifiers,
                     );
+                    let mut direct_dependencies = ConsList::EMPTY;
+                    collect_direct_definition_dependencies(
+                        heap,
+                        body,
+                        current_file_definition_targets,
+                        &mut Vec::new(),
+                        &mut direct_dependencies,
+                    );
+                    current_file_definition_dependencies.push((identifier, direct_dependencies));
                 }
                 IdentifierValueData::Typed { value_type, .. } => {
                     match value_type.get_identifier_value_type_kind(heap) {
@@ -272,8 +290,164 @@ pub(super) fn run_partial_typecheck(
 
     TypecheckBoundaryResult {
         undefined_names,
+        current_file_definition_dependencies,
         checked_definition_count,
         failure,
+    }
+}
+
+/// Walks one committed definition subtree and records direct same-load identifier dependencies.
+/// This exists so the typecheck boundary owns binder-sensitive current-file dependency output for
+/// later load-owned consumers instead of forcing those consumers to duplicate body traversal.
+/// The invariant is that only current-file committed identifiers are emitted, while constructor
+/// heads and locally bound names do not produce dependency edges.
+fn collect_direct_definition_dependencies(
+    heap: &mut Heap,
+    expression: Value,
+    current_file_definition_targets: ConsList<IdentifierRecordRef>,
+    bound_identifiers: &mut Vec<IdentifierRecordRef>,
+    direct_dependencies: &mut ConsList<IdentifierRecordRef>,
+) {
+    let raw_reference: RawValue = expression.into();
+    if raw_reference < ATOM_LIMIT {
+        return;
+    }
+
+    match heap[raw_reference].tag {
+        Tag::Id => {
+            let identifier = IdentifierRecordRef::from_ref(raw_reference);
+            if !bound_identifiers.contains(&identifier)
+                && !identifier.is_constructor_valued(heap)
+                && current_file_definition_targets.contains(heap, identifier)
+            {
+                direct_dependencies.insert_ordered(heap, identifier);
+            }
+        }
+        Tag::Ap | Tag::Cons | Tag::Pair | Tag::TCons => {
+            collect_direct_definition_dependencies(
+                heap,
+                heap[raw_reference].head.into(),
+                current_file_definition_targets,
+                bound_identifiers,
+                direct_dependencies,
+            );
+            collect_direct_definition_dependencies(
+                heap,
+                heap[raw_reference].tail.into(),
+                current_file_definition_targets,
+                bound_identifiers,
+                direct_dependencies,
+            );
+        }
+        Tag::Lambda => {
+            let pattern = heap[raw_reference].head.into();
+            let prior_bound_len = bound_identifiers.len();
+            collect_pattern_bound_identifiers(heap, pattern, bound_identifiers);
+            collect_direct_definition_dependencies(
+                heap,
+                heap[raw_reference].tail.into(),
+                current_file_definition_targets,
+                bound_identifiers,
+                direct_dependencies,
+            );
+            bound_identifiers.truncate(prior_bound_len);
+        }
+        Tag::Label | Tag::Show => {
+            collect_direct_definition_dependencies(
+                heap,
+                heap[raw_reference].tail.into(),
+                current_file_definition_targets,
+                bound_identifiers,
+                direct_dependencies,
+            );
+        }
+        Tag::Share => {
+            collect_direct_definition_dependencies(
+                heap,
+                heap[raw_reference].head.into(),
+                current_file_definition_targets,
+                bound_identifiers,
+                direct_dependencies,
+            );
+        }
+        Tag::Let => {
+            let definition = DefinitionRef::from_ref(heap[raw_reference].head);
+            collect_direct_definition_dependencies(
+                heap,
+                definition.body_value(heap),
+                current_file_definition_targets,
+                bound_identifiers,
+                direct_dependencies,
+            );
+            let prior_bound_len = bound_identifiers.len();
+            collect_pattern_bound_identifiers(heap, definition.lhs_value(heap), bound_identifiers);
+            collect_direct_definition_dependencies(
+                heap,
+                heap[raw_reference].tail.into(),
+                current_file_definition_targets,
+                bound_identifiers,
+                direct_dependencies,
+            );
+            bound_identifiers.truncate(prior_bound_len);
+        }
+        Tag::LetRec => {
+            let prior_bound_len = bound_identifiers.len();
+            let mut definitions: Value = heap[raw_reference].head.into();
+            while RawValue::from(definitions) >= ATOM_LIMIT
+                && heap[RawValue::from(definitions)].tag == Tag::Cons
+            {
+                let definitions_ref = RawValue::from(definitions);
+                let definition = DefinitionRef::from_ref(heap[definitions_ref].head);
+                collect_pattern_bound_identifiers(
+                    heap,
+                    definition.lhs_value(heap),
+                    bound_identifiers,
+                );
+                definitions = heap[definitions_ref].tail.into();
+            }
+
+            let mut definitions: Value = heap[raw_reference].head.into();
+            while RawValue::from(definitions) >= ATOM_LIMIT
+                && heap[RawValue::from(definitions)].tag == Tag::Cons
+            {
+                let definitions_ref = RawValue::from(definitions);
+                let definition = DefinitionRef::from_ref(heap[definitions_ref].head);
+                collect_direct_definition_dependencies(
+                    heap,
+                    definition.body_value(heap),
+                    current_file_definition_targets,
+                    bound_identifiers,
+                    direct_dependencies,
+                );
+                definitions = heap[definitions_ref].tail.into();
+            }
+
+            collect_direct_definition_dependencies(
+                heap,
+                heap[raw_reference].tail.into(),
+                current_file_definition_targets,
+                bound_identifiers,
+                direct_dependencies,
+            );
+            bound_identifiers.truncate(prior_bound_len);
+        }
+        Tag::Tries => {
+            let mut alternatives: Value = heap[raw_reference].tail.into();
+            while RawValue::from(alternatives) >= ATOM_LIMIT
+                && heap[RawValue::from(alternatives)].tag == Tag::Cons
+            {
+                let alternatives_ref = RawValue::from(alternatives);
+                collect_direct_definition_dependencies(
+                    heap,
+                    heap[alternatives_ref].head.into(),
+                    current_file_definition_targets,
+                    bound_identifiers,
+                    direct_dependencies,
+                );
+                alternatives = heap[alternatives_ref].tail.into();
+            }
+        }
+        _ => {}
     }
 }
 

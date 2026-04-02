@@ -1025,7 +1025,7 @@ impl VM {
     /// C parity target: `if(!SYNERR) ... checktypes();`
     /// Current concrete behavior:
     /// - delegate to the subsystem-owned partial typecheck boundary,
-    /// - commit subsystem-produced unresolved-name state,
+    /// - commit subsystem-produced unresolved-name and direct-dependency state,
     /// - propagate typed subsystem failure when present.
     pub(super) fn run_checktypes_phase(&mut self) -> Result<(), TypecheckError> {
         let preexisting_undefined_count = self.undefined_names.len(&self.heap);
@@ -1038,6 +1038,7 @@ impl VM {
         let inputs = super::typecheck::TypecheckBoundaryInputs::from_vm(self);
         let result = super::typecheck::run_partial_typecheck(&mut self.heap, inputs);
         self.undefined_names = result.undefined_names;
+        self.current_file_definition_dependencies = result.current_file_definition_dependencies;
 
         if let Some(failure) = result.failure {
             return Err(failure);
@@ -1103,8 +1104,24 @@ impl VM {
         }
     }
 
+    /// Returns the committed typecheck-produced direct dependencies for one current-file definition.
+    /// This exists so export closure can consume subsystem-owned dependency output for current-file
+    /// arbitrary definitions instead of recomputing the same binder-sensitive walk in `load.rs`.
+    /// The invariant is that only current-file definitions recorded by typecheck return a dependency
+    /// list here; all other identifiers fall back to remaining load-owned closure logic.
+    fn current_file_direct_dependencies_for_identifier(
+        &self,
+        identifier: IdentifierRecordRef,
+    ) -> Option<ConsList<IdentifierRecordRef>> {
+        self.current_file_definition_dependencies
+            .iter()
+            .find_map(|(recorded_identifier, dependencies)| {
+                (*recorded_identifier == identifier).then_some(*dependencies)
+            })
+    }
+
     /// Walks one committed expression subtree and inserts direct same-load identifier dependencies into `dependencies`.
-    /// This exists so export closure can reuse one Miranda-shaped dependency walk across committed definition bodies instead of open-coding separate `Lambda`/`Let`/`LetRec` cases at each closure site.
+    /// This exists so export closure can keep a fallback Miranda-shaped dependency walk for non-current-file committed definition bodies such as materialized includees.
     /// The invariant is that constructor-valued identifiers and locally bound names do not produce export edges, while only identifiers present in `exportable_definienda` are admitted into the closure set.
     fn collect_export_definition_dependencies_from_value(
         &mut self,
@@ -1315,13 +1332,21 @@ impl VM {
                     _ => {}
                 },
                 IdentifierValueData::Arbitrary(body) => {
-                    let mut bound_identifiers = Vec::new();
-                    self.collect_export_definition_dependencies_from_value(
-                        body,
-                        exportable_definienda,
-                        &mut bound_identifiers,
-                        dependencies,
-                    );
+                    if let Some(mut direct_dependencies) =
+                        self.current_file_direct_dependencies_for_identifier(identifier)
+                    {
+                        while let Some(direct_dependency) = direct_dependencies.pop(&self.heap) {
+                            dependencies.insert_ordered(&mut self.heap, direct_dependency);
+                        }
+                    } else {
+                        let mut bound_identifiers = Vec::new();
+                        self.collect_export_definition_dependencies_from_value(
+                            body,
+                            exportable_definienda,
+                            &mut bound_identifiers,
+                            dependencies,
+                        );
+                    }
                 }
                 IdentifierValueData::Undefined => {}
             }

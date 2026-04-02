@@ -29,6 +29,7 @@ impl VM {
         self.included_files = ConsList::EMPTY;
         self.type_abstractions = ConsList::EMPTY;
         self.undefined_names = ConsList::EMPTY;
+        self.current_file_definition_dependencies.clear();
 
         self.unset_ids(self.internals);
         self.internals = ConsList::EMPTY;

@@ -193,6 +193,9 @@ pub struct VM {
     type_abstractions: ConsList,
     /// Undefined names used in the script. Miranda's `ND`.
     undefined_names: ConsList<IdentifierRecordRef>,
+    /// Direct same-load dependencies for current-file arbitrary definitions, committed from the
+    /// typecheck boundary for later load-owned consumers such as `%export` closure.
+    current_file_definition_dependencies: Vec<(IdentifierRecordRef, ConsList<IdentifierRecordRef>)>,
     /// Newly declared type names in the current code unit. Miranda's `newtyps`.
     new_type_names: ConsList<IdentifierRecordRef>,
     /// Show functions of algebraic types in scope. Miranda's `algshfns`.
@@ -356,6 +359,7 @@ impl VM {
             sui_generis_constructors: ConsList::EMPTY, // user defined sui-generis constructors (Miranda's SGC)
             type_abstractions: ConsList::EMPTY, // cons list of abstype declarations (Miranda's TABSTR)
             undefined_names: ConsList::EMPTY,   // undefined names used in script (Miranda's ND)
+            current_file_definition_dependencies: vec![],
             new_type_names: ConsList::EMPTY, // newly declared type names in current code unit (Miranda's `newtyps`)
             algebraic_show_functions: ConsList::EMPTY, // show functions of algebraic types in scope (Miranda's `algshfns`)
             special_show_forms: ConsList::EMPTY, // all occurrences of special forms (show) encountered during type check
